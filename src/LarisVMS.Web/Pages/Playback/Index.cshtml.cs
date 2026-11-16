@@ -18,6 +18,8 @@ public class IndexModel(ICameraService cameraService, IViewService viewService, 
 {
     public List<Camera> Cameras { get; set; } = [];
     public List<View> Views { get; set; } = [];
+    /// <summary>Each view's place in the view trees ("Private / Folder"), for grouping the picker.</summary>
+    public Dictionary<Guid, string> ViewPaths { get; set; } = [];
 
     /// <summary>A Bookmark or Snapshot "▶ Play" link (Pages/Bookmarks/Index, Pages/Snapshots/Index) —
     /// jumps straight to this camera at this instant instead of the usual "pick a view, wait for it to
@@ -50,6 +52,8 @@ public class IndexModel(ICameraService cameraService, IViewService viewService, 
         var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(User, CameraAccessActions.Playback);
         if (accessible is not null) Cameras = Cameras.Where(c => accessible.Contains(c.Id)).ToList();
 
-        Views = await viewService.ListVisibleToAsync(userId);
+        var withPaths = await viewService.ListVisibleWithPathAsync(userId);
+        Views = withPaths.Select(p => p.View).ToList();
+        ViewPaths = withPaths.ToDictionary(p => p.View.Id, p => p.Path);
     }
 }

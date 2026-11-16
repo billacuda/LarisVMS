@@ -35,7 +35,7 @@
 
 ### 팀 채널
 
-각 규칙은 이메일 목록, 웹훅, ntfy, Pushover, Slack, Teams로도 보낼 수 있습니다. 채널을 켜고 해당 항목을 입력하십시오.
+각 규칙은 이메일 목록, 웹훅, ntfy, Pushover, Slack, Teams로도 보낼 수 있습니다. 채널을 켜고 해당 항목을 입력하십시오. 웹훅은 카메라와 감지된 물체처럼 알림을 일으킨 내용도 보내며, [Home Assistant](/Help/home-assistant#alerts-by-webhook)에서 이를 사용할 수 있습니다.
 
 ## 알림 설정
 

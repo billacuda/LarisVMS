@@ -19,6 +19,10 @@ public class UserSession
     /// confirming it, starts this; using admin pages extends it).</summary>
     public DateTime? ConfirmedUntilUtc { get; set; }
 
+    /// <summary>"Don't ask again until I sign out" for moving a view or folder within one view tree.
+    /// Lives on the session, so a new sign-in, or another browser, asks again.</summary>
+    public bool SkipViewMoveConfirm { get; set; }
+
     public string? IpAddress { get; set; }
     public string? UserAgent { get; set; }
 }

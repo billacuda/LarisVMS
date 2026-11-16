@@ -48,7 +48,7 @@ Estas verificaciones están entre una descarga y una instalación en ejecución:
 
 ## Secretos cifrados
 
-Las credenciales de cámaras, credenciales SMB, claves de nodo, secretos de correo, el secreto de cliente Entra y la contraseña de cuenta de servicio de Active Directory están cifrados en la base de datos, usando las claves de protección de datos en `%ProgramData%\LarisVMS\keys`. Solo SYSTEM, Administradores y las cuentas de los servicios de LarisVMS pueden abrir `%ProgramData%\LarisVMS`: cualquier otro acceso que haya, como una carpeta que un usuario local creó antes de instalar LarisVMS, se quita cuando inicia un servicio. Respaldá esa carpeta, y nunca la elimines durante un despliegue.
+Las credenciales de cámaras, credenciales SMB, claves de nodo, secretos de correo, los secretos de cliente de Entra y Google, y la contraseña de cuenta de servicio de Active Directory están cifrados en la base de datos, usando las claves de protección de datos en `%ProgramData%\LarisVMS\keys`. Solo SYSTEM, Administradores y las cuentas de los servicios de LarisVMS pueden abrir `%ProgramData%\LarisVMS`: cualquier otro acceso que haya, como una carpeta que un usuario local creó antes de instalar LarisVMS, se quita cuando inicia un servicio. Respaldá esa carpeta, y nunca la elimines durante un despliegue.
 
 ## Protección adicional para empresas
 

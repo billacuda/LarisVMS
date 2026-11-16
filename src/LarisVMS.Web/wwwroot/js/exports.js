@@ -62,19 +62,26 @@
             var nodeSuffix = item.nodeName ? ' <span class="text-muted">(' + escapeHtml(item.nodeName) + ')</span>' : '';
             // A redacted export has had areas blacked out — it isn't the footage exactly as recorded.
             var redacted = item.redacted ? ' <span class="badge text-bg-dark" title="' + larisvmsI18n.html('js.exports.areasWereBlackedOutIn') + '">' + larisvmsI18n.html('js.exports.redacted') + '</span>' : '';
-            return '<li class="mb-1">' + escapeHtml(item.cameraName) + nodeSuffix + ' <span class="badge ' + itemBadge + '">' + statusLabel(item.status) + '</span>' + redacted + extra + '</li>';
+            // The standalone player's H.264 copy of H.265 video.
+            var converted = item.converted ? ' <span class="badge text-bg-info" title="' + larisvmsI18n.html('js.exports.h264CopyTitle') + '">' + larisvmsI18n.html('js.exports.h264Copy') + '</span>' : '';
+            // Three cells per camera (name, status, actions); .export-items lines them up as columns.
+            return '<li><span>' + escapeHtml(item.cameraName) + nodeSuffix + '</span><span><span class="badge ' + itemBadge + '">' + statusLabel(item.status) + '</span>' + redacted + converted + '</span><span>' + extra + '</span></li>';
         }).join('');
 
-        var deleteBtn = inProgress ? '' :
-            '<button type="button" class="btn btn-sm btn-outline-danger js-delete-export" data-job-id="' + job.id + '" title="' + larisvmsI18n.html('js.exports.deleteThisExport') + '">&#128465;</button>';
+        var anyDone = job.items.some(function (item) { return item.status === 'Done'; });
+        var packageBtn = job.includePlayer && !inProgress && anyDone
+            ? '<a class="btn btn-sm btn-primary" href="/api/exports/' + job.id + '/package" title="' + larisvmsI18n.html('js.exports.packageTitle') + '"><span aria-hidden="true">📦</span> ' + larisvmsI18n.html('js.exports.downloadPackage') + '</a> '
+            : '';
+        var deleteBtn = packageBtn + (inProgress ? '' :
+            '<button type="button" class="btn btn-sm btn-outline-danger js-delete-export" data-job-id="' + job.id + '" title="' + larisvmsI18n.html('js.exports.deleteThisExport') + '">&#128465;</button>');
 
         return '<tr data-job-id="' + job.id + '">' +
             '<td><span title="' + created.toISOString() + '">' + created.toLocaleString(larisvmsI18n.locale) + '</span>' +
             '<div class="text-muted small">' + larisvmsI18n.html('js.exports.byUser', { user: job.requestedByUserName || larisvmsI18n.t('js.exports.unknownUser') }) + '</div></td>' +
             '<td class="small">' + from.toLocaleString(larisvmsI18n.locale) + ' &ndash; ' + to.toLocaleString(larisvmsI18n.locale) + '</td>' +
             '<td><span class="badge ' + badge + '">' + statusLabel(job.status) + '</span></td>' +
-            '<td><ul class="list-unstyled mb-0 small">' + itemsHtml + '</ul></td>' +
-            '<td>' + deleteBtn + '</td>' +
+            '<td><ul class="list-unstyled mb-0 small export-items">' + itemsHtml + '</ul></td>' +
+            '<td class="text-nowrap">' + deleteBtn + '</td>' +
             '</tr>';
     }
 

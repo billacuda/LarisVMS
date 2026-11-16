@@ -43,6 +43,7 @@ public class PlayModel(IViewService viewService, ICameraService cameraService, I
                 SingleCameraId = camera.Id,
                 Cameras = cameras,
                 Views = await viewService.ListVisibleToAsync(userId),
+                Tree = await viewService.GetTreeAsync(userId),
                 EventBadgeCornerValue = EventBadgeCorner.Normalize(
                     await settings.GetRawAsync(EventSettingsKeys.EventBadgeCornerKey)),
                 AdaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", false),
@@ -57,7 +58,7 @@ public class PlayModel(IViewService viewService, ICameraService cameraService, I
         if (id is null)
         {
             if (!tour) return RedirectToPage("Index");
-            var tourViews = await viewService.GetTourViewsAsync();
+            var tourViews = await viewService.GetTourViewsAsync(userId);
             if (tourViews.Count == 0) return RedirectToPage("Index");
             return RedirectToPage(new { id = tourViews[0].Id, tour = true, i = 0 });
         }
@@ -68,7 +69,7 @@ public class PlayModel(IViewService viewService, ICameraService cameraService, I
         if (tour)
         {
             vm.IsTour = true;
-            vm.TourViewIds = (await viewService.GetTourViewsAsync()).Select(v => v.Id).ToList();
+            vm.TourViewIds = (await viewService.GetTourViewsAsync(userId)).Select(v => v.Id).ToList();
             vm.TourIndex = i;
         }
 

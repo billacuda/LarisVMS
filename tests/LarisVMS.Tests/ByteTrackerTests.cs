@@ -300,6 +300,100 @@ public sealed class ByteTrackerTests
         Assert.NotNull(personId);
     }
 
+    // ── A car passing in front of a parked car ──────────────────────────────────────────────
+
+    private static ByteTracker HdTracker() => new(new ByteTrackOptions { FrameWidth = 1920, FrameHeight = 1080 });
+
+    [Fact]
+    public void AParkedCarCoveredForAWhileGetsItsOwnIdBackNotThePassingCars()
+    {
+        // The parked car (back end, 180x150) is hidden for 45 frames — longer than a moving object's
+        // gap is kept — by a slow car (side on, 250x100) creeping past in front of it. When the
+        // passing car's box goes, the parked car reappears where that car's prediction still overlaps.
+        var tracker = HdTracker();
+        int? parkedId = null;
+        for (var i = 0; i < 10; i++)
+            parkedId = tracker.Update([FakeDetection.Box(1000, 500, 180, 150, classId: 2)]).Single().Id;
+
+        int? passingId = null;
+        for (var i = 0; i < 45; i++)
+        {
+            var output = tracker.Update([FakeDetection.Box(900 + 4 * i, 510, 250, 100, classId: 2)]);
+            passingId ??= output.SingleOrDefault()?.Id;
+        }
+        Assert.NotNull(passingId);
+        Assert.NotEqual(parkedId, passingId);
+
+        for (var i = 0; i < 3; i++)
+        {
+            var back = tracker.Update([FakeDetection.Box(1000, 500, 180, 150, classId: 2)]);
+            Assert.Equal(parkedId, Assert.Single(back).Id);
+        }
+    }
+
+    [Fact]
+    public void ACarDrivingPastDoesNotTakeOverACarOfADifferentShape()
+    {
+        // A car drives across side on (2.5:1) in front of the back of another car (1.2:1) that hasn't
+        // been tracked. For one frame the moving car isn't detected while it's over the other car,
+        // whose box lies right under the moving car's prediction; then the moving car is seen again
+        // further along. The other car must not take the moving car's id, nor the moving car lose it.
+        var tracker = HdTracker();
+        int? movingId = null;
+        var x = 600;
+        for (var i = 0; i < 15; i++, x += 20)
+            movingId = tracker.Update([FakeDetection.Box(x, 510, 250, 100, classId: 2)]).Single().Id;
+
+        var parkedX = x + 40;
+        Assert.All(tracker.Update([FakeDetection.Box(parkedX, 510, 120, 100, classId: 2)]), d => Assert.NotEqual(movingId, d.Id));
+        x += 20;
+
+        for (var i = 0; i < 3; i++, x += 20)
+        {
+            var output = tracker.Update([FakeDetection.Box(x, 510, 250, 100, classId: 2), FakeDetection.Box(parkedX, 510, 120, 100, classId: 2)]);
+            foreach (var d in output)
+            {
+                if (d.BoundingBox.Width == 250) Assert.Equal(movingId, d.Id);
+                else Assert.NotEqual(movingId, d.Id);
+            }
+        }
+    }
+
+    [Fact]
+    public void ACarTurningTowardTheCameraKeepsItsId()
+    {
+        // Side on to front on over several frames while moving: its shape changes gradually.
+        var tracker = HdTracker();
+        int? id = null;
+        var x = 400;
+        int[] widths = [250, 250, 250, 250, 230, 210, 190, 170, 150, 130, 120, 120];
+        foreach (var w in widths)
+        {
+            var output = tracker.Update([FakeDetection.Box(x, 500, w, 100, classId: 2)]);
+            x += 20;
+            if (output.Count == 0) continue;
+            id ??= output[0].Id;
+            Assert.Equal(id, Assert.Single(output).Id);
+        }
+        Assert.NotNull(id);
+    }
+
+    [Fact]
+    public void ACarDrivingOffTheEdgeKeepsItsIdWhileItsBoxIsCutOff()
+    {
+        var tracker = HdTracker();
+        int? id = null;
+        for (var x = 1400; 1920 - x >= 60; x += 20)
+        {
+            var width = Math.Min(250, 1920 - x);
+            var output = tracker.Update([FakeDetection.Box(x, 510, width, 100, classId: 2)]);
+            if (output.Count == 0) continue;
+            id ??= output[0].Id;
+            Assert.Equal(id, Assert.Single(output).Id);
+        }
+        Assert.NotNull(id);
+    }
+
     // ── Behind a tree: a moving object hidden for a while comes back as the same track ────────
 
     /// <summary>Walks a 50x80 box right by 30 px a frame for 8 frames from x=100, then hides it for

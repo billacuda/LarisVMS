@@ -1,0 +1,91 @@
+@page
+@model LarisVMS.Web.Pages.Admin.Settings.ViewAccessModel
+@{
+    ViewData["Title"] = L["settings.viewAccess.title"].Value;
+}
+<h1>@L["nav.settings"]</h1>
+<partial name="_SettingsTabs" model="@("ViewAccess")" />
+
+<p class="text-muted small">
+    @L["settings.viewAccess.intro"] <a href="/Help/live-and-playback#views">@L["common.learnMore"]</a>
+</p>
+
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger" role="alert">@Model.ErrorMessage</div>
+}
+
+<div class="card mb-3">
+    <div class="card-header fw-semibold">@L["settings.viewAccess.grants"]</div>
+    @if (Model.Grants.Count == 0)
+    {
+        <div class="card-body text-muted small">@L["settings.viewAccess.none"]</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-sm mb-0 align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>@L["settings.viewAccess.membersOf"]</th>
+                        <th>@L["settings.viewAccess.canOpenTheViewsOf"]</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var g in Model.Grants)
+                    {
+                        <tr>
+                            <td>@g.GrantedRoleName</td>
+                            <td>@g.OwnerRoleName</td>
+                            <td class="text-end">
+                                <form method="post" asp-page-handler="Remove" class="d-inline"
+                                      data-confirm="@L["settings.viewAccess.removeConfirm", new { granted = g.GrantedRoleName, owner = g.OwnerRoleName }]">
+                                    <input type="hidden" name="grantedRoleId" value="@g.GrantedRoleId" />
+                                    <input type="hidden" name="ownerRoleId" value="@g.OwnerRoleId" />
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">@L["common.remove"]</button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+<div class="card">
+    <div class="card-header fw-semibold">@L["settings.viewAccess.add"]</div>
+    <div class="card-body">
+        <form method="post" asp-page-handler="Add" class="row g-2 align-items-end">
+            <div class="col-sm-5">
+                <label class="form-label small" for="grantedRoleId">@L["settings.viewAccess.membersOf"]</label>
+                <select class="form-select" id="grantedRoleId" name="grantedRoleId" required>
+                    <option value=""></option>
+                    @foreach (var r in Model.Roles)
+                    {
+                        <option value="@r.Id">@r.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="col-sm-5">
+                <label class="form-label small" for="ownerRoleId">@L["settings.viewAccess.canOpenTheViewsOf"]</label>
+                <select class="form-select" id="ownerRoleId" name="ownerRoleId" required>
+                    <option value=""></option>
+                    @foreach (var r in Model.Roles)
+                    {
+                        <option value="@r.Id">@r.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="col-sm-2">
+                <button type="submit" class="btn btn-primary w-100">@L["common.add"]</button>
+            </div>
+        </form>
+        <p class="form-text mb-0 mt-2">@L["settings.viewAccess.toEdit"]</p>
+    </div>
+</div>

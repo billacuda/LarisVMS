@@ -127,6 +127,67 @@ public class SecurityHardeningTests
         Assert.Equal(CameraAccessScopeType.All, row.ScopeType);
     }
 
+    // ── Camera access: role-only ──────────────────────────────────────────
+
+    private static CameraAccess Grant(CameraAccessPrincipalType type, string id, CameraAccessScopeType scope, Guid? scopeId,
+        CameraAccessActions actions) => new()
+        {
+            Id = Guid.NewGuid(), PrincipalType = type, PrincipalId = id, ScopeType = scope, ScopeId = scopeId, Actions = actions,
+        };
+
+    [Fact]
+    public async Task PersonalCameraAccessBecomesRoleAccessOnlyWhereThatWidensNobody()
+    {
+        using var db = NewDb();
+        var super = AddRole(db, "Super Admin", RoleTags.SuperAdmin);
+        var same = AddRole(db, "Same");     // both members have identical personal grants
+        var differs = AddRole(db, "Differs"); // members' personal grants differ
+        var camera = Guid.NewGuid();
+        AddUser(db, "admin", super);
+        AddUser(db, "a", same);
+        AddUser(db, "b", same);
+        AddUser(db, "c", differs);
+        AddUser(db, "d", differs);
+        db.Users.Local.Single(u => u.Id == "c").Email = "c@example.com";
+        foreach (var u in new[] { "a", "b" })
+            db.CameraAccesses.Add(Grant(CameraAccessPrincipalType.User, u, CameraAccessScopeType.All, null, CameraAccessActions.View));
+        db.CameraAccesses.Add(Grant(CameraAccessPrincipalType.User, "c", CameraAccessScopeType.Camera, camera, CameraAccessActions.View));
+        db.CameraAccesses.Add(Grant(CameraAccessPrincipalType.User, "d", CameraAccessScopeType.All, null, CameraAccessActions.View));
+        await db.SaveChangesAsync();
+
+        var lost = await Seeder(db).RoleOnlyCameraAccessAsync(default);
+
+        var rows = await db.CameraAccesses.ToListAsync();
+        Assert.DoesNotContain(rows, r => r.PrincipalType == CameraAccessPrincipalType.User);
+        var sameRow = Assert.Single(rows, r => r.PrincipalId == same.Id);
+        Assert.Equal(CameraAccessScopeType.All, sameRow.ScopeType);
+        Assert.Equal(CameraAccessActions.View, sameRow.Actions);
+        Assert.DoesNotContain(rows, r => r.PrincipalId == differs.Id); // would widen "c" to every camera
+        Assert.Equal(["c@example.com", "d"], lost);
+
+        // Runs once.
+        Assert.Empty(await Seeder(db).RoleOnlyCameraAccessAsync(default));
+    }
+
+    [Fact]
+    public async Task APersonalGrantNoLongerOpensAnyCamera()
+    {
+        using var db = NewDb();
+        var role = AddRole(db, "Viewer");
+        AddUser(db, "u1", role);
+        var camera = Guid.NewGuid();
+        db.CameraAccesses.Add(Grant(CameraAccessPrincipalType.User, "u1", CameraAccessScopeType.All, null, CameraAccessActions.View));
+        await db.SaveChangesAsync();
+
+        var user = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, "u1")], "test"));
+        var service = new CameraAccessService(db);
+        Assert.Empty((await service.GetAccessibleCameraIdsAsync(user, CameraAccessActions.View))!);
+
+        db.CameraAccesses.Add(Grant(CameraAccessPrincipalType.Role, role.Id, CameraAccessScopeType.Camera, camera, CameraAccessActions.View));
+        await db.SaveChangesAsync();
+        Assert.Equal([camera], await service.GetAccessibleCameraIdsAsync(user, CameraAccessActions.View));
+    }
+
     // ── Export access ─────────────────────────────────────────────────────
 
     private sealed class FixedCameraAccess(HashSet<Guid>? exportable) : ICameraAccessService

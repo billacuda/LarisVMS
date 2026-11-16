@@ -45,6 +45,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<BackupHistoryEntry> BackupHistoryEntries => Set<BackupHistoryEntry>();
     public DbSet<EmailSettings> EmailSettings => Set<EmailSettings>();
     public DbSet<EntraSsoSettings> EntraSsoSettings => Set<EntraSsoSettings>();
+    public DbSet<GoogleSsoSettings> GoogleSsoSettings => Set<GoogleSsoSettings>();
+    public DbSet<HomeAssistantSettings> HomeAssistantSettings => Set<HomeAssistantSettings>();
     public DbSet<ActiveDirectorySettings> ActiveDirectorySettings => Set<ActiveDirectorySettings>();
     public DbSet<AdGroupRoleLink> AdGroupRoleLinks => Set<AdGroupRoleLink>();
     public DbSet<AlertRule> AlertRules => Set<AlertRule>();
@@ -100,6 +102,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
 
     // ── Views (M6) ───────────────────────────────────────────────────────────
     public DbSet<View> Views => Set<View>();
+    public DbSet<ViewFolder> ViewFolders => Set<ViewFolder>();
+    public DbSet<ViewTreeGrant> ViewTreeGrants => Set<ViewTreeGrant>();
 
     // ── Export ───────────────────────────────────────────────────────────────
     // Items exposed alongside the parent, same as Segment/CameraStream get their own DbSet despite
@@ -263,6 +267,27 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.TenantId).HasMaxLength(100);
             e.Property(x => x.ClientId).HasMaxLength(100);
             e.Property(x => x.ClientSecret).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
+            e.Property(x => x.LastModifiedBy).HasMaxLength(256);
+        });
+
+        // ── GoogleSsoSettings ────────────────────────────────────────────────
+        builder.Entity<GoogleSsoSettings>(e =>
+        {
+            e.Property(x => x.ClientId).HasMaxLength(200);
+            e.Property(x => x.ClientSecret).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
+            e.Property(x => x.AllowedDomains).HasMaxLength(2000);
+            e.Property(x => x.LastModifiedBy).HasMaxLength(256);
+        });
+
+        // ── HomeAssistantSettings ────────────────────────────────────────────
+        builder.Entity<HomeAssistantSettings>(e =>
+        {
+            e.Property(x => x.BrokerHost).HasMaxLength(255);
+            e.Property(x => x.Username).HasMaxLength(256);
+            e.Property(x => x.Password).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
+            e.Property(x => x.TopicPrefix).HasMaxLength(100);
+            e.Property(x => x.DiscoveryPrefix).HasMaxLength(100);
+            e.Property(x => x.RoleId).HasMaxLength(450);
             e.Property(x => x.LastModifiedBy).HasMaxLength(256);
         });
 
@@ -560,8 +585,31 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         {
             e.Property(x => x.Name).HasMaxLength(200).IsRequired();
             e.Property(x => x.OwnerId).HasMaxLength(450).IsRequired();
+            e.Property(x => x.RoleId).HasMaxLength(450);
             e.Property(x => x.LayoutJson).IsRequired();
             e.HasIndex(x => x.OwnerId);
+            e.HasIndex(x => x.RoleId);
+            e.HasIndex(x => x.FolderId);
+        });
+
+        builder.Entity<ViewFolder>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            e.Property(x => x.RoleId).HasMaxLength(450);
+            e.Property(x => x.UserId).HasMaxLength(450);
+            e.Property(x => x.CreatedBy).HasMaxLength(256);
+            e.HasIndex(x => x.RoleId);
+            e.HasIndex(x => x.UserId);
+            e.HasIndex(x => x.ParentId);
+        });
+
+        builder.Entity<ViewTreeGrant>(e =>
+        {
+            e.Property(x => x.OwnerRoleId).HasMaxLength(450).IsRequired();
+            e.Property(x => x.GrantedRoleId).HasMaxLength(450).IsRequired();
+            e.Property(x => x.CreatedBy).HasMaxLength(256);
+            e.HasIndex(x => new { x.OwnerRoleId, x.GrantedRoleId }).IsUnique();
+            e.HasIndex(x => x.GrantedRoleId);
         });
 
         // ── Zone (M8) ────────────────────────────────────────────────────────
@@ -842,6 +890,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
                 .HasForeignKey(x => x.ExportJobId).OnDelete(DeleteBehavior.Cascade);
             e.Property(x => x.OutputFilePath).HasMaxLength(450);
             e.Property(x => x.OutputSha256).HasMaxLength(64);
+            e.Property(x => x.ConvertedFilePath).HasMaxLength(450);
+            e.Property(x => x.ConvertedSha256).HasMaxLength(64);
             e.Property(x => x.ErrorMessage).HasMaxLength(2000);
             e.HasIndex(x => new { x.ExportJobId, x.Status });
             // What ExportJobDispatcher's poll scans every cycle.

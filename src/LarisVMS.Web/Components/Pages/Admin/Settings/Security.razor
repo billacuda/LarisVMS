@@ -63,6 +63,25 @@
                        placeholder="@(HasStoredEntraClientSecret ? L["cameras.edit.unchanged"].Value : "")" />
         </SettingField>
     </SettingSection>
+    <SettingSection Title="@L["settings.security.googleSignIn"]" Subtitle="@L["settings.security.addsSignInWithGoogle"]">
+        <SettingField Label="@L["common.status"]" Wide Hint="@($"Redirect URI: https://{HttpContext?.Request.Host}/signin-google")" HelpLink="/Help/users#google">
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="GoogleEnabled" class="form-check-input" id="googleEnabled" />
+                <label class="form-check-label" for="googleEnabled">@L["common.enabled"]</label>
+            </div>
+        </SettingField>
+        <SettingField For="field-googleClientId" Label="@L["settings.security.clientId"]" ShowWhen="GoogleEnabled=true">
+            <InputText id="field-googleClientId" @bind-Value="GoogleClientId" class="form-control font-monospace" placeholder="000000000000-xxxx.apps.googleusercontent.com" />
+        </SettingField>
+        <SettingField For="field-googleClientSecret" Label="@L["settings.security.clientSecret"]" ShowWhen="GoogleEnabled=true" Hint="@L["settings.security.leaveBlankToKeepThe"]">
+            <InputText id="field-googleClientSecret" @bind-Value="GoogleClientSecret" type="password" class="form-control" autocomplete="off"
+                       placeholder="@(HasStoredGoogleClientSecret ? L["cameras.edit.unchanged"].Value : "")" />
+        </SettingField>
+        <SettingField For="field-googleAllowedDomains" Label="@L["settings.security.allowedDomains"]" ShowWhen="GoogleEnabled=true" Hint="@L["settings.security.allowedDomainsHint"]">
+            <InputTextArea id="field-googleAllowedDomains" @bind-Value="GoogleAllowedDomains" class="form-control font-monospace" rows="3"
+                           placeholder="example.com"></InputTextArea>
+        </SettingField>
+    </SettingSection>
     <SettingSection Title="@L["settings.security.webServer"]">
         <SettingField Label="HTTP/3" Wide Hint="@L["settings.security.fasterConnectionsForBrowsersThat"]" HelpLink="/Help/security#http3">
             <div class="form-check form-switch mt-1">
@@ -197,6 +216,11 @@
     // since the real value is never round-tripped back to the browser.
     [SupplyParameterFromForm(FormName = "security-settings")] private string? EntraClientSecret { get; set; }
     private bool HasStoredEntraClientSecret { get; set; }
+    [SupplyParameterFromForm(FormName = "security-settings")] private bool GoogleEnabled { get; set; }
+    [SupplyParameterFromForm(FormName = "security-settings")] private string? GoogleClientId { get; set; }
+    [SupplyParameterFromForm(FormName = "security-settings")] private string? GoogleClientSecret { get; set; }
+    [SupplyParameterFromForm(FormName = "security-settings")] private string? GoogleAllowedDomains { get; set; }
+    private bool HasStoredGoogleClientSecret { get; set; }
     [SupplyParameterFromForm(FormName = "security-settings")] private bool Http3Enabled { get; set; }
     [SupplyParameterFromForm(FormName = "security-settings")] private bool StrictScripts { get; set; }
     [SupplyParameterFromForm(FormName = "security-settings")] private bool RequireTwoFactor { get; set; }
@@ -215,6 +239,8 @@
     {
         var entra = await Db.EntraSsoSettings.AsNoTracking().FirstOrDefaultAsync();
         HasStoredEntraClientSecret = !string.IsNullOrEmpty(entra?.ClientSecret);
+        var google = await Db.GoogleSsoSettings.AsNoTracking().FirstOrDefaultAsync();
+        HasStoredGoogleClientSecret = !string.IsNullOrEmpty(google?.ClientSecret);
         RecentReports = CspReports.Recent();
         CameraPins = await Db.CameraCertificatePins.AsNoTracking().OrderBy(p => p.Host).ToListAsync();
 
@@ -226,6 +252,9 @@
         EntraEnabled = entra?.IsEnabled ?? false;
         EntraTenantId = entra?.TenantId;
         EntraClientId = entra?.ClientId;
+        GoogleEnabled = google?.IsEnabled ?? false;
+        GoogleClientId = google?.ClientId;
+        GoogleAllowedDomains = google?.AllowedDomains;
         Http3Enabled = await Settings.GetAsync(WebServerProtocols.Http3SettingKey, true);
         StrictScripts = await Settings.GetAsync(LarisVMS.Web.Security.CspNonce.StrictSettingKey, true);
         RequireTwoFactor = await Settings.GetAsync(TwoFactorSignIn.RequireSettingKey, false);
@@ -291,6 +320,25 @@
             return;
         }
 
+        var google = await Db.GoogleSsoSettings.FirstOrDefaultAsync();
+        var hadStoredGoogleSecret = !string.IsNullOrEmpty(google?.ClientSecret);
+        HasStoredGoogleClientSecret = hadStoredGoogleSecret;
+        HasStoredEntraClientSecret = hadStoredSecret;
+        if (GoogleEnabled && (string.IsNullOrWhiteSpace(GoogleClientId)
+            || (!hadStoredGoogleSecret && string.IsNullOrWhiteSpace(GoogleClientSecret))))
+        {
+            ErrorMessage = Loc.T("settings.security.enterAGoogleClientId");
+            return;
+        }
+        var googleDomains = GoogleLinks.ParseDomains(GoogleAllowedDomains);
+        var badDomains = googleDomains.Where(d => !GoogleLinks.LooksLikeDomain(d)).ToList();
+        if (badDomains.Count > 0)
+        {
+            ErrorMessage = Loc.T("settings.security.notAValidDomain", new { entries = string.Join(", ", badDomains) });
+            return;
+        }
+        var googleDomainsText = googleDomains.Count > 0 ? string.Join("\n", googleDomains) : null;
+
         var user = AuthenticationStateTask is not null
             ? (await AuthenticationStateTask).User
             : new ClaimsPrincipal(new ClaimsIdentity());
@@ -298,6 +346,8 @@
         var oldManagement = await Settings.GetRawAsync(IpAllowListMiddleware.ManagementSettingKey) ?? string.Empty;
         var oldLiveView = await Settings.GetRawAsync(IpAllowListMiddleware.LiveViewSettingKey) ?? string.Empty;
         var oldEntraEnabled = entra?.IsEnabled ?? false;
+        var oldGoogleEnabled = google?.IsEnabled ?? false;
+        var oldGoogleDomains = google?.AllowedDomains ?? string.Empty;
         var oldHttp3 = await Settings.GetAsync(WebServerProtocols.Http3SettingKey, true);
         var oldStrict = await Settings.GetAsync(LarisVMS.Web.Security.CspNonce.StrictSettingKey, true);
         var oldRequireTwoFactor = await Settings.GetAsync(TwoFactorSignIn.RequireSettingKey, false);
@@ -334,17 +384,33 @@
         // comment for why this is what makes a saved change take effect with no app restart needed.
         OidcOptionsCache.TryRemove(EntraOidcOptionsConfigurator.SchemeName);
 
+        var isNewGoogleRow = google is null;
+        google ??= new GoogleSsoSettings { Id = Guid.NewGuid() };
+        google.IsEnabled = GoogleEnabled;
+        google.ClientId = string.IsNullOrWhiteSpace(GoogleClientId) ? null : GoogleClientId.Trim();
+        if (!string.IsNullOrWhiteSpace(GoogleClientSecret)) google.ClientSecret = GoogleClientSecret.Trim();
+        google.AllowedDomains = googleDomainsText;
+        google.LastModifiedAt = DateTime.UtcNow;
+        google.LastModifiedBy = by;
+        if (isNewGoogleRow) Db.GoogleSsoSettings.Add(google);
+        await Db.SaveChangesAsync();
+        OidcOptionsCache.TryRemove(GoogleOidcOptionsConfigurator.SchemeName);
+        GoogleAllowedDomains = googleDomainsText;
+
         var details = AuditDiff.Build(
             AuditDiff.Of("Management/API allow list", oldManagement, ManagementAllowList),
             AuditDiff.Of("Live View/playback allow list", oldLiveView, LiveViewAllowList),
             AuditDiff.Of("Entra sign-in enabled", oldEntraEnabled.ToString(), EntraEnabled.ToString()),
+            AuditDiff.Of("Google sign-in enabled", oldGoogleEnabled.ToString(), GoogleEnabled.ToString()),
+            AuditDiff.Of("Google allowed domains", oldGoogleDomains, googleDomainsText ?? string.Empty),
             AuditDiff.Of("HTTP/3 enabled", oldHttp3.ToString(), Http3Enabled.ToString()),
             AuditDiff.Of("Strict script policy", oldStrict.ToString(), StrictScripts.ToString()),
             AuditDiff.Of("Require two-factor sign-in", oldRequireTwoFactor.ToString(), RequireTwoFactor.ToString()),
             AuditDiff.Of("Camera certificate pinning", oldPinCameras.ToString(), PinCameraCertificates.ToString()),
             AuditDiff.Of("Confirm password for admin pages", oldConfirmPassword.ToString(), ConfirmPasswordForAdmin.ToString()),
             AuditDiff.Of("Temporary admin-set passwords", oldTemporaryPasswords.ToString(), TemporaryAdminPasswords.ToString()),
-            AuditDiff.SecretChanged("Entra client secret", !string.IsNullOrWhiteSpace(EntraClientSecret)));
+            AuditDiff.SecretChanged("Entra client secret", !string.IsNullOrWhiteSpace(EntraClientSecret)),
+            AuditDiff.SecretChanged("Google client secret", !string.IsNullOrWhiteSpace(GoogleClientSecret)));
 
         await AuditService.LogAsync("Settings.Update",
             user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
@@ -354,6 +420,8 @@
         // browser" convention EmailSettings' own secret fields use.
         EntraClientSecret = null;
         HasStoredEntraClientSecret = !string.IsNullOrEmpty(entra.ClientSecret);
+        GoogleClientSecret = null;
+        HasStoredGoogleClientSecret = !string.IsNullOrEmpty(google.ClientSecret);
 
         SavedMessage = Loc.T("common.saved");
     }

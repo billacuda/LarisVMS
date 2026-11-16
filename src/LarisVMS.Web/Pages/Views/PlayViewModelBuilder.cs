@@ -62,6 +62,7 @@ public sealed class PlayViewModelBuilder(IViewService viewService, ICameraServic
             CurrentViewId = view.Id,
             Cameras = cameras,
             Views = views,
+            Tree = await viewService.GetTreeAsync(userId, ct),
             EventBadgeCornerValue = badgeCorner,
             AdaptiveStreamingEnabled = adaptiveStreaming,
             PathLingerSeconds = PathLinger.Clamp(await settings.GetAsync(PathLinger.SettingKey, PathLinger.Default, ct: ct)),

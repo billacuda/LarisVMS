@@ -48,7 +48,7 @@ IP 允許清單、獨立的即時/回放連接埠、嚴格指令碼原則、憑�
 
 ## 加密的密碼
 
-攝影機憑證、SMB 憑證、節點金鑰、電子郵件密碼、Entra 用戶端密碼和 Active Directory 服務帳戶的密碼，使用 `%ProgramData%\LarisVMS\keys` 中的資料保護金鑰加密後存放在資料庫中。只有 SYSTEM、Administrators 和 LarisVMS 服務的帳戶才能開啟 `%ProgramData%\LarisVMS`：在那裡發現的任何其他存取權限，例如本機使用者在安裝 LarisVMS 之前建立的資料夾，會在服務啟動時被移除。請備份該資料夾，並且在部署期間絕不要刪除它。
+攝影機憑證、SMB 憑證、節點金鑰、電子郵件密碼、Entra 和 Google 用戶端密碼，以及 Active Directory 服務帳戶的密碼，使用 `%ProgramData%\LarisVMS\keys` 中的資料保護金鑰加密後存放在資料庫中。只有 SYSTEM、Administrators 和 LarisVMS 服務的帳戶才能開啟 `%ProgramData%\LarisVMS`：在那裡發現的任何其他存取權限，例如本機使用者在安裝 LarisVMS 之前建立的資料夾，會在服務啟動時被移除。請備份該資料夾，並且在部署期間絕不要刪除它。
 
 ## 針對企業的額外保護
 

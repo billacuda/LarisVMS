@@ -1,58 +1,21 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
 
 namespace LarisVMS.Web.Pages.Views;
 
+/// <summary>The view tree: Private views, a folder per role, and roles' views an admin let this
+/// person open. The tree itself is drawn and changed by view-tree.js through /api/views
+/// (ViewTreeApi); every rule about who may change what is ViewService's.</summary>
 [Authorize("Views.View")]
-public class IndexModel(IViewService viewService, IAuthorizationService authorization, IPermissionService permissions) : PageModel
+public class IndexModel(IViewService viewService) : PageModel
 {
-    public List<View> Views { get; set; } = [];
-    public List<View> TourViews { get; set; } = [];
-    public string? CurrentUserId { get; set; }
-    public string? ErrorMessage { get; set; }
-    public bool CanEditViews { get; set; }
-    /// <summary>An administrator: may change and delete other people's shared views.</summary>
-    public bool CanManageAll { get; set; }
+    public int TourViewCount { get; set; }
 
     public async Task OnGetAsync()
     {
-        CurrentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-        CanEditViews = await CanEditViewsAsync();
-        CanManageAll = (await permissions.GetGrantedAsync(User)).IsAdministrator;
-        Views = await viewService.ListVisibleToAsync(CurrentUserId ?? string.Empty);
-        TourViews = await viewService.GetTourViewsAsync();
-    }
-
-    // Razor Pages [Authorize] only applies at the page/model level, not per-handler (MVC1001) —
-    // same reasoning as Admin/Nodes: create/delete stay under the page-level Views.View policy
-    // rather than requiring a separate per-handler Views.Edit check, matching how Cameras/Index's
-    // Probe handler works under Cameras.View. Ownership is still enforced in ViewService.
-    public async Task<IActionResult> OnPostCreateAsync(string name)
-    {
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
-        var view = await viewService.CreateAsync(string.IsNullOrWhiteSpace(name) ? "New view" : name, userId);
-        return RedirectToPage("Editor", new { id = view.Id });
+        TourViewCount = (await viewService.GetTourViewsAsync(userId)).Count;
     }
-
-    public async Task<IActionResult> OnPostDeleteAsync(Guid id)
-    {
-        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
-        try
-        {
-            await viewService.DeleteAsync(id, userId, (await permissions.GetGrantedAsync(User)).IsAdministrator);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            ErrorMessage = ex.Message;
-            await OnGetAsync();
-            return Page();
-        }
-        return RedirectToPage();
-    }
-
-    private async Task<bool> CanEditViewsAsync() => (await authorization.AuthorizeAsync(User, "Views.Edit")).Succeeded;
 }

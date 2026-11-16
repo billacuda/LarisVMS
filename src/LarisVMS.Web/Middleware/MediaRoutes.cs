@@ -33,8 +33,12 @@ public static class MediaRoutes
         // The public API's copies of media routes follow the same port and allow list as the originals.
         return (value.StartsWith("/api/v1/cameras/", StringComparison.OrdinalIgnoreCase)
                 && (value.EndsWith("/snapshot", StringComparison.OrdinalIgnoreCase)
-                    || value.EndsWith("/thumbnail/latest", StringComparison.OrdinalIgnoreCase)))
+                    || value.EndsWith("/thumbnail/latest", StringComparison.OrdinalIgnoreCase)
+                    || value.EndsWith("/stream.mp4", StringComparison.OrdinalIgnoreCase)))
             || (value.StartsWith("/api/v1/exports/items/", StringComparison.OrdinalIgnoreCase)
-                && value.EndsWith("/download", StringComparison.OrdinalIgnoreCase));
+                && value.EndsWith("/download", StringComparison.OrdinalIgnoreCase))
+            // The standalone player package: every video of an export in one download.
+            || ((value.StartsWith("/api/exports/", StringComparison.OrdinalIgnoreCase) || value.StartsWith("/api/v1/exports/", StringComparison.OrdinalIgnoreCase))
+                && value.EndsWith("/package", StringComparison.OrdinalIgnoreCase));
     }
 }

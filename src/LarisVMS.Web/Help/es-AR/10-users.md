@@ -1,10 +1,10 @@
 # Usuarios y acceso
 
-Cuentas, roles, permisos, acceso a cámaras, Active Directory e inicio de sesión con Microsoft.
+Cuentas, roles, permisos, acceso a cámaras e inicio de sesión con una cuenta local, Active Directory, Google o Microsoft.
 
 ## Usuarios
 
-El registro propio está desactivado. Las cuentas se crean en **Configuración → Usuarios**, donde también podés asignar roles, deshabilitar una cuenta y restablecer una contraseña. Las cuentas locales inician sesión con su dirección de correo. Deshabilitar una cuenta la cierra en todos lados enseguida y corta su video en vivo.
+El registro propio está desactivado. Las cuentas se crean en **Configuración → Usuarios**, donde también podés asignar roles, deshabilitar una cuenta y restablecer una contraseña. Las cuentas locales inician sesión con su dirección de correo. Deshabilitar una cuenta la cierra en todos lados enseguida y corta su video en vivo. Se inicia sesión con una cuenta local, una cuenta de [Active Directory](#active-directory) (por LDAPS) o una cuenta vinculada de [Google](#google) o [Microsoft Entra ID](#entra).
 
 ## Contraseñas
 
@@ -24,13 +24,13 @@ Al iniciar sesión, **No volver a preguntar en este navegador por 14 días** sal
 
 Si alguien pierde el teléfono y sus códigos de recuperación, **Desactivar 2FA** junto a esa persona en **Configuración → Usuarios** le permite iniciar sesión solo con la contraseña y configurarlo de nuevo.
 
-**Configuración → Seguridad → Exigir inicio de sesión en dos pasos** obliga a todos los que inician sesión con contraseña a configurarlo antes de poder hacer cualquier otra cosa, y no les deja desactivarlo. Los inicios de sesión con Microsoft quedan a cargo de los controles de Entra.
+**Configuración → Seguridad → Exigir inicio de sesión en dos pasos** obliga a todos los que inician sesión con contraseña a configurarlo antes de poder hacer cualquier otra cosa, y no les deja desactivarlo. Los inicios de sesión con Microsoft y Google quedan a cargo de sus propios controles.
 
 ## Sesiones
 
 Seleccioná tu nombre arriba de la página y después **Sesiones** para ver todos los navegadores donde tenés la sesión iniciada, con su dirección y cuándo se usaron por última vez. Cerrá las que no reconozcas, o todas menos la que estás usando, y después cambiá tu contraseña. Cambiar la contraseña o activar el inicio de sesión en dos pasos cierra tus otras sesiones al instante.
 
-Con **Configuración → Seguridad → Confirmar la contraseña en las páginas de administración** activado, las páginas de administración vuelven a pedir tu contraseña (y un código, con el inicio de sesión en dos pasos activado) salvo que hayas iniciado sesión o la hayas confirmado en los últimos 15 minutos; usarlas mantiene ese plazo. Así, alguien que encuentre tu navegador con la sesión iniciada puede usar el sistema pero no cambiar su configuración, sus usuarios ni sus claves. Los inicios de sesión con Microsoft vuelven a iniciar sesión. Viene desactivado.
+Con **Configuración → Seguridad → Confirmar la contraseña en las páginas de administración** activado, las páginas de administración vuelven a pedir tu contraseña (y un código, con el inicio de sesión en dos pasos activado) salvo que hayas iniciado sesión o la hayas confirmado en los últimos 15 minutos; usarlas mantiene ese plazo. Así, alguien que encuentre tu navegador con la sesión iniciada puede usar el sistema pero no cambiar su configuración, sus usuarios ni sus claves. Los inicios de sesión con Microsoft y Google vuelven a iniciar sesión. Viene desactivado.
 
 En **Configuración → Usuarios**, **Cerrar sesión** junto a una persona cierra su sesión en todos los navegadores. Puede volver a iniciar sesión; deshabilitá la cuenta para que no pueda entrar.
 
@@ -61,6 +61,10 @@ Un rol es un conjunto de permisos con nombre, gestionado en **Configuración →
 ## Entra
 
 **Configuración → Seguridad → Inicio de sesión con Entra ID** agrega un botón «Iniciar sesión con Microsoft». Nunca crea cuentas, y no empareja cuentas por correo: en **Configuración → Usuarios**, usá **Inicio de sesión con Microsoft** en la fila de una persona para ingresar su **ID de objeto** de Entra (desde su página de usuario en el centro de administración de Microsoft Entra). Su primer inicio de sesión con Microsoft completa el vínculo; vacío lo quita. Registrá una app en Entra con la URI de redirección que muestra la página de Seguridad, y después ingresá su ID de tenant (el GUID o dominio de tu directorio, no `common`), ID de cliente y secreto. Los cambios se aplican enseguida. Las cuentas ya vinculadas siguen funcionando.
+
+## Google
+
+**Configuración → Seguridad → Inicio de sesión con Google** agrega un botón “Iniciar sesión con Google”. Nunca crea cuentas: en **Configuración → Usuarios**, usá **Inicio de sesión con Google** en la fila de una persona para ingresar su dirección de Gmail o de Google Workspace. Su primer inicio de sesión con Google con esa dirección completa la vinculación, pero solo si Google verificó la dirección. Después, la vinculación sigue a su cuenta de Google y no a la dirección, así que cambiar la dirección más adelante no la mueve. En blanco quita la vinculación. En la consola de Google Cloud, creá un ID de cliente OAuth de tipo **Aplicación web** con el URI de redirección que muestra la página Seguridad, y después ingresá su ID de cliente y su secreto. **Dominios permitidos** limita el inicio de sesión a los dominios de Google Workspace de la lista, uno por línea, lo que rechaza las cuentas de Gmail personales, incluidas las ya vinculadas. Dejalo en blanco para permitir cualquier cuenta de Google. Los cambios se aplican de inmediato.
 
 ## Active Directory
 

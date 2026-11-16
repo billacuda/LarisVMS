@@ -35,7 +35,7 @@
 
 ### チームチャンネル
 
-各ルールは、メールリスト、Webhook、ntfy、Pushover、Slack、Teams にも送信できます。チャンネルをオンにして、その項目を入力します。
+各ルールは、メールリスト、Webhook、ntfy、Pushover、Slack、Teams にも送信できます。チャンネルをオンにして、その項目を入力します。Webhook は、カメラや検出した物体など、アラートの原因も送信します。これは [Home Assistant](/Help/home-assistant#alerts-by-webhook) で使えます。
 
 ## 通知
 

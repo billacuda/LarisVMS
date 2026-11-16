@@ -35,7 +35,7 @@ Eine Erkennung alarmiert einmal. Bei einer Regel, die mehrere Kameras überwacht
 
 ### Team-Kanäle
 
-Jede Regel kann außerdem an E-Mail-Listen, Webhooks, ntfy, Pushover, Slack und Teams senden. Aktivieren Sie einen Kanal und füllen Sie seine Felder aus.
+Jede Regel kann außerdem an E-Mail-Listen, Webhooks, ntfy, Pushover, Slack und Teams senden. Aktivieren Sie einen Kanal und füllen Sie seine Felder aus. Ein Webhook sendet außerdem, was den Alarm ausgelöst hat, etwa die Kamera und das erkannte Objekt; [Home Assistant](/Help/home-assistant#alerts-by-webhook) kann das nutzen.
 
 ## Benachrichtigungen
 

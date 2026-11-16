@@ -497,7 +497,7 @@ window.larisvmsViewPlay = (function () {
     // (renderMobile, portrait or landscape) never uses a fitted height at all — see renderMobile's
     // own comment for why forcing one there was a real regression, not a fix.
     function applyFittedRowHeight() {
-        if (!shortQuery.matches) return;
+        if (!desktopGridShowing()) return;
         var container = document.getElementById(opts.gridElId);
         if (!container) return;
         var visible = cells.filter(function (c) { return cameraById[c.cameraId]; });
@@ -660,15 +660,31 @@ window.larisvmsViewPlay = (function () {
     //                     rather than replays.
     //   narrow viewport → the derived single/two-column phone stack (phone in portrait), same
     //                     unfitted rendering as the landscape case above.
-    //   otherwise       → the saved layout at the editor's own fixed row height.
+    //   otherwise       → the saved layout, also with rows scaled to fit the window. Columns already
+    //                     follow the width, so fixed-height rows made a narrower window keep the
+    //                     cells' height and scroll; fitting both keeps the whole view on screen.
     function render() {
         stopAll();
         var container = document.getElementById(opts.gridElId);
         if (!container) return;
-        if (phoneLandscapeQuery.matches) renderMobile(container, true);
-        else if (shortQuery.matches) renderDesktop(container, true);
-        else if (phoneQuery.matches) renderMobile(container, false);
-        else renderDesktop(container, false);
+        renderedMode = layoutMode();
+        if (renderedMode === 'phone-landscape') renderMobile(container, true);
+        else if (renderedMode === 'phone') renderMobile(container, false);
+        else renderDesktop(container, true);
+    }
+
+    // Which of the layouts above the window calls for: 'phone-landscape', 'phone', or 'desktop'
+    // (short or not — both fit their rows to the window now).
+    var renderedMode = null;
+    function layoutMode() {
+        if (phoneLandscapeQuery.matches) return 'phone-landscape';
+        if (shortQuery.matches || !phoneQuery.matches) return 'desktop';
+        return 'phone';
+    }
+
+    // The saved desktop layout is showing (not one of the phone stacks), so its rows fit the window.
+    function desktopGridShowing() {
+        return layoutMode() === 'desktop';
     }
 
     // Single-camera picker beside the View dropdown — explicit user ask: "list all cameras with a
@@ -721,6 +737,27 @@ window.larisvmsViewPlay = (function () {
         // page, so without this the popover stays open indefinitely once opened.
         document.addEventListener('click', function (e) {
             if (details.open && !details.contains(e.target)) details.open = false;
+        });
+    }
+
+    // The view picker: the same view tree as the Views page, open-only, in a <details> popover.
+    // Closes on an outside click or Escape, and opens with the current view in sight.
+    function wireViewTreePicker() {
+        var details = document.getElementById('viewTreePickerDetails');
+        if (!details) return;
+        document.addEventListener('click', function (e) {
+            if (details.open && !details.contains(e.target)) details.open = false;
+        });
+        details.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && details.open) {
+                details.open = false;
+                details.querySelector('summary').focus();
+            }
+        });
+        details.addEventListener('toggle', function () {
+            if (!details.open) return;
+            var current = details.querySelector('[aria-current="page"]');
+            if (current) current.scrollIntoView({ block: 'nearest' });
         });
     }
 
@@ -950,14 +987,23 @@ window.larisvmsViewPlay = (function () {
         var onModeChange = function () {
             var fsPending = window.larisvmsFullscreenTile && window.larisvmsFullscreenTile.isTransitioning();
             if (document.fullscreenElement || fsPending) { pendingModeChange = true; return; }
-            render();
+            // Crossing a breakpoint that doesn't change the layout (short ↔ tall desktop) only
+            // needs the rows re-fitted, not every camera restarted.
+            if (layoutMode() === renderedMode) applyFittedRowHeight();
+            else render();
         };
         [phoneQuery, shortQuery, phoneLandscapeQuery].forEach(function (query) {
             if (query.addEventListener) query.addEventListener('change', onModeChange);
             else if (query.addListener) query.addListener(onModeChange); // Safari < 14
         });
         document.addEventListener('fullscreenchange', function () {
-            if (document.fullscreenElement || !pendingModeChange) return;
+            if (document.fullscreenElement) return;
+            if (!pendingModeChange || layoutMode() === renderedMode) {
+                // Leaving a fullscreen tile can leave the window a different size: re-fit only.
+                pendingModeChange = false;
+                applyFittedRowHeight();
+                return;
+            }
             pendingModeChange = false;
             render();
         });
@@ -974,6 +1020,7 @@ window.larisvmsViewPlay = (function () {
 
         wireKiosk(o.kioskBtnId, o.navElId, o.toolbarElId, o.shellTopbarElId);
         wireCameraPicker(o);
+        wireViewTreePicker();
         wireDetectionToggles(o);
         if (o.isTour) wireTour(o.tourViewIds, o.tourIndex, o.tourIntervalSeconds);
     }

@@ -44,14 +44,27 @@
             <button type="submit" class="btn btn-primary w-100">@L["account.login.logIn"]</button>
         </form>
 
-        @if (Model.ShowEntraButton)
+        @if (Model.ShowEntraButton || Model.ShowGoogleButton)
         {
             <hr class="my-4" />
-            <form method="post" asp-page="./ExternalLogin">
+        }
+        @if (Model.ShowEntraButton)
+        {
+            <form method="post" asp-page="./ExternalLogin" class="mb-2">
                 <input type="hidden" name="provider" value="@LoginModel.EntraSchemeName" />
                 <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
                 <button type="submit" class="btn btn-outline-secondary w-100">
                     <span aria-hidden="true">🪟</span> @L["account.login.signInWithMicrosoft"]
+                </button>
+            </form>
+        }
+        @if (Model.ShowGoogleButton)
+        {
+            <form method="post" asp-page="./ExternalLogin" class="mb-2">
+                <input type="hidden" name="provider" value="@LoginModel.GoogleSchemeName" />
+                <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+                <button type="submit" class="btn btn-outline-secondary w-100">
+                    <span aria-hidden="true" class="fw-bold">G</span> @L["account.login.signInWithGoogle"]
                 </button>
             </form>
         }

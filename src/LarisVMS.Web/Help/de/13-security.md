@@ -48,7 +48,7 @@ Diese Prüfungen stehen zwischen einem Download und einer laufenden Installation
 
 ## Verschlüsselte Geheimnisse
 
-Kamera-Zugangsdaten, SMB-Zugangsdaten, Knotenschlüssel, E-Mail-Secrets, das Entra-Client-Secret und das Passwort des Active-Directory-Dienstkontos sind in der Datenbank verschlüsselt, mit den Datenschutzschlüsseln in `%ProgramData%\LarisVMS\keys`. Nur SYSTEM, Administratoren und die Konten der LarisVMS-Dienste können `%ProgramData%\LarisVMS` öffnen: Jeder andere dort vorgefundene Zugriff, etwa ein Ordner, den ein lokaler Benutzer vor der Installation von LarisVMS angelegt hat, wird beim Start eines Dienstes entfernt. Sichern Sie diesen Ordner und löschen Sie ihn nie bei einem Deployment.
+Kamera-Zugangsdaten, SMB-Zugangsdaten, Knotenschlüssel, E-Mail-Secrets, die Client-Secrets für Entra und Google und das Passwort des Active-Directory-Dienstkontos sind in der Datenbank verschlüsselt, mit den Datenschutzschlüsseln in `%ProgramData%\LarisVMS\keys`. Nur SYSTEM, Administratoren und die Konten der LarisVMS-Dienste können `%ProgramData%\LarisVMS` öffnen: Jeder andere dort vorgefundene Zugriff, etwa ein Ordner, den ein lokaler Benutzer vor der Installation von LarisVMS angelegt hat, wird beim Start eines Dienstes entfernt. Sichern Sie diesen Ordner und löschen Sie ihn nie bei einem Deployment.
 
 ## Zusätzlicher Schutz für Unternehmen
 

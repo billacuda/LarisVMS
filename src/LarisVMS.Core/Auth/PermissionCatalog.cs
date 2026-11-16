@@ -58,5 +58,9 @@ public static class PermissionCatalog
         new("Notifications", "Subscribe", "Subscribe to shared notifications"),
         new("Notifications", "CreateOwn", "Create personal notifications"),
         new("Recording", "Manual", "Start and stop manual recording"),
+
+        // Live video for other programs (Home Assistant, ffmpeg, VLC) over /api/v1. Not granted to any
+        // role by default: an admin turns it on for the role an integration's key is bound to.
+        new("Live", "Stream", "Stream live video to other programs (API keys, Home Assistant)"),
     ];
 }

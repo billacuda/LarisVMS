@@ -9,8 +9,9 @@ namespace LarisVMS.Core;
 /// changing, removing or reordering any recorded segment breaks every link after it. Signed
 /// checkpoints of each camera's latest link (ChainCheckpoint) pin the chain down over time.
 ///
-/// The formula lives here, and once more in the Verify export page's JavaScript (exports-verify.js),
-/// which recomputes the links in an exported manifest — keep the two identical.
+/// The formula lives here, and once more in JavaScript (export-verify-core.js, used by the Verify
+/// export page and the standalone export player), which recomputes the links in an exported
+/// manifest — keep the two identical.
 /// </summary>
 public static class SegmentChain
 {

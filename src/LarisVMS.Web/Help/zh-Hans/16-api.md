@@ -18,6 +18,8 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/status
 
 只有以 `/api/v1` 开头的路径接受 API 密钥。其他路径是 Web 界面的内部路径，可能会不经通知而更改。
 
+只能发送用户名和密码的程序（例如 Home Assistant 的 Generic Camera）可以改用 HTTP Basic 登录：用户名填 `apikey`，密码填该密钥。
+
 ## 密钥和权限
 
 您可以拥有任意数量的密钥，每个都有自己的权限。密钥的访问权限来自三点：
@@ -246,6 +248,30 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o latest.jpg \
   https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/thumbnail/latest
 ```
 
+### GET /api/v1/cameras/{cameraId}/events/{spanId}/snapshot
+
+一次检测的图像，按目标裁剪。Webhook 警报会把此地址作为 `snapshotPath` 发送，并附带检测的 `spanId`。
+
+**权限**：回放已录制的录像，外加**回放**摄像头访问权限。
+
+```bash
+curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o detection.jpg \
+  https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/events/123456/snapshot
+```
+
+## 实时视频
+
+### GET /api/v1/cameras/{cameraId}/stream.mp4
+
+以一路连续的 MP4 流提供摄像头的实时视频，供播放网址的程序使用，例如 Home Assistant 的 Generic Camera、VLC 和 ffmpeg。它与网页界面显示的是同一路流，因此不会向摄像头再要一路，隐私遮挡也照样生效。加上 `?quality=sub` 可获取摄像头的较小码流。录像机重启摄像头视频时流会结束，程序随后会重新连接。
+
+**权限**：向其他程序推送实时视频，外加**查看**摄像头访问权限。在**设置 → 权限**中授予之前，任何角色都没有此权限。
+
+```bash
+ffplay -headers "X-Api-Key: lvk_EXAMPLEKEY" \
+  https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/stream.mp4
+```
+
 ## 云台
 
 ### POST /api/v1/cameras/{cameraId}/ptz/move
@@ -418,6 +444,8 @@ curl -X POST -H "X-Api-Key: lvk_EXAMPLEKEY" -H "Content-Type: application/json" 
 { "jobId": "00000000-0000-0000-0000-00000000000e" }
 ```
 
+要把录像交给没有 LarisVMS 的人，请加上 `"includePlayer": true`：这样导出还可以作为一个带[独立播放器](/Help/live-and-playback#standalone-player)的包下载。此时 `"convertH265"`（除非发送 `false`，否则开启）会为 H.265 视频添加可在所有浏览器播放的 H.264 副本。
+
 ### GET /api/v1/exports
 
 列出导出及其进度。每个导出都有 `items`，每台摄像头一项。某一项的 `id` 用于下载或重试它。
@@ -437,6 +465,7 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
     "fromUtc": "2026-11-06T14:00:00Z",
     "toUtc": "2026-11-06T14:30:00Z",
     "status": "Completed",
+    "includePlayer": false,
     "items": [
       {
         "id": "00000000-0000-0000-0000-00000000000f",
@@ -446,7 +475,8 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
         "status": "Completed",
         "errorMessage": null,
         "outputSizeBytes": 104857600,
-        "redacted": false
+        "redacted": false,
+        "converted": false
       }
     ]
   }
@@ -462,6 +492,17 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
 ```bash
 curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o workshop.mp4 \
   https://vms.example.com/api/v1/exports/items/00000000-0000-0000-0000-00000000000f/download
+```
+
+### GET /api/v1/exports/{jobId}/package
+
+将使用 `includePlayer` 创建且已完成的导出下载为一个 zip：包含每个摄像头的视频、独立播放器、事件以及所有文件的已签名列表。下载时直接从录像机组装，因此会立即开始。
+
+**权限**：创建和下载导出，外加**导出**摄像头访问权限。
+
+```bash
+curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o export.zip \
+  https://vms.example.com/api/v1/exports/00000000-0000-0000-0000-00000000000e/package
 ```
 
 ### POST /api/v1/exports/{itemId}/retry
@@ -554,7 +595,7 @@ curl -X POST -H "X-Api-Key: lvk_EXAMPLEKEY" \
 
 API 密钥无法使用以下内容：
 
-- 实时视频。请使用 Web 界面，或上面的图像命令。
+- 通过网页界面自身连接的实时视频。请使用上面的 MP4 流。
 - 直接回放录像。请使用导出。
 - 设置、用户、角色、API 密钥、加密和备份。
 - 摄像头设置，例如区域、计划和设备设置。

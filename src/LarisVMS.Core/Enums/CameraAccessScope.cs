@@ -3,6 +3,8 @@ namespace LarisVMS.Core.Enums;
 public enum CameraAccessPrincipalType
 {
     Role = 0,
+    /// <summary>A personal grant. No longer honoured or created: camera access is role-based. Kept
+    /// only so the one-time conversion (RoleSeedService.RoleOnlyCameraAccessAsync) can find old rows.</summary>
     User = 1
 }
 

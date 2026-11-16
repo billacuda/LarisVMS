@@ -409,7 +409,10 @@ builder.Services.ConfigureApplicationCookie(options =>
 // here since AddOpenIdConnect requires *a* configure delegate even when the real one is supplied via
 // IConfigureNamedOptions<T>. Login.cshtml's own override decides whether to actually offer the "Sign
 // in with Microsoft" button (EntraSsoSettings.IsEnabled), independent of this registration existing.
-builder.Services.AddAuthentication().AddOpenIdConnect(EntraOidcOptionsConfigurator.SchemeName, _ => { });
+builder.Services.AddAuthentication()
+    .AddOpenIdConnect(EntraOidcOptionsConfigurator.SchemeName, _ => { })
+    // Google sign-in: same pattern, options from GoogleOidcOptionsConfigurator (GoogleSsoSettings).
+    .AddOpenIdConnect(GoogleOidcOptionsConfigurator.SchemeName, _ => { });
 // Registered as IConfigureOptions<T>, not IConfigureNamedOptions<T> — OptionsFactory<T>'s
 // constructor only takes IEnumerable<IConfigureOptions<T>> from DI, and the container resolves by
 // the exact registered service type, not by every interface the implementation happens to satisfy.
@@ -420,6 +423,7 @@ builder.Services.AddAuthentication().AddOpenIdConnect(EntraOidcOptionsConfigurat
 // scheme, OIDC included, to check whether it owns the current request path) — confirmed live as an
 // unhandled ArgumentNullException on 'ClientId' on every page load, not just a sign-in attempt.
 builder.Services.AddSingleton<IConfigureOptions<OpenIdConnectOptions>, EntraOidcOptionsConfigurator>();
+builder.Services.AddSingleton<IConfigureOptions<OpenIdConnectOptions>, GoogleOidcOptionsConfigurator>();
 
 // ── Authorization / RBAC ──────────────────────────────────────────────────────
 builder.Services.AddAuthorization(options =>
@@ -461,6 +465,7 @@ builder.Services.AddScoped<IBundledBuildRegistrar, BundledBuildRegistrar>();
 // Failover plan phase 2: standalone relay tier.
 builder.Services.AddScoped<IProxyService, ProxyService>();
 builder.Services.AddScoped<IViewService, ViewService>();
+builder.Services.AddScoped<IViewAccessService, ViewAccessService>();
 // Shared between Views/Play and Live/Index (which renders the same view content directly instead
 // of redirecting to Views/Play — see PlayViewModelBuilder's own doc comment).
 builder.Services.AddScoped<LarisVMS.Web.Pages.Views.PlayViewModelBuilder>();
@@ -485,6 +490,7 @@ builder.Services.AddScoped<ISigningKeyService, SigningKeyService>();
 builder.Services.AddScoped<IFootageKeyService, FootageKeyService>();
 builder.Services.AddScoped<SegmentChainService>();
 builder.Services.AddScoped<ExportManifestBuilder>();
+builder.Services.AddScoped<ExportPackageBuilder>();
 builder.Services.AddHostedService<LarisVMS.Web.Services.ChainCheckpointService>();
 builder.Services.AddScoped<IEventTagRuleService, EventTagRuleService>();
 builder.Services.AddScoped<IScheduleWindowService, ScheduleWindowService>();
@@ -568,11 +574,14 @@ builder.Services.AddHostedService<CameraCertificatePinService>();
 builder.Services.AddHostedService<NodeTlsService>();
 builder.Services.AddHostedService<CameraReprobeService>();
 builder.Services.AddHostedService<AlertEvaluatorService>();
-// Detection alerts: NodeService publishes each recorded AI detection to IDetectionEventSink, and the
-// same singleton evaluates them on its own task.
+// Detection alerts and Home Assistant: NodeService publishes each recorded AI detection and motion
+// span to IDetectionEventSink, which hands it to both; each queues it and works on its own task.
 builder.Services.AddSingleton<DetectionAlertService>();
-builder.Services.AddSingleton<IDetectionEventSink>(sp => sp.GetRequiredService<DetectionAlertService>());
+builder.Services.AddSingleton<LarisVMS.Web.Services.HomeAssistant.HomeAssistantBridge>();
+builder.Services.AddSingleton<IDetectionEventSink>(sp => new DetectionEventFanOut(
+    sp.GetRequiredService<DetectionAlertService>(), sp.GetRequiredService<LarisVMS.Web.Services.HomeAssistant.HomeAssistantBridge>()));
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DetectionAlertService>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<LarisVMS.Web.Services.HomeAssistant.HomeAssistantBridge>());
 builder.Services.AddHostedService<BookmarkRetentionService>();
 builder.Services.AddHostedService<ExportRetentionService>();
 builder.Services.AddHostedService<MotionSpanRetentionService>();
@@ -2780,6 +2789,62 @@ app.MapGet("/api/media/live-ticket/{cameraId:guid}", async (HttpContext ctx, Gui
     return Results.Json(new MediaLiveTicket("proxy", false, $"/live/{cameraId}", null, null, 0));
 }).RequireAuthorization("Cameras.View");
 
+// Live video as one continuous fragmented MP4 over plain HTTP, for programs that can't open this
+// app's WebSocket: Home Assistant's Generic Camera (its stream source is ffmpeg), ffmpeg, and VLC. It
+// reads the same node fanout /live does, so the camera isn't asked for a second stream, and privacy
+// masks apply the same way. Live.Stream is granted to no role by default (opt-in), and the per-camera
+// View narrowing and the minute-by-minute recheck are the same as /live's.
+app.MapGet("/api/v1/cameras/{cameraId:guid}/stream.mp4", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
+    ICameraAccessService cameraAccess, IAuditService auditService, LarisVMS.Web.Services.MediaRelayMetrics relayMetrics,
+    LarisVMS.Web.Services.MediaRoutingService routing, CancellationToken ct, string? quality = null) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.View, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem(Loc.T("api.youDontHaveAccessTo"), statusCode: StatusCodes.Status403Forbidden);
+
+    var camera = await cameraService.GetAsync(cameraId, ct);
+    if (camera is null) return Results.NotFound();
+    var effNode = await routing.GetEffectiveRecordingNodeAsync(camera, ct);
+    if (effNode is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
+        return Results.Problem(Loc.T("api.nodeNotLiveReadyDetail"), statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    var token = MediaToken.Issue(cameraId, key, TimeSpan.FromSeconds(60));
+    var roleQuery = string.Equals(quality, "sub", StringComparison.OrdinalIgnoreCase) ? "&role=sub" : "";
+    var nodeUri = NodeTlsTargets.Shared.Rewrite(new Uri($"ws://{ip}:{port}/live/{cameraId}?token={Uri.EscapeDataString(token)}{roleQuery}"));
+    using var nodeSocket = new ClientWebSocket();
+    nodeSocket.Options.RemoteCertificateValidationCallback = NodeTlsTargets.Shared.Check;
+    nodeSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
+    nodeSocket.Options.SetRequestHeader(MediaToken.RelayHeader,
+        MediaToken.IssueFor(MediaToken.Purposes.Relay, cameraId, key, TimeSpan.FromSeconds(60)));
+    try
+    {
+        await nodeSocket.ConnectAsync(nodeUri, ct);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        return Results.Problem(NodeUnreachable(ctx, ex), statusCode: StatusCodes.Status502BadGateway);
+    }
+
+    await auditService.LogAsync("Camera.View", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+        ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), camera.Name + " (stream.mp4)", ct);
+
+    ctx.Response.ContentType = "video/mp4";
+    ctx.Response.Headers.CacheControl = "no-store";
+    ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>()?.DisableBuffering();
+    relayMetrics.EnterLiveRelay();
+    try
+    {
+        using var stillAllowed = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _ = RecheckLiveAccessAsync(ctx.User, cameraId, cameraAccess, stillAllowed);
+        await LarisVMS.Web.Services.LiveHttpRelay.CopyAsync(nodeSocket, ctx.Response.Body, stillAllowed.Token);
+    }
+    finally
+    {
+        relayMetrics.ExitLiveRelay();
+    }
+    return Results.Empty;
+}).RequireAuthorization("Live.Stream");
+
 // Client time-to-first-frame beacon for the direct-vs-proxy A/B — logged, not stored.
 app.MapPost("/api/media/timing", (MediaTimingBeacon beacon, ILoggerFactory loggerFactory) =>
 {
@@ -2862,6 +2927,7 @@ app.MapGet("/api/v1/status", async (HttpContext ctx, IDashboardService dashboard
 }).RequireAuthorization("Dashboard.View");
 
 app.MapManualRecordingApi();
+app.MapViewTreeApi();
 
 // ── User preferences (M14) ───────────────────────────────────────────────────
 // The server-backed replacement for what used to live only in localStorage — theme, last-watched
@@ -3325,19 +3391,9 @@ async Task<IResult> ProxySnapshotImageAsync(Guid cameraId, SnapshotImageInfo? in
     // route's own doc comment for why that's the right security boundary here too. The box/frame
     // dimensions ride unsigned, same "quality knob, not tamper-sensitive" reasoning maxDim/q already
     // use on the thumbnail proxy.
-    Task<HttpResponseMessage> RequestAsync(int offsetSeconds, long offsetMs, long bestFrameTicks)
-    {
-        var token = MediaToken.IssueForThumbnail(cameraId, info.FilePath, offsetSeconds, info.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
-        var nodeUri = $"http://{info.NodeIp}:{info.NodeLivePort}/snapshot-image/{cameraId}" +
-            $"?path={Uri.EscapeDataString(info.FilePath)}&offset={offsetSeconds}&offsetMs={offsetMs}&token={Uri.EscapeDataString(token)}" +
-            $"&spanId={info.SpanId}&bestFrameTicks={bestFrameTicks}" +
-            $"&x={info.BoxX.ToString(CultureInfo.InvariantCulture)}&y={info.BoxY.ToString(CultureInfo.InvariantCulture)}" +
-            $"&w={info.BoxW.ToString(CultureInfo.InvariantCulture)}&h={info.BoxH.ToString(CultureInfo.InvariantCulture)}" +
-            $"&frameW={info.FrameWidth}&frameH={info.FrameHeight}";
-        // See MediaTokenRequest's own doc comment: also sent as ?token= above for a node that
-        // hasn't updated yet.
-        return client.SendAsync(MediaTokenRequest.Create(HttpMethod.Get, nodeUri, token), HttpCompletionOption.ResponseHeadersRead, ct);
-    }
+    Task<HttpResponseMessage> RequestAsync(int offsetSeconds, long offsetMs, long bestFrameTicks) =>
+        client.SendAsync(SnapshotImageRequest.Create(cameraId, info, offsetSeconds, offsetMs, bestFrameTicks),
+            HttpCompletionOption.ResponseHeadersRead, ct);
 
     HttpResponseMessage nodeResponse;
     try
@@ -3398,7 +3454,7 @@ async Task<IResult> ProxySnapshotImageAsync(Guid cameraId, SnapshotImageInfo? in
         nodeResponse.Content.Headers.ContentType?.ToString() ?? "image/jpeg");
 }
 
-app.MapGet("/snapshot-image/{cameraId:guid}/{spanId:long}", async (
+var snapshotImage = async (
     Guid cameraId, long spanId, ITimelineService timeline, ICameraAccessService cameraAccess,
     IHttpClientFactory httpFactory, CancellationToken ct, HttpContext httpContext) =>
 {
@@ -3407,7 +3463,10 @@ app.MapGet("/snapshot-image/{cameraId:guid}/{spanId:long}", async (
         return Results.Problem(Loc.T("api.youDontHavePlaybackAccess"), statusCode: StatusCodes.Status403Forbidden);
 
     return await ProxySnapshotImageAsync(cameraId, await timeline.GetSnapshotImageInfoAsync(cameraId, spanId, ct), httpFactory, ct, httpContext);
-}).RequireAuthorization("Playback.View");
+};
+app.MapGet("/snapshot-image/{cameraId:guid}/{spanId:long}", snapshotImage).RequireAuthorization("Playback.View");
+// The same picture for API keys: the snapshotPath a webhook sends (AlertEventDetails.SnapshotPath).
+app.MapGet("/api/v1/cameras/{cameraId:guid}/events/{spanId:long}/snapshot", snapshotImage).RequireAuthorization("Playback.View");
 
 // ── Multi-camera export ──────────────────────────────────────────────────────
 // Trigger from Playback's toolbar. Async: creates the job/items and returns immediately —
@@ -3460,10 +3519,11 @@ apiRoutes.Post("/exports", async (HttpContext ctx, CreateExportRequest request, 
     }
 
     var job = await exportService.CreateJobAsync(request.CameraIds, request.FromUtc, request.ToUtc, userId, userName, ct,
-        redactions.Count > 0 ? redactions : null);
+        redactions.Count > 0 ? redactions : null, request.IncludePlayer, request.ConvertH265);
     await auditService.LogAsync("Export.Create", userId, userName, ctx.Connection.RemoteIpAddress?.ToString(),
         $"{request.CameraIds.Count} camera(s), {request.FromUtc:u} - {request.ToUtc:u}" +
-        (redactions.Count > 0 ? $", with redacted areas on {redactions.Count} camera(s)" : ""), ct);
+        (redactions.Count > 0 ? $", with redacted areas on {redactions.Count} camera(s)" : "") +
+        (request.IncludePlayer ? ", with the standalone player" + (request.ConvertH265 ? " (H.265 converted to H.264)" : "") : ""), ct);
     return Results.Json(new { jobId = job.Id });
 }).RequireAuthorization("Exports.View").RequireRateLimiting("per-user");
 
@@ -3553,6 +3613,7 @@ apiRoutes.Get("/exports", async (HttpContext ctx, IExportService exportService, 
         fromUtc = j.FromUtc,
         toUtc = j.ToUtc,
         status = j.Status.ToString(),
+        includePlayer = j.IncludePlayer,
         items = j.Items.Select(i => new
         {
             id = i.Id,
@@ -3562,7 +3623,8 @@ apiRoutes.Get("/exports", async (HttpContext ctx, IExportService exportService, 
             status = i.Status.ToString(),
             errorMessage = i.ErrorMessage,
             outputSizeBytes = i.OutputSizeBytes,
-            redacted = i.RedactionJson != null
+            redacted = i.RedactionJson != null,
+            converted = i.ConvertedFilePath != null
         })
     }));
 }).RequireAuthorization("Exports.View");
@@ -3624,6 +3686,49 @@ apiRoutes.Post("/exports/{itemId:guid}/retry", async (HttpContext ctx, Guid item
         return Results.Problem(Loc.T("api.onlyThePersonWhoMade2"), statusCode: StatusCodes.Status403Forbidden);
     var ok = await exportService.RetryItemAsync(itemId, ct);
     return ok ? Results.Ok() : Results.BadRequest(Loc.T("api.onlyAFailedItemCan"));
+}).RequireAuthorization("Exports.View");
+
+// Standalone player package (ExportJob.IncludePlayer): one zip with every camera's video, the
+// player, the events, and a signed list of every file, for handing to an investigator. Needs export
+// access to every camera in the job, like downloading each file. Streamed straight from the
+// recorders; see ExportPackageStreamer.
+apiRoutes.Get("/exports/{jobId:guid}/package", async (HttpContext ctx, Guid jobId, ExportPackageBuilder packages,
+    IAuditService auditService, IHttpClientFactory httpFactory, ICameraAccessService cameraAccess, IPermissionService permissions,
+    ApplicationDbContext db, LocaleCatalog catalog, IWebHostEnvironment env, ILoggerFactory loggerFactory, CancellationToken ct) =>
+{
+    var job = await LarisVMS.Web.Services.ExportAccess.JobAsync(db, jobId, ct);
+    if (job is null) return Results.NotFound();
+    var access = await LarisVMS.Web.Services.ExportAccess.ForAsync(ctx.User, cameraAccess, permissions, ct);
+    if (!access.CanSee(job) || job.Items.Any(i => !access.CanExportCamera(i.CameraId)))
+        return Results.Problem(Loc.T("server.exportAccess.youDontHaveExportAccess"), statusCode: StatusCodes.Status403Forbidden);
+    if (!job.IncludePlayer) return Results.BadRequest(Loc.T("api.exportHasNoPlayer"));
+    if (job.Items.Any(i => i.Status is ExportItemStatus.Queued or ExportItemStatus.Running))
+        return Results.Problem(Loc.T("server.export.stillInProgress"), statusCode: StatusCodes.Status409Conflict);
+
+    var plan = await packages.PlanAsync(jobId, ctx.User.Identity?.Name, ct);
+    if (plan is null) return Results.NotFound();
+    if (plan.Videos.Count == 0) return Results.Problem(Loc.T("api.exportPackageEmpty"), statusCode: StatusCodes.Status409Conflict);
+    if (plan.Nodes.Values.Any(n => n.Ip is null || n.Port is null || n.MediaSigningKey is null)
+        || plan.Videos.Any(v => !plan.Nodes.ContainsKey(v.NodeId)))
+        return Results.Problem(Loc.T("api.thisExportNodeHasntReported"), statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    await auditService.LogAsync("Export.PackageDownload", ctx.User.ActorId(), ctx.User.Identity?.Name,
+        ctx.Connection.RemoteIpAddress?.ToString(), $"{plan.DownloadName}: {plan.Videos.Count} video file(s)", ct);
+    var logger = loggerFactory.CreateLogger("ExportPackage");
+    try
+    {
+        await LarisVMS.Web.Services.ExportPackageStreamer.WriteAsync(ctx, plan, packages, httpFactory, env, catalog, logger, ct);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        // Part of the zip is already on its way, so there's no error page to send: end the
+        // connection so the browser shows the download as failed instead of saving half a package.
+        logger.LogError(ex, "Export package {JobId} stopped part way.", jobId);
+        if (!ctx.Response.HasStarted)
+            return Results.Problem(NodeUnreachable(ctx, ex), statusCode: StatusCodes.Status502BadGateway);
+        ctx.Abort();
+    }
+    return Results.Empty;
 }).RequireAuthorization("Exports.View");
 
 // ── Bookmarks (M18) ──────────────────────────────────────────────────────────

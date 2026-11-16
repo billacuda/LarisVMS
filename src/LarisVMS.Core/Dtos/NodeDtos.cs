@@ -327,7 +327,14 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
     /// <summary>Detection.IgnoredObjects (Camera &rarr; Node &rarr; Global): kinds of object this
     /// camera drops right after inference (see CocoCategoryMap.ParseIgnoredObjects). Empty = ignore
     /// nothing. Appended last; an older server's config ignores nothing.</summary>
-    string IgnoredObjects = "");
+    string IgnoredObjects = "",
+    /// <summary>Talk.Method (Camera &rarr; Node &rarr; Global): how two-way audio reaches the
+    /// camera's speaker. "Auto" (ONVIF, then the camera's own audio API for a Dahua-family camera
+    /// whose ONVIF backchannel fails), "Onvif" (ONVIF only), or "CameraApi" (the Dahua/Amcrest/Lorex
+    /// HTTP audio API only, for a camera that accepts ONVIF audio but plays nothing).
+    /// DeviceBaseUri: the camera's scheme+host+port from its device address, used by "CameraApi"
+    /// when no vendor integration supplies one. Appended last; an older server's config means Auto.</summary>
+    string TalkMethod = "Auto", string? DeviceBaseUri = null);
 
 /// <summary>Node → Web: POST /api/nodes/footage-keys — the camera's data key for a UTC day.</summary>
 public record FootageKeyRequest(Guid CameraId, DateOnly Day);

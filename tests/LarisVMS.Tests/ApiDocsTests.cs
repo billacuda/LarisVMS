@@ -4,7 +4,7 @@ using LarisVMS.Web.Middleware;
 
 namespace LarisVMS.Tests;
 
-/// <summary>Keeps Help/16-api.md complete and the public routes behind their guards. These read the
+/// <summary>Keeps Help/en/16-api.md complete and the public routes behind their guards. These read the
 /// source, because the routes are declared inline in Program.cs.</summary>
 public partial class ApiDocsTests
 {
@@ -25,7 +25,7 @@ public partial class ApiDocsTests
         ["playbackRoutes"] = "/api/v1/cameras/{cameraId}",
     };
 
-    private static string Clean(string path) => path.Replace(":guid", "");
+    private static string Clean(string path) => RouteConstraint().Replace(path, "}");
 
     private static List<string> PublicRoutes()
     {
@@ -56,7 +56,7 @@ public partial class ApiDocsTests
     [Fact]
     public void EveryPublicRouteIsDocumented()
     {
-        var docs = WebFile("Help", "16-api.md");
+        var docs = WebFile("Help", "en", "16-api.md");
         var missing = PublicRoutes().Where(r => !docs.Contains("### " + r + "\n") && !docs.Contains("### " + r + "\r\n")).ToList();
 
         Assert.True(missing.Count == 0, "Missing from 16-api.md: " + string.Join(", ", missing));
@@ -66,7 +66,7 @@ public partial class ApiDocsTests
     public void EveryDocumentedRouteExists()
     {
         var routes = PublicRoutes();
-        var stale = DocumentedRoute().Matches(WebFile("Help", "16-api.md")).Select(m => m.Groups[1].Value.TrimEnd())
+        var stale = DocumentedRoute().Matches(WebFile("Help", "en", "16-api.md")).Select(m => m.Groups[1].Value.TrimEnd())
             .Where(r => r != "GET /health" && !routes.Contains(r)).ToList();
 
         Assert.True(stale.Count == 0, "In 16-api.md but not in the code: " + string.Join(", ", stale));
@@ -88,6 +88,9 @@ public partial class ApiDocsTests
 
     [GeneratedRegex(@"\.Map(Get|Post|Delete)\(""(/api/v1[^""]*)""")]
     private static partial Regex DirectRoute();
+
+    [GeneratedRegex(@":\w+\}")]
+    private static partial Regex RouteConstraint();
 
     [GeneratedRegex(@"^### ((?:GET|POST|DELETE) /\S*)", RegexOptions.Multiline)]
     private static partial Regex DocumentedRoute();

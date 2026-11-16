@@ -19,7 +19,7 @@ namespace LarisVMS.Web.Areas.Identity.Pages.Account;
 /// old QR code someone saw is useless), and it's only on once a code from the app checks out.
 /// Changing it afterwards — new recovery codes, or turning it off — takes a current code, and a wrong
 /// one counts toward lockout, so a session left open isn't enough. Accounts without a password
-/// (Microsoft sign-in only) have nothing to protect here.
+/// (Microsoft or Google sign-in only) have nothing to protect here.
 /// </summary>
 [Authorize]
 [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("per-user")]
@@ -182,7 +182,8 @@ public class TwoFactorModel(
         RecoveryCodesLeft = Enabled ? await userManager.CountRecoveryCodesAsync(user) : 0;
         var isAd = await db.UserLogins.AnyAsync(l => l.UserId == user.Id && l.LoginProvider == ActiveDirectoryUserSync.LoginProvider);
         var signsInWithPassword = isAd || await userManager.HasPasswordAsync(user);
-        if (!signsInWithPassword) NotHere = Loc.T("account.twoFactor.microsoftOnly");
+        if (!signsInWithPassword)
+            NotHere = Loc.T("account.twoFactor.microsoftOnly", new { provider = await ExternalSignInProvider.NameAsync(db, user.Id) });
         Required = signsInWithPassword && await settings.GetAsync(TwoFactorSignIn.RequireSettingKey, false);
     }
 

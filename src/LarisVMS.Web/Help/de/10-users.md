@@ -1,10 +1,10 @@
 # Benutzer und Zugriff
 
-Konten, Rollen, Berechtigungen, Kamerazugriff, Active Directory und Microsoft-Anmeldung.
+Konten, Rollen, Berechtigungen, Kamerazugriff und die Anmeldung mit einem lokalen Konto, Active Directory, Google oder Microsoft.
 
 ## Benutzer
 
-Die Selbstregistrierung ist deaktiviert. Konten werden unter **Einstellungen → Benutzer** erstellt, wo Sie auch Rollen zuweisen, ein Konto deaktivieren und ein Passwort zurücksetzen können. Lokale Konten melden sich mit ihrer E-Mail-Adresse an. Das Deaktivieren eines Kontos meldet es sofort überall ab und schließt sein Live-Video.
+Die Selbstregistrierung ist deaktiviert. Konten werden unter **Einstellungen → Benutzer** erstellt, wo Sie auch Rollen zuweisen, ein Konto deaktivieren und ein Passwort zurücksetzen können. Lokale Konten melden sich mit ihrer E-Mail-Adresse an. Das Deaktivieren eines Kontos meldet es sofort überall ab und schließt sein Live-Video. Angemeldet wird mit einem lokalen Konto, einem [Active-Directory](#active-directory)-Konto (über LDAPS) oder einem verknüpften [Google](#google)- oder [Microsoft-Entra-ID](#entra)-Konto.
 
 ## Passwörter
 
@@ -24,13 +24,13 @@ Bei der Anmeldung überspringt **In diesem Browser 14 Tage lang nicht erneut fra
 
 Verliert jemand sein Telefon und seine Wiederherstellungscodes, lässt **2FA deaktivieren** neben seinem Namen unter **Einstellungen → Benutzer** ihn nur mit dem Passwort anmelden und sie erneut einrichten.
 
-**Einstellungen → Sicherheit → Zwei-Faktor-Anmeldung** zwingt jeden, der sich mit einem Passwort anmeldet, sie einzurichten, bevor er etwas anderes tun kann, und verhindert, dass er sie deaktiviert. Microsoft-Anmeldungen bleiben den eigenen Prüfungen von Entra überlassen.
+**Einstellungen → Sicherheit → Zwei-Faktor-Anmeldung** zwingt jeden, der sich mit einem Passwort anmeldet, sie einzurichten, bevor er etwas anderes tun kann, und verhindert, dass er sie deaktiviert. Microsoft- und Google-Anmeldungen bleiben deren eigenen Prüfungen überlassen.
 
 ## Sitzungen
 
 Wählen Sie oben auf der Seite Ihren Namen, dann **Sitzungen**, um jeden Browser zu sehen, in dem Sie angemeldet sind, mit seiner Adresse und wann er zuletzt verwendet wurde. Melden Sie alle ab, die Sie nicht kennen, oder alle außer der, die Sie gerade nutzen, und ändern Sie dann Ihr Passwort. Das Ändern Ihres Passworts oder das Aktivieren der Zwei-Faktor-Anmeldung meldet Ihre anderen Sitzungen sofort ab.
 
-Bei aktivierter Option **Einstellungen → Sicherheit → Passwort für Administrationsseiten bestätigen** fragen Administrationsseiten erneut nach Ihrem Passwort (und einem Code, wenn die Zwei-Faktor-Anmeldung aktiv ist), sofern Sie sich nicht in den letzten 15 Minuten angemeldet oder es bestätigt haben; ihre Nutzung hält das aufrecht. Jemand, der Ihren angemeldeten Browser vorfindet, kann das System dann nutzen, aber nicht seine Einstellungen, Benutzer oder Schlüssel ändern. Microsoft-Anmeldungen melden sich stattdessen erneut an. Standardmäßig ist es aus.
+Bei aktivierter Option **Einstellungen → Sicherheit → Passwort für Administrationsseiten bestätigen** fragen Administrationsseiten erneut nach Ihrem Passwort (und einem Code, wenn die Zwei-Faktor-Anmeldung aktiv ist), sofern Sie sich nicht in den letzten 15 Minuten angemeldet oder es bestätigt haben; ihre Nutzung hält das aufrecht. Jemand, der Ihren angemeldeten Browser vorfindet, kann das System dann nutzen, aber nicht seine Einstellungen, Benutzer oder Schlüssel ändern. Microsoft- und Google-Anmeldungen melden sich stattdessen erneut an. Standardmäßig ist es aus.
 
 Unter **Einstellungen → Benutzer** meldet **Abmelden** neben einer Person sie in jedem Browser ab. Sie kann sich erneut anmelden; deaktivieren Sie das Konto, um sie fernzuhalten.
 
@@ -61,6 +61,10 @@ Die **Einstellungen → Berechtigungsmatrix** legt fest, welche Aktionen jede Ro
 ## Entra
 
 **Einstellungen → Sicherheit → Entra-ID-Anmeldung** fügt eine Schaltfläche „Mit Microsoft anmelden“ hinzu. Sie erstellt nie Konten und ordnet Konten nicht anhand der E-Mail zu: Verwenden Sie unter **Einstellungen → Benutzer** **Microsoft-Anmeldung** in der Zeile einer Person, um ihre Entra-**Objekt-ID** einzugeben (von ihrer Benutzerseite im Microsoft Entra Admin Center). Ihre erste Microsoft-Anmeldung schließt die Verknüpfung ab; leer entfernt sie. Registrieren Sie in Entra eine App mit dem auf der Sicherheitsseite angezeigten Umleitungs-URI und geben Sie dann ihre Mandanten-ID (die GUID oder Domäne Ihres Verzeichnisses, nicht `common`), Client-ID und das Secret ein. Änderungen werden sofort wirksam. Bereits verknüpfte Konten funktionieren weiter.
+
+## Google
+
+**Einstellungen → Sicherheit → Google-Anmeldung** fügt eine Schaltfläche „Mit Google anmelden“ hinzu. Sie erstellt nie Konten: Geben Sie unter **Einstellungen → Benutzer** über **Google-Anmeldung** in der Zeile einer Person deren Gmail- oder Google-Workspace-Adresse ein. Die erste Google-Anmeldung mit dieser Adresse schließt die Verknüpfung ab, aber nur, wenn Google die Adresse bestätigt hat. Danach folgt die Verknüpfung dem Google-Konto statt der Adresse, sodass eine spätere Änderung der Adresse sie nicht verschiebt. Leer entfernt die Verknüpfung. Erstellen Sie in der Google Cloud Console eine OAuth-Client-ID vom Typ **Webanwendung** mit dem auf der Seite „Sicherheit“ angezeigten Weiterleitungs-URI und geben Sie dann deren Client-ID und Secret ein. **Zulässige Domains** beschränkt die Anmeldung auf die aufgeführten Google-Workspace-Domains, eine pro Zeile; private Gmail-Konten werden dann abgewiesen, auch bereits verknüpfte. Leer lässt jedes Google-Konto zu. Änderungen gelten sofort.
 
 ## Active Directory
 

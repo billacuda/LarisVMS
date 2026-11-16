@@ -18,6 +18,7 @@ public static class ApiKeyScope
     [
         ("Dashboard", "View"), ("Cameras", "View"), ("Cameras", "Edit"), ("Recording", "Manual"),
         ("Playback", "View"), ("Bookmarks", "Edit"), ("Exports", "View"), ("EvidenceLocks", "Create"),
+        ("Live", "Stream"),
     ];
 
     public static string Format(string resource, string action) => resource + "." + action;

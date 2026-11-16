@@ -4,7 +4,17 @@ Vues, tuiles en direct, chronologie de lecture, exports, signets, verrouillages 
 
 ## Vues
 
-Une **vue** est une disposition de caméras enregistrée. Créez des vues sous **Vues** en faisant glisser et en redimensionnant des tuiles. **Direct** et **Lecture** affichent toutes deux une vue. Sur téléphone, la disposition se réduit à une ou deux colonnes. Les vues peuvent s’exécuter en plein écran en mode kiosque, ou alterner entre plusieurs vues selon un minuteur. Une vue partagée peut être utilisée par toutes les personnes qui voient les vues, mais seuls son propriétaire ou un administrateur peuvent la modifier ou la supprimer.
+Une **vue** est une disposition de caméras enregistrée. Créez des vues sous **Vues** en faisant glisser et en redimensionnant des tuiles. **Direct** et **Lecture** affichent toutes deux une vue. Sur téléphone, la disposition se réduit à une ou deux colonnes. Les vues peuvent s’exécuter en plein écran en mode kiosque, ou alterner entre plusieurs vues selon un minuteur.
+
+Les vues sont rangées dans des dossiers, et les dossiers peuvent contenir d’autres dossiers :
+
+- **Privées** contient vos propres vues. Vous seul les voyez.
+- Chaque rôle a un dossier que voient tous les membres du rôle. Les membres qui ont aussi l’autorisation **Vues → Modifier** peuvent y ajouter, modifier, renommer, déplacer et supprimer des vues et des dossiers. Un Super Admin peut modifier le dossier de n’importe quel rôle.
+- Un administrateur peut permettre à un rôle d’ouvrir les vues d’un autre rôle dans **Paramètres → Accès aux vues**. Ces vues peuvent être ouvertes, mais pas modifiées ; pour qu’une personne puisse les modifier, ajoutez-la au rôle. Les rôles ne peuvent pas partager leurs propres vues.
+
+Cliquez avec le bouton droit sur une vue ou un dossier (ou appuyez sur la touche Menu ou sur Maj+F10, ou faites un appui long sur un écran tactile) pour l’ouvrir, le modifier, le renommer, le copier, le couper, coller ou le supprimer. Faites glisser une vue ou un dossier sur un dossier pour le déplacer. Un déplacement dans le dossier du même rôle, ou dans votre dossier Privées, demande d’abord confirmation, sauf si vous choisissez **Ne plus demander jusqu’à ma déconnexion**. Un déplacement vers le dossier d’un autre rôle demande toujours confirmation, car les personnes qui ne font pas partie de ce rôle ne le voient plus. Supprimer un dossier conserve son contenu : ses vues et dossiers remontent d’un niveau.
+
+Les noms sont uniques dans le dossier de chaque rôle et dans votre dossier Privées, en comptant tous les dossiers qu’il contient. Une copie collée là où son nom est déjà pris s’appelle « *nom* - copie » (puis « - copie 2 », etc.). Dès lors, c’est une vue distincte : renommer ou modifier l’une ne change pas l’autre. Quand un rôle est supprimé, ses vues vont dans le dossier Privées de l’administrateur qui l’a supprimé.
 
 ## Tuiles en direct
 
@@ -25,7 +35,7 @@ Les caméras avec haut-parleur affichent un bouton 🎙️ sur leur tuile en dir
 
 - Votre navigateur demande l’accès au microphone la première fois. Il ne l’autorise que si le site est ouvert en **HTTPS** ; voir [Certificats](/Help/security#certificates).
 - Une seule personne à la fois peut parler via une caméra.
-- Cela nécessite l’autorisation **Parler** sur la caméra (**Paramètres → Accès aux caméras**). La caméra doit prendre en charge l’audio bidirectionnel ONVIF (une sortie audio dans son profil ONVIF). Les caméras Dahua, Amcrest, Lorex et EmpireTech dont le micrologiciel ne le propose pas se rabattent sur l’API audio propre à la caméra.
+- Cela nécessite l’autorisation **Parler** sur la caméra (**Paramètres → Accès aux caméras**). La caméra doit prendre en charge l’audio bidirectionnel ONVIF (une sortie audio dans son profil ONVIF). Les caméras Dahua, Amcrest, Lorex et EmpireTech dont le micrologiciel ne le propose pas se rabattent sur l’API audio propre à la caméra. Si la connexion s’établit mais que rien ne sort du haut-parleur, réglez **Audio bidirectionnel → Méthode de prise de parole** sur **API audio propre à la caméra** dans la page de modification de la caméra.
 - Tout ce qui est dit est enregistré. Le microphone propre à la caméra fait partie de l’enregistrement vidéo comme d’habitude, et chaque appui sur le bouton est sauvegardé avec les enregistrements. Les appuis apparaissent sur la chronologie de lecture en bleu-vert et sont lus en synchronisation avec la vidéo, avec le volume de la tuile. Les exports les incluent, mélangés à l’audio propre à la caméra. Ils sont conservés aussi longtemps que les enregistrements de la caméra.
 - Chaque session est écrite dans le journal d’audit.
 
@@ -67,6 +77,20 @@ Pour vérifier un export, ouvrez **Exports → Vérifier un export** et choisiss
 Conservez le manifeste avec la vidéo lorsque vous transmettez un export. N’importe qui peut vérifier la signature sans LarisVMS : enregistrez le `publicKeyPem` du manifeste dans `key.pem`, son texte `signedPayload` dans `payload.txt`, et son `signatureDer` décodé en base64 dans `sig.der`, puis exécutez `openssl dgst -sha256 -verify key.pem -signature sig.der payload.txt`. Les enregistrements faits avant cette fonctionnalité n’ont pas d’empreintes, donc seul l’export lui-même peut être vérifié.
 
 La signature est toujours active. La clé de signature du serveur, avec un téléchargement de sa clé publique, se trouve sous **Paramètres → Chiffrement et signature**.
+
+### Lecteur autonome
+
+Pour remettre des images à quelqu’un qui n’a pas LarisVMS, comme des enquêteurs, la police ou des avocats, cochez **Inclure le lecteur autonome** dans le panneau d’export (ou envoyez `includePlayer` à l’[API](/Help/api)). Une fois l’export terminé, **📦 Télécharger avec le lecteur** sur la page Exports télécharge un seul zip contenant :
+
+- **Player.html**, qui s’ouvre directement depuis le dossier décompressé dans Chrome, Edge, Firefox ou Safari, sans installation ni internet ;
+- la vidéo de chaque caméra, ainsi que les événements, signets et verrouillages de preuves de la période, avec le journal de l’export ;
+- le manifeste signé de chaque vidéo, et **package.manifest.json**, une liste signée de tous les fichiers du paquet.
+
+Dans le lecteur, faites glisser les caméras dans une grille de 16 cases au plus et lisez-les ensemble sur une seule chronologie : vitesse de 1/8× à 16×, image par image, sauts entre événements, zoom dans une case et cadres de détection. **Événements** liste chaque mouvement et détection, **À propos** affiche les détails et le journal de l’export, et **Vérifier** compare tout le dossier à sa liste signée et à la chaîne d’images de chaque caméra, le tout sur cet ordinateur. Les heures peuvent s’afficher dans le fuseau de cet ordinateur, celui du site ou en UTC.
+
+Certains navigateurs ne lisent pas la vidéo H.265. **Créer aussi une copie H.264 des vidéos H.265** (activé par défaut) ajoute une copie de la vidéo de chaque caméra H.265 lisible partout. L’original est conservé, et les deux figurent dans la liste signée. C’est plus long, car l’enregistreur réencode la vidéo.
+
+Le téléchargement est assemblé depuis les enregistreurs au fur et à mesure. Si un fichier a changé sur son enregistreur après l’export, le téléchargement s’arrête au lieu de l’inclure.
 
 ## Signets
 

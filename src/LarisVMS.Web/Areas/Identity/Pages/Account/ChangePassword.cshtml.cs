@@ -16,7 +16,7 @@ namespace LarisVMS.Web.Areas.Identity.Pages.Account;
 /// Change your own password: the current one is required, and the new one goes through the same
 /// rules as an admin-set one (length and <see cref="CommonPasswordValidator"/>). Everyone's other
 /// sessions end at once; this one carries on. Active Directory accounts change
-/// theirs in AD, and Microsoft-only accounts have none here.
+/// theirs in AD, and Microsoft- or Google-only accounts have none here.
 /// </summary>
 [Authorize]
 [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("per-user")]
@@ -116,6 +116,6 @@ public class ChangePasswordModel(
         if (await db.UserLogins.AnyAsync(l => l.UserId == user.Id && l.LoginProvider == ActiveDirectoryUserSync.LoginProvider))
             NotHere = Loc.T("account.password.activeDirectory");
         else if (!await userManager.HasPasswordAsync(user))
-            NotHere = Loc.T("account.password.noLocalPassword");
+            NotHere = Loc.T("account.password.noLocalPassword", new { provider = await LarisVMS.Web.Auth.ExternalSignInProvider.NameAsync(db, user.Id) });
     }
 }

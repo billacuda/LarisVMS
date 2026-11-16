@@ -424,6 +424,22 @@
                 </div>
             </div>
         </section>
+
+        <section class="lv-section">
+            <div class="lv-section-head"><h2 class="lv-section-title">@L["cameras.edit.twoWayAudio"]</h2></div>
+            <div class="lv-section-body">
+                <div class="lv-field">
+                    <label class="form-label" asp-for="TalkMethodOverride">@L["cameras.edit.talkMethod"]</label>
+                    <select asp-for="TalkMethodOverride" class="form-select">
+                        <option value="">@L["common.inheritValue", new { value = Model.EffectiveTalkMethod switch { "Onvif" => L["cameras.edit.talkOnvif"].Value, "CameraApi" => L["cameras.edit.talkCameraApi"].Value, _ => L["cameras.edit.auto"].Value } }]</option>
+                        <option value="Auto">@L["cameras.edit.auto"]</option>
+                        <option value="Onvif">@L["cameras.edit.talkOnvif"]</option>
+                        <option value="CameraApi">@L["cameras.edit.talkCameraApi"]</option>
+                    </select>
+                    <div class="lv-hint">@L["cameras.edit.talkMethodHint"] <a href="/Help/live-and-playback#talking-through-a-camera">@L["common.learnMore"]</a></div>
+                </div>
+            </div>
+        </section>
     }
 
     <div class="lv-savebar">

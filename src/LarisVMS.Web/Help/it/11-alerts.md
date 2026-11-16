@@ -35,7 +35,7 @@ Un rilevamento avvisa una sola volta. Su una regola che osserva più telecamere,
 
 ### Canali del team
 
-Ogni regola può anche inviare a elenchi e-mail, webhook, ntfy, Pushover, Slack e Teams. Attivi un canale e ne compili i campi.
+Ogni regola può anche inviare a elenchi e-mail, webhook, ntfy, Pushover, Slack e Teams. Attivi un canale e ne compili i campi. Un webhook invia anche ciò che ha fatto scattare l’avviso, come la telecamera e l’oggetto rilevato, che [Home Assistant](/Help/home-assistant#alerts-by-webhook) può usare.
 
 ## Notifiche
 

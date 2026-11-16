@@ -18,6 +18,8 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/status
 
 API 키를 허용하는 것은 `/api/v1`로 시작하는 경로뿐입니다. 다른 경로는 웹 인터페이스 내부용이며 예고 없이 변경될 수 있습니다.
 
+Home Assistant의 Generic Camera처럼 사용자 이름과 비밀번호만 보낼 수 있는 프로그램은 HTTP Basic으로 로그인할 수 있습니다. 사용자 이름에 `apikey`, 비밀번호에 키를 입력하세요.
+
 ## 키와 권한
 
 키는 원하는 만큼 만들 수 있으며 각각 고유한 권한을 가집니다. 키의 접근 권한은 세 가지로 결정됩니다.
@@ -246,6 +248,30 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o latest.jpg \
   https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/thumbnail/latest
 ```
 
+### GET /api/v1/cameras/{cameraId}/events/{spanId}/snapshot
+
+감지 하나의 이미지로, 대상에 맞게 잘려 있습니다. 웹훅 알림은 이 주소를 감지의 `spanId`와 함께 `snapshotPath`로 보냅니다.
+
+**권한:** 녹화된 영상 재생, 그리고 **재생** 카메라 접근.
+
+```bash
+curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o detection.jpg \
+  https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/events/123456/snapshot
+```
+
+## 라이브 영상
+
+### GET /api/v1/cameras/{cameraId}/stream.mp4
+
+카메라의 라이브 영상을 하나의 연속 MP4 스트림으로 제공합니다. Home Assistant의 Generic Camera, VLC, ffmpeg처럼 웹 주소를 재생하는 프로그램용입니다. 웹 인터페이스와 같은 스트림이라 카메라에 스트림을 하나 더 요청하지 않으며, 개인정보 보호 마스크도 그대로 적용됩니다. 카메라의 작은 스트림은 `?quality=sub`를 붙이세요. 녹화기가 카메라 영상을 다시 시작하면 스트림이 끝나고, 프로그램이 다시 연결합니다.
+
+**권한:** 다른 프로그램으로 라이브 영상 스트리밍, 그리고 **보기** 카메라 접근. **설정 → 권한**에서 부여하기 전까지 어떤 역할에도 이 권한이 없습니다.
+
+```bash
+ffplay -headers "X-Api-Key: lvk_EXAMPLEKEY" \
+  https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/stream.mp4
+```
+
 ## PTZ
 
 ### POST /api/v1/cameras/{cameraId}/ptz/move
@@ -418,6 +444,8 @@ curl -X POST -H "X-Api-Key: lvk_EXAMPLEKEY" -H "Content-Type: application/json" 
 { "jobId": "00000000-0000-0000-0000-00000000000e" }
 ```
 
+LarisVMS가 없는 사람에게 영상을 전달하려면 `"includePlayer": true`를 추가하세요. 그러면 내보내기를 [독립 실행형 플레이어](/Help/live-and-playback#standalone-player)가 포함된 하나의 패키지로도 내려받을 수 있습니다. 이때 `"convertH265"`(`false`를 보내지 않으면 켜짐)는 모든 브라우저에서 재생되는 H.265 영상의 H.264 사본을 추가합니다.
+
 ### GET /api/v1/exports
 
 내보내기와 진행 상황을 나열합니다. 각 내보내기에는 카메라마다 하나씩 `items`가 있습니다. 항목의 `id`는 다운로드하거나 다시 시도할 때 사용합니다.
@@ -437,6 +465,7 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
     "fromUtc": "2026-11-06T14:00:00Z",
     "toUtc": "2026-11-06T14:30:00Z",
     "status": "Completed",
+    "includePlayer": false,
     "items": [
       {
         "id": "00000000-0000-0000-0000-00000000000f",
@@ -446,7 +475,8 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
         "status": "Completed",
         "errorMessage": null,
         "outputSizeBytes": 104857600,
-        "redacted": false
+        "redacted": false,
+        "converted": false
       }
     ]
   }
@@ -462,6 +492,17 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
 ```bash
 curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o workshop.mp4 \
   https://vms.example.com/api/v1/exports/items/00000000-0000-0000-0000-00000000000f/download
+```
+
+### GET /api/v1/exports/{jobId}/package
+
+`includePlayer`로 만든 완료된 내보내기를 하나의 zip으로 내려받습니다. 각 카메라 영상, 독립 실행형 플레이어, 이벤트, 모든 파일의 서명된 목록이 들어 있습니다. 내려받는 동안 녹화기에서 바로 구성하므로 즉시 시작됩니다.
+
+**권한:** 내보내기 만들기 및 다운로드, 그리고 **내보내기** 카메라 접근.
+
+```bash
+curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o export.zip \
+  https://vms.example.com/api/v1/exports/00000000-0000-0000-0000-00000000000e/package
 ```
 
 ### POST /api/v1/exports/{itemId}/retry
@@ -554,7 +595,7 @@ curl -X POST -H "X-Api-Key: lvk_EXAMPLEKEY" \
 
 다음은 API 키로 사용할 수 없습니다.
 
-- 라이브 영상. 웹 인터페이스 또는 위의 이미지를 사용하십시오.
+- 웹 인터페이스 자체 연결을 통한 라이브 영상. 위의 MP4 스트림을 사용하세요.
 - 영상 직접 재생. 내보내기를 사용하십시오.
 - 설정, 사용자, 역할, API 키, 암호화, 백업.
 - 영역, 일정, 장치 설정 같은 카메라 설정.

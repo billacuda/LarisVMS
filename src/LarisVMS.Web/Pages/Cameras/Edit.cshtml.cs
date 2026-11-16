@@ -61,6 +61,10 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     /// camera that misreports the shape of its detection stream — see
     /// LarisVMS.Node.DetectionOrientation.</summary>
     [BindProperty] public string AiDetectionOrientationOverride { get; set; } = "";
+    /// <summary>Talk.Method for this camera: "" (blank) = inherit (Auto by default), "Auto", "Onvif",
+    /// or "CameraApi" — see NodeConfigCameraDto.TalkMethod.</summary>
+    [BindProperty] public string TalkMethodOverride { get; set; } = "";
+    public string EffectiveTalkMethod { get; set; } = "Auto";
     /// <summary>Detection.RejectMotionJitter for this camera: "" (blank) = inherit the node/global
     /// default, "True"/"False" = force it. Same inherit convention as AiDetectionStreamRoleOverride;
     /// the values match bool.ToString() so SettingsResolver parses them back.</summary>
@@ -228,6 +232,8 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
         EffectiveAiDetectionStreamRole = await settings.GetAsync("AiDetection.StreamRole", "Sub", cameraId: cameraId, nodeId: nodeId);
         AiDetectionOrientationOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "AiDetection.Orientation") ?? "";
         EffectiveAiDetectionOrientation = await settings.GetAsync("AiDetection.Orientation", "Auto", cameraId: cameraId, nodeId: nodeId);
+        TalkMethodOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Talk.Method") ?? "";
+        EffectiveTalkMethod = await settings.GetAsync("Talk.Method", "Auto", cameraId: cameraId, nodeId: nodeId);
 
         RejectMotionJitterOverride =
             await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Detection.RejectMotionJitter") is { } ownJitter
@@ -353,6 +359,8 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
                 string.IsNullOrEmpty(AiDetectionStreamRoleOverride) ? null : AiDetectionStreamRoleOverride, User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "AiDetection.Orientation",
                 string.IsNullOrEmpty(AiDetectionOrientationOverride) ? null : AiDetectionOrientationOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Talk.Method",
+                TalkMethodOverride is "Auto" or "Onvif" or "CameraApi" ? TalkMethodOverride : null, User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.RejectMotionJitter",
                 string.IsNullOrEmpty(RejectMotionJitterOverride) ? null : RejectMotionJitterOverride, User.Identity?.Name);
             // Same 1-15 clamp NodeService.GetConfigAsync applies when resolving this for a node.

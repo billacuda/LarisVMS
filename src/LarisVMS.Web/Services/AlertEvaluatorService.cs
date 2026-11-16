@@ -67,7 +67,11 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
             string? url = null;
             if (rule.CameraId is { } cam) url = $"/Playback?cameraId={cam}&atUtc={now:o}";
             else if (rule.NodeId is not null) url = "/Admin/Nodes";
-            await DispatchAsync(rule, message, senderFactory, auditService, logger, ct, notifications, cameraId, url);
+            var details = new AlertEventDetails(rule.ConditionType, rule.CameraId,
+                rule.CameraId is { } detailCamera ? await db.Cameras.Where(c => c.Id == detailCamera).Select(c => c.Name).FirstOrDefaultAsync(ct) : null,
+                rule.NodeId,
+                rule.NodeId is { } detailNode ? await db.Nodes.Where(n => n.Id == detailNode).Select(n => n.Name).FirstOrDefaultAsync(ct) : null);
+            await DispatchAsync(rule, message, senderFactory, auditService, logger, ct, notifications, cameraId, url, details);
         }
 
         await EvaluateEvidenceLockRulesAsync(db, rules, now, senderFactory, auditService, notifications, logger, ct);
@@ -102,7 +106,8 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
             var reason = l.Reason;
             string message() => Loc.Plural("alerts.lockEndsSoon", hours, new { camera = lockedCamera, reason });
             foreach (var rule in expiringRules.Where(r => CoversCamera(r, l.Camera)))
-                await DispatchAsync(rule, message, senderFactory, auditService, logger, ct, notifications, l.CameraId, "/EvidenceLocks");
+                await DispatchAsync(rule, message, senderFactory, auditService, logger, ct, notifications, l.CameraId, "/EvidenceLocks",
+                    new AlertEventDetails(rule.ConditionType, l.CameraId, lockedCamera, l.Camera.NodeId));
             l.ExpiryWarnedAtUtc = now;
         }
 
@@ -120,7 +125,8 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
                 reason
             });
             foreach (var rule in removedRules.Where(r => CoversCamera(r, l.Camera)))
-                await DispatchAsync(rule, message, senderFactory, auditService, logger, ct, notifications, l.CameraId, "/EvidenceLocks");
+                await DispatchAsync(rule, message, senderFactory, auditService, logger, ct, notifications, l.CameraId, "/EvidenceLocks",
+                    new AlertEventDetails(rule.ConditionType, l.CameraId, lockedCamera, l.Camera.NodeId));
             l.RemovalNotifiedAtUtc = now;
         }
 
@@ -139,7 +145,7 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
     /// and audit trail in English.</summary>
     internal static async Task DispatchAsync(Core.Entities.AlertRule rule, Func<string> message,
         AlertChannelSenderFactory senderFactory, IAuditService auditService, ILogger logger, CancellationToken ct,
-        INotificationService? notifications = null, Guid? cameraId = null, string? url = null)
+        INotificationService? notifications = null, Guid? cameraId = null, string? url = null, AlertEventDetails? details = null)
     {
         string english, teamText;
         using (Loc.InLanguage(LocaleCatalog.English)) english = message();
@@ -165,7 +171,7 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
             try
             {
                 var sender = senderFactory.Get(delivery.Channel);
-                await sender.SendAsync(delivery.ConfigJson, rule.Name, teamText, ct);
+                await sender.SendAsync(delivery.ConfigJson, rule.Name, teamText, details, ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

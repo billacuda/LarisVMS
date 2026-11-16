@@ -1,10 +1,10 @@
 # Users & access
 
-Accounts, roles, permissions, camera access, Active Directory, and Microsoft sign-in.
+Accounts, roles, permissions, camera access, and signing in with a local account, Active Directory, Google, or Microsoft.
 
 ## Users
 
-Self-registration is off. Accounts are created under **Settings → Users**, where you can also assign roles, disable an account, and reset a password. Local accounts sign in with their email address. Disabling an account signs it out everywhere straight away and closes its live video.
+Self-registration is off. Accounts are created under **Settings → Users**, where you can also assign roles, disable an account, and reset a password. Local accounts sign in with their email address. Disabling an account signs it out everywhere straight away and closes its live video. People sign in with a local account, an [Active Directory](#active-directory) account (over LDAPS), or a linked [Google](#google) or [Microsoft Entra ID](#entra) account.
 
 ## Passwords
 
@@ -24,13 +24,13 @@ At sign-in, **Don't ask again on this browser for 14 days** skips the code on th
 
 If someone loses their phone and their recovery codes, **Turn off 2FA** next to them under **Settings → Users** lets them sign in with just their password and set it up again.
 
-**Settings → Security → Require two-factor sign-in** makes everyone who signs in with a password set it up before they can do anything else, and stops them turning it off. Microsoft sign-ins are left to Entra's own checks.
+**Settings → Security → Require two-factor sign-in** makes everyone who signs in with a password set it up before they can do anything else, and stops them turning it off. Microsoft and Google sign-ins are left to their own checks.
 
 ## Sessions
 
 Select your name at the top of the page, then **Sessions**, to see every browser you're signed in on, with its address and when it was last used. Sign out any you don't recognize, or all but the one you're using, then change your password. Changing your password or turning on two-factor sign-in signs out your other sessions right away.
 
-With **Settings → Security → Confirm password for admin pages** on, admin pages ask for your password again (and a code, with two-factor sign-in on) unless you signed in or confirmed it in the last 15 minutes; using them keeps that going. Someone who finds your browser signed in can then use the system but not change its settings, users, or keys. Microsoft sign-ins sign in again instead. It's off by default.
+With **Settings → Security → Confirm password for admin pages** on, admin pages ask for your password again (and a code, with two-factor sign-in on) unless you signed in or confirmed it in the last 15 minutes; using them keeps that going. Someone who finds your browser signed in can then use the system but not change its settings, users, or keys. Microsoft and Google sign-ins sign in again instead. It's off by default.
 
 Under **Settings → Users**, **Sign out** next to someone signs them out on every browser. They can sign in again; disable the account to keep them out.
 
@@ -61,6 +61,10 @@ A role is a named set of permissions, managed under **Settings → Roles**. Each
 ## Entra
 
 **Settings → Security → Entra ID sign-in** adds a “Sign in with Microsoft” button. It never creates accounts, and it doesn't match accounts by email: on **Settings → Users**, use **Microsoft sign-in** on a person's row to enter their Entra **object ID** (from their user page in the Microsoft Entra admin center). Their first Microsoft sign-in completes the link; blank removes it. Register an app in Entra with the redirect URI shown on the Security page, then enter its tenant ID (your directory's GUID or domain, not `common`), client ID, and secret. Changes take effect immediately. Accounts already linked keep working.
+
+## Google
+
+**Settings → Security → Google sign-in** adds a “Sign in with Google” button. It never creates accounts: on **Settings → Users**, use **Google sign-in** on a person's row to enter their Gmail or Google Workspace address. Their first Google sign-in with that address completes the link, but only if Google has verified the address. After that, the link follows their Google account rather than the address, so changing the address later doesn't move it. Blank removes the link. In the Google Cloud console, create an OAuth client ID of type **Web application** with the redirect URI shown on the Security page, then enter its client ID and secret. **Allowed domains** limits sign-in to the Google Workspace domains listed, one per line, which refuses personal Gmail accounts, including ones already linked. Leave it blank to allow any Google account. Changes take effect immediately.
 
 ## Active Directory
 

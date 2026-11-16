@@ -28,10 +28,22 @@ public class LiveIndexRedirectTests
             Requested = id;
             return Task.FromResult<View?>(null);
         }
-        public Task<View> CreateAsync(string name, string ownerId, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task UpdateAsync(Guid id, string userId, string name, bool isShared, string layoutJson, int sequenceIntervalSeconds, bool canManageAll = false, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task DeleteAsync(Guid id, string userId, bool canEditShared, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<List<View>> GetTourViewsAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<ViewTreeDto> GetTreeAsync(string userId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<List<(View View, string Path)>> ListVisibleWithPathAsync(string userId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> CanEditAsync(Guid id, string userId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<View> CreateAsync(string name, string userId, string tree = ViewTrees.Private, Guid? folderId = null, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateAsync(Guid id, string userId, string name, string layoutJson, int sequenceIntervalSeconds, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task RenameAsync(Guid id, string userId, string name, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<View> CopyAsync(Guid id, string userId, string targetTree, Guid? targetFolderId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task MoveAsync(Guid id, string userId, string targetTree, Guid? targetFolderId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task DeleteAsync(Guid id, string userId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<ViewFolder> CreateFolderAsync(string userId, string tree, Guid? parentId, string name, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task RenameFolderAsync(Guid id, string userId, string name, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task MoveFolderAsync(Guid id, string userId, string targetTree, Guid? targetParentId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task DeleteFolderAsync(Guid id, string userId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<List<View>> GetTourViewsAsync(string userId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task MoveDeletedRoleTreeAsync(string roleId, string toUserId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<int> MakeNamesUniqueAsync(CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     private sealed class FakePreferenceService(Dictionary<string, string> stored) : IUserPreferenceService

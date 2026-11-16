@@ -35,7 +35,7 @@ Une détection n’alerte qu’une fois. Sur une règle qui surveille plusieurs 
 
 ### Canaux d’équipe
 
-Chaque règle peut aussi envoyer vers des listes d’e-mails, des webhooks, ntfy, Pushover, Slack et Teams. Activez un canal et renseignez ses champs.
+Chaque règle peut aussi envoyer vers des listes d’e-mails, des webhooks, ntfy, Pushover, Slack et Teams. Activez un canal et renseignez ses champs. Un webhook envoie aussi ce qui a déclenché l’alerte, comme la caméra et l’objet détecté, ce que [Home Assistant](/Help/home-assistant#alerts-by-webhook) peut utiliser.
 
 ## Notifications
 

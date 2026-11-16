@@ -35,15 +35,9 @@
     <input type="hidden" name="layoutJson" id="layoutJsonInput" value="@Model.LayoutJson" />
 
     <div class="row g-2 align-items-end mb-3">
-        <div class="col-sm-4">
+        <div class="col-sm-6">
             <label for="field-name" class="form-label small">@L["common.name"]</label>
             <input id="field-name" type="text" name="name" class="form-control" value="@Model.Name" required />
-        </div>
-        <div class="col-sm-2">
-            <div class="form-check mt-4">
-                <input type="checkbox" name="isShared" id="isSharedCheck" class="form-check-input" value="true" @(Model.IsShared ? "checked" : "") />
-                <label class="form-check-label" for="isSharedCheck">@L["views.editor.shared"]</label>
-            </div>
         </div>
         <div class="col-sm-3">
             <label for="field-sequenceIntervalSeconds" class="form-label small">@L["views.editor.tourIntervalSeconds0Off"]</label>

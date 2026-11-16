@@ -8,7 +8,7 @@ and administration all run in the browser, on desktop, tablet, and phone.
   <a href="https://www.buymeacoffee.com/billacuda"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=billacuda&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" alt="Buy me a coffee" height="50" /></a>
 </p>
 
-**Current version: [0.221.4](CHANGELOG.md)**
+**Current version: [0.222.0](CHANGELOG.md)**
 
 📖 **[Documentation](https://www.larisvms.com/docs/)**: how to install, set up, and use LarisVMS. Worth a
 read before you install.
@@ -56,11 +56,12 @@ read before you install.
 - Scene heatmaps of where objects moved, or where motion happened, laid over the camera's picture (or one you upload), for one camera or every camera in a view.
 
 **Viewing**
-- Saved camera-wall views with drag-and-drop layout, a fullscreen kiosk mode, and rotation.
+- Saved camera-wall views with drag-and-drop layout, a fullscreen kiosk mode, and rotation, kept in folders: your Private views, and a folder for each role, with a right-click menu and drag and drop. Admins can let one role open another role's views.
 - Adaptive live streaming that uses Sub streams for small tiles.
 - Synchronized multi-camera playback on a zoomable timeline, with preview thumbnails and 1/32× to 32× speed. Switch any live tile to playback in place.
 - Digital zoom on any live or playback tile: drag a box to zoom in, right-click to reset.
 - Multi-camera exports, bookmarks, and a snapshots browser.
+- An optional standalone player with exports, for handing footage to investigators, police, or attorneys: one zip that opens from disk in any browser, with a camera grid, a shared timeline, the events, and a check that nothing was changed. H.265 video can get an H.264 copy that plays everywhere.
 - Live overlay switches for travel paths, speed, color, and confidence on each box.
 - 🔴 and Ⓜ️ indicators on live tiles show when footage is being kept, and when a manual recording is on.
 - Basic PTZ controls, and two-way audio: hold 🎙️ on a live tile to talk through the camera's speaker, with both directions recorded.
@@ -72,13 +73,14 @@ read before you install.
 
 **Administration**
 - Roles, a permissions matrix, and per-camera/group access control, with auto-expiring role assignments and PTZ priority between roles.
-- Optional Microsoft Entra ID sign-in.
-- Active Directory sign-in, with AD groups synced to roles.
+- Sign-in with local accounts, Active Directory (LDAPS, with AD groups synced to roles), or Google (Gmail or Google Workspace accounts an admin links). Microsoft Entra ID sign-in is also available but hasn't been tested yet.
+- Optional two-factor sign-in for local and Active Directory accounts.
 - Alert rules that watch a camera or node, or fire on detected objects and speeds, sent by email (SMTP, Microsoft Graph, Gmail), webhook, ntfy, Pushover, Slack, and Teams.
 - Personal notifications: people subscribe to shared rules or make their own (a camera, a node, or everything; certain hours), delivered by email or to the browser while LarisVMS is open (on-premises), through Web Push, or through Firebase Cloud Messaging.
 - Audit log, system logs, scheduled database backups, and a customizable dashboard of widgets, each with a full report: per-camera fps, bitrate, and reconnects, per-node CPU, memory, network, fps, and detection counts, recent alerts, latest detections, and more.
 - Manual recording from a live tile or the API, for one camera or a whole view, including cameras that otherwise only show live video.
-- A REST API for monitoring, recording, PTZ, playback data, bookmarks, exports, and evidence locks, with API keys that can each have different permissions.
+- A REST API for monitoring, recording, PTZ, playback data, bookmarks, exports, evidence locks, and live video streams, with API keys that can each have different permissions.
+- Home Assistant over MQTT (experimental): cameras appear in Home Assistant on their own, with motion, person, vehicle, and animal sensors, the latest detection's picture, a manual recording switch, and a bookmark button, limited to what a chosen role may see and do.
 - A warning on the Nodes page, and a notification, when a node's AI detection falls back to a slower backend than the one asked for.
 - Nightly database index and statistics upkeep, with no SQL Agent job needed.
 - IP allow lists, an optional separate port for video traffic, and secrets encrypted at rest.
@@ -103,7 +105,7 @@ Settings are inherited **global → node → camera**, and the most specific val
 - **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
 - **Server:** SQL Server (Express works) using SQL or Integrated authentication. For SQL Server Express, the server name is `.\SQLEXPRESS`. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
 - **MariaDB:** MariaDB 10.11 or later can be used instead of SQL Server, with a MariaDB user and password. Built-in backups need the MariaDB client tools (`mariadb-dump`) on the LarisVMS server.
-- **.NET version:** developed with the .NET SDK 10.0.404. The 0.221.4 installers were built with it and include the .NET 10.0.15 runtime (ASP.NET Core 10.0.15).
+- **.NET version:** developed with the .NET SDK 10.0.404. The 0.222.0 installers were built with it and include the .NET 10.0.15 runtime (ASP.NET Core 10.0.15).
 - **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).
 - **LarisVision (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [LarisVision](#-larisvision-ai-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
 - **Cameras:** ONVIF Profile S or T.
@@ -154,9 +156,9 @@ Double-click an installer to be prompted for its settings, or pass them on the c
 ### 🌐 1. Install the web server
 
 ```powershell
-msiexec /i LarisVMS-Web-0.221.4-x64.msi
+msiexec /i LarisVMS-Web-0.222.0-x64.msi
 # silent, with a certificate:
-msiexec /i LarisVMS-Web-0.221.4-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
+msiexec /i LarisVMS-Web-0.222.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
 ```
 
 | Property | Default | Purpose |
@@ -179,7 +181,7 @@ Pointing the wizard at an existing LarisVMS database, for example when reinstall
 Install [FFmpeg](https://ffmpeg.org/) on each recording machine first (`winget install ffmpeg --scope machine`), then:
 
 ```powershell
-msiexec /i LarisVMS-Node-0.221.4-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
+msiexec /i LarisVMS-Node-0.222.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
 ```
 
 | Property | Default | Purpose |
@@ -199,7 +201,7 @@ The node registers itself and appears under **Nodes**.
 ### 🔀 4. Install media proxies (optional)
 
 ```powershell
-msiexec /i LarisVMS-Proxy-0.221.4-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
+msiexec /i LarisVMS-Proxy-0.222.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
 ```
 
 Properties: `SERVERURL`, `REGISTRATIONKEY`, `CLIENTPORT` (default 4443), `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`, `CLIENTALLOWINSECURE`, `INSECURETLS`, `SERVICEACCOUNT`, `SERVICEPASSWORD`, `INSTALLFOLDER`, with the same meanings as for the node.
@@ -302,8 +304,8 @@ machines, and you own them: nobody else can see them.
   downloads it from the YOLOX project's GitHub releases. Place the model files on the server yourself
   to avoid it.
 - **Everything else stays local.** Otherwise LarisVMS only talks to your cameras, your own server
-  with its nodes and proxies, and services you set up yourself, such as email, alert channels, and Entra ID
-  sign-in.
+  with its nodes and proxies, and services you set up yourself, such as email, alert channels, Entra ID
+  or Google sign-in, and an MQTT broker for Home Assistant.
 
 ## 📚 Documentation
 
@@ -382,15 +384,18 @@ tools/export-models         Python: exports detection models to ONNX
 - Exported files aren't encrypted, even from cameras whose footage is.
 - Bounding boxes from the camera's own analytics aren't shown; only LarisVision draws boxes.
 - Face detection and object appeared/missing events come from the camera's own analytics. LarisVision doesn't detect these on its own yet.
-- An object hidden for more than about 30 analysed frames (around 5 seconds at 6 fps), or one that comes back out going a different way, is counted as a new object.
+- A moving object hidden for more than about 30 analysed frames (around 5 seconds at 6 fps), or one that comes back out going a different way, is counted as a new object. A parked one is remembered about ten times longer.
 - Scene heatmaps use the camera's current framing. After a camera is moved or re-aimed, older heat no longer lines up with the picture until new history builds up.
 - HTTP/3 needs Windows 11, Windows Server 2022, or later; older versions use HTTP/2.
 - PTZ has not been tested against real PTZ hardware.
 - Accessibility hasn't been independently audited, and the player has no captions or audio description, because cameras don't record them.
 - Windows only (server and nodes).
-- Entra SSO has not been tested (I don't have a tenant to test it against, but in theory it should work)
-- Some features listed may have placeholders (webhooks, Teams/Slack integration)
-- Basic email functionality should work with SMTP. Graph API email has not been tested yet.
+- Microsoft Entra ID sign-in remains to be tested (there's no tenant to test it against), but should work. Local accounts, Active Directory (LDAPS), and Google sign-in are tested.
+- Slack and Teams alert channels haven't been tested against real workspaces yet.
+- Basic email works with SMTP. Graph API email hasn't been tested yet.
+- Home Assistant support is experimental. [Feedback](https://github.com/billacuda/LarisVMS/discussions/new?category=general&title=Home%20Assistant%20feedback) on what you use it for and what goes wrong is welcome.
+- The standalone export player can't save a still frame: browsers block it for video opened from disk. Use a screenshot instead.
+- Some browsers can't play H.265 in the standalone export player; ask for the H.264 copy when exporting.
 
 ## 📄 License
 

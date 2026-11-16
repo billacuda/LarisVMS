@@ -979,3 +979,32 @@ body {
 button.pb-select-primary { border: 0; }
 
 .lv-map-palette-item { cursor: pointer; }
+
+/* View tree (Views page, view-tree.js; the Live/Play picker reuses the list styles). */
+.vt-list { list-style: none; margin: 0; padding-left: 1.25rem; }
+.vt-list.vt-top { padding-left: 0; }
+.vt-row { display: flex; align-items: center; gap: .4rem; padding: .2rem .4rem; border-radius: .25rem; cursor: default; user-select: none; }
+.vt-row:hover, .vt-row:focus-visible { background: var(--bs-tertiary-bg); outline: none; }
+.vt-row:focus-visible { box-shadow: 0 0 0 .15rem rgba(var(--bs-primary-rgb), .5); }
+.vt-root > .vt-row { font-weight: 600; }
+.vt-caret { display: inline-block; width: 1rem; text-align: center; color: var(--bs-secondary-color); }
+.vt-row a { text-decoration: none; }
+.vt-row a:hover { text-decoration: underline; }
+.vt-row[draggable="true"] { cursor: grab; }
+.vt-dragging { opacity: .5; }
+.vt-drop { outline: 2px dashed var(--bs-primary); outline-offset: -2px; background: var(--bs-primary-bg-subtle); }
+.vt-empty { padding: .15rem .4rem .15rem 1.4rem; }
+.vt-row[aria-current="page"] { font-weight: 600; background: var(--bs-primary-bg-subtle); }
+
+/* Exports page: each job's cameras as a grid, so camera names, statuses, and buttons line up in
+   columns down the list. Each <li> is a row of three cells (display: contents lets its spans join
+   the list's grid). */
+.export-items {
+    display: grid;
+    grid-template-columns: max-content max-content minmax(0, 1fr);
+    column-gap: .5rem;
+    row-gap: .25rem;
+    align-items: center;
+}
+.export-items > li { display: contents; }
+.export-items > li > span:nth-child(2) { display: inline-flex; flex-wrap: wrap; gap: .25rem; }

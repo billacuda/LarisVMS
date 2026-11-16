@@ -35,7 +35,7 @@ Una detección alerta una vez. En una regla que vigila varias cámaras, el enfri
 
 ### Canales de equipo
 
-Cada regla también puede enviar a listas de correo, webhooks, ntfy, Pushover, Slack y Teams. Activá un canal y completá sus campos.
+Cada regla también puede enviar a listas de correo, webhooks, ntfy, Pushover, Slack y Teams. Activá un canal y completá sus campos. Un webhook también envía qué disparó la alerta, como la cámara y el objeto detectado, algo que [Home Assistant](/Help/home-assistant#alerts-by-webhook) puede usar.
 
 ## Notificaciones
 

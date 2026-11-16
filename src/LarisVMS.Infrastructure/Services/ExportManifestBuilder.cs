@@ -23,6 +23,8 @@ namespace LarisVMS.Infrastructure.Services;
 ///  - the exported file's name, size and SHA-256;
 ///  - every source segment with its recorded hash, its chain links, and whether the node found it
 ///    unchanged when it re-hashed it for this export;
+///  - the chain from the first exported segment to the last with every link in between (the
+///    camera's other recordings are chained among them), each marked whether it's in the export;
 ///  - the camera's chain from the last exported segment up to the nearest signed checkpoint, and that
 ///    checkpoint — so the chain can be followed to a signature that was made independently of this
 ///    export (hourly), or, for very recent footage, one made now.
@@ -62,6 +64,41 @@ public class ExportManifestBuilder(ApplicationDbContext db, ISigningKeyService s
             chainHash = s.ChainHash,
             unchangedAtExport = checks.TryGetValue(Norm(s.FilePath), out var c) ? c.Matches : null,
         }).ToList();
+
+        // The chain from the first exported segment to the last, every link included. The camera's
+        // other recordings (its sub stream, say) are chained in between in the order they were saved,
+        // so exported segments aren't always next to each other in it; without the links between
+        // them, a verifier can't tell those gaps from footage that was removed. Followed link by link
+        // rather than trusting id order; a walk that can't reach the last one stops there, and the
+        // verifier reports the break.
+        var chainWalk = new List<object>();
+        var exportedChained = segments.Where(s => s.ChainHash is not null).ToList();
+        if (exportedChained.Count > 0)
+        {
+            var exportedIds = exportedChained.Select(s => s.Id).ToHashSet();
+            var firstId = exportedChained.Min(s => s.Id);
+            var lastId = exportedChained.Max(s => s.Id);
+            var span = await db.Segments.AsNoTracking()
+                .Where(s => s.CameraId == item.CameraId && s.Id >= firstId && s.Id <= lastId && s.ChainHash != null)
+                .OrderBy(s => s.Id).Take(MaxChainLinks).ToListAsync(ct);
+            var byPrev = span.Where(s => s.PrevChainHash is not null).GroupBy(s => s.PrevChainHash!).ToDictionary(g => g.Key, g => g.First());
+            var at = exportedChained.First(s => s.Id == firstId);
+            var walk = new List<Segment> { at };
+            while (at.Id != lastId && walk.Count < MaxChainLinks && byPrev.TryGetValue(at.ChainHash!, out var next))
+            {
+                walk.Add(next);
+                at = next;
+            }
+            chainWalk = walk.Select(s => (object)new
+            {
+                startUtc = Utc(s.StartUtc),
+                endUtc = Utc(s.EndUtc),
+                sha256 = s.ContentSha256,
+                prevChainHash = s.PrevChainHash,
+                chainHash = s.ChainHash,
+                exported = exportedIds.Contains(s.Id),
+            }).ToList();
+        }
 
         // From the last exported link along the chain to a signed checkpoint.
         var last = segments.Where(s => s.ChainHash is not null).OrderBy(s => s.Id).LastOrDefault();
@@ -109,6 +146,7 @@ public class ExportManifestBuilder(ApplicationDbContext db, ISigningKeyService s
             },
             redacted = item.RedactionJson is not null,
             segments = exported,
+            chain = chainWalk,
             chainToCheckpoint = links.Select(s => new
             {
                 startUtc = Utc(s.StartUtc),

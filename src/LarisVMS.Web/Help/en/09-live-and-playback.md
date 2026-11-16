@@ -4,7 +4,17 @@ Views, live tiles, the playback timeline, exports, bookmarks, evidence locks, sn
 
 ## Views
 
-A **view** is a saved camera layout. Build views under **Views** by dragging and resizing tiles. **Live** and **Playback** both show a view. On phones, the layout collapses to one or two columns. Views can run fullscreen in kiosk mode, or rotate through several views on a timer. A shared view can be used by everyone who sees views, but only its owner or an administrator can change or delete it.
+A **view** is a saved camera layout. Build views under **Views** by dragging and resizing tiles. **Live** and **Playback** both show a view. On phones, the layout collapses to one or two columns. Views can run fullscreen in kiosk mode, or rotate through several views on a timer.
+
+Views are kept in folders, and folders can hold more folders:
+
+- **Private** holds your own views. Only you see them.
+- Each role has a folder that everyone in the role sees. Members who also have the **Views → Edit** permission can add, change, rename, move, and delete views and folders in it. A Super Admin can change every role's folder.
+- An admin can let one role open another role's views under **Settings → View access**. Those views can be opened but not changed; to let someone change them, add that person to the role. Roles can't share their own views.
+
+Right-click a view or folder (or press the menu key or Shift+F10, or long-press on a touch screen) to open, edit, rename, copy, cut, paste, or delete it. Drag a view or folder onto a folder to move it. A move within the same role's folder, or within your Private folder, asks first unless you choose **Don't ask again until I sign out**. A move to another role's folder always asks, because people who aren't in that role stop seeing it. Deleting a folder keeps what's in it: its views and folders move up a level.
+
+Names are unique within each role's folder, and within your Private folder, counting every folder inside. A copy pasted where its name is already used is named "*name* - copy" (then "- copy 2", and so on). From then on it's a separate view: renaming or changing one doesn't change the other. When a role is deleted, its views move to the Private folder of the admin who deleted it.
 
 ## Live tiles
 
@@ -25,7 +35,7 @@ Cameras with a speaker show a 🎙️ button on their live tile. Hold it (or foc
 
 - Your browser asks for microphone access the first time. It only allows this when the site is opened over **HTTPS**; see [Certificates](/Help/security#certificates).
 - Only one person can talk through a camera at a time.
-- It needs the **Talk** permission on the camera (**Settings → Camera access**). The camera must support ONVIF two-way audio (an audio output on its ONVIF profile). Dahua, Amcrest, Lorex, and EmpireTech cameras whose firmware doesn't offer that fall back to the camera's own audio API.
+- It needs the **Talk** permission on the camera (**Settings → Camera access**). The camera must support ONVIF two-way audio (an audio output on its ONVIF profile). Dahua, Amcrest, Lorex, and EmpireTech cameras whose firmware doesn't offer that fall back to the camera's own audio API. If talk connects but nothing comes out of the speaker, set **Two-way audio → Talk method** on the camera's edit page to **Camera's own audio API**.
 - Everything said is recorded. The camera's own microphone is part of the video recording as usual, and each press of the button is saved alongside the footage. Presses show on the playback timeline in teal and play back in sync with the video, using the tile's volume. Exports include them, mixed with the camera's own audio. They're kept as long as the camera's footage.
 - Each session is written to the audit log.
 
@@ -67,6 +77,20 @@ To check an export, open **Exports → Verify an export** and choose the manifes
 Keep the manifest with the video when you hand an export on. Anyone can check the signature without LarisVMS: save the manifest's `publicKeyPem` to `key.pem`, its `signedPayload` text to `payload.txt`, and its base64-decoded `signatureDer` to `sig.der`, then run `openssl dgst -sha256 -verify key.pem -signature sig.der payload.txt`. Footage recorded before this feature has no fingerprints, so only the export itself can be checked.
 
 Signing is always on. The server's signing key, with a download of its public key, is under **Settings → Encryption and signing**.
+
+### Standalone player
+
+To hand footage to someone without LarisVMS, such as investigators, police, or attorneys, tick **Include the standalone player** in the Export panel (or send `includePlayer` to the [API](/Help/api)). When the export finishes, **📦 Download with player** on the Exports page downloads one zip with:
+
+- **Player.html**, which opens straight from the unzipped folder in Chrome, Edge, Firefox, or Safari, with nothing to install and no internet;
+- every camera's video, and the events, bookmarks, and evidence locks in the range, with the export's log;
+- each video's signed manifest, and **package.manifest.json**, a signed list of every file in the package.
+
+In the player, drag cameras into a grid of up to 16 and play them together on one timeline: change the speed from 1/8× to 16×, step a frame at a time, jump between events, zoom into a tile, and show detection boxes. **Events** lists every motion and detection, **About** shows the export's details and log, and **Verify** checks the whole folder against its signed list and each camera's footage chain, all on that computer. Times can be shown in that computer's zone, the site's, or UTC.
+
+Some browsers can't play H.265 video. **Also make an H.264 copy of H.265 video** (on by default) adds a copy of each H.265 camera's video that plays everywhere. The original is kept, and both are in the signed list. It takes longer, because the recorder re-encodes the video.
+
+The download is put together from the recorders as it goes. If a file changed on its recorder after the export, the download stops rather than include it.
 
 ## Bookmarks
 

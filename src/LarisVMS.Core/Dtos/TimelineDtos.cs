@@ -67,7 +67,9 @@ public record ThumbnailInfo(string FilePath, int OffsetSeconds, string? NodeIp, 
 /// the camera's current node and having the node reject whatever doesn't live on its own disk.</summary>
 public record SegmentFileInfo(string FilePath, Guid NodeId, DateTime StartUtc = default, DateTime EndUtc = default, bool HasAudio = false,
     /// <summary>The hash recorded when the segment was written (tamper evidence); null if none.</summary>
-    string? ContentSha256 = null);
+    string? ContentSha256 = null,
+    /// <summary>The video codec as recorded ("h264", "hevc"); null when unknown.</summary>
+    string? Codec = null);
 
 /// <summary>Object detection plan decision 5: one currently-known AI-detection category
 /// (auto-registered, auto-colored — see DetectedObjectCategory's own doc comment) — what the

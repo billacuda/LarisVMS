@@ -17,7 +17,7 @@ namespace LarisVMS.Infrastructure.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.13")
+                .HasAnnotation("ProductVersion", "10.0.15")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -1481,11 +1481,17 @@ namespace LarisVMS.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<bool>("ConvertH265")
+                        .HasColumnType("bit");
+
                     b.Property<DateTime>("CreatedUtc")
                         .HasColumnType("datetime2");
 
                     b.Property<DateTime>("FromUtc")
                         .HasColumnType("datetime2");
+
+                    b.Property<bool>("IncludePlayer")
+                        .HasColumnType("bit");
 
                     b.Property<string>("RequestedByUserId")
                         .IsRequired()
@@ -1520,6 +1526,17 @@ namespace LarisVMS.Infrastructure.Migrations
 
                     b.Property<DateTime?>("CompletedUtc")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("ConvertedFilePath")
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<string>("ConvertedSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<long?>("ConvertedSizeBytes")
+                        .HasColumnType("bigint");
 
                     b.Property<string>("ErrorMessage")
                         .HasMaxLength(2000)
@@ -1631,6 +1648,95 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("FootageMasterKeys");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.GoogleSsoSettings", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AllowedDomains")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("ClientId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("ClientSecret")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("LastModifiedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("LastModifiedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("GoogleSsoSettings");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.HomeAssistantSettings", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("AllowUntrustedCertificate")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("BrokerHost")
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)");
+
+                    b.Property<int>("BrokerPort")
+                        .HasColumnType("int");
+
+                    b.Property<string>("DiscoveryPrefix")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("LastModifiedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("LastModifiedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("Password")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("RoleId")
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<string>("TopicPrefix")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<bool>("UseTls")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Username")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("HomeAssistantSettings");
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.ManualRecording", b =>
@@ -2856,6 +2962,9 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<DateTime>("LastSeenUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<bool>("SkipViewMoveConfirm")
+                        .HasColumnType("bit");
+
                     b.Property<string>("UserAgent")
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
@@ -2881,8 +2990,8 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
-                    b.Property<bool>("IsShared")
-                        .HasColumnType("bit");
+                    b.Property<Guid?>("FolderId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("LayoutJson")
                         .IsRequired()
@@ -2898,6 +3007,10 @@ namespace LarisVMS.Infrastructure.Migrations
                         .HasMaxLength(450)
                         .HasColumnType("nvarchar(450)");
 
+                    b.Property<string>("RoleId")
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
                     b.Property<int>("SequenceIntervalSeconds")
                         .HasColumnType("int");
 
@@ -2906,9 +3019,86 @@ namespace LarisVMS.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("FolderId");
+
                     b.HasIndex("OwnerId");
 
+                    b.HasIndex("RoleId");
+
                     b.ToTable("Views");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.ViewFolder", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid?>("ParentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("RoleId")
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<string>("UserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ParentId");
+
+                    b.HasIndex("RoleId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("ViewFolders");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.ViewTreeGrant", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("GrantedRoleId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<string>("OwnerRoleId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GrantedRoleId");
+
+                    b.HasIndex("OwnerRoleId", "GrantedRoleId")
+                        .IsUnique();
+
+                    b.ToTable("ViewTreeGrants");
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.Zone", b =>

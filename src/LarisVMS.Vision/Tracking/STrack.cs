@@ -67,6 +67,27 @@ internal sealed class STrack
     public float LostVx { get; private set; }
     public float LostVy { get; private set; }
 
+    /// <summary>Set on a detection whose box touches the frame edge, so its shape is cut off.</summary>
+    public bool IsClipped { get; set; }
+
+    /// <summary>The object's usual shape (width / height), averaged over confident, uncut sightings,
+    /// and how many went into it. Unlike the Kalman aspect it isn't moved by a single odd box, so it
+    /// tells a car's side from the back of another car (ByteTracker's shape check).</summary>
+    public float RefAspect { get; private set; }
+    public int AspectSamples { get; private set; }
+
+    // Follows a car turning toward the camera over a few frames, but not a jump to another object.
+    private const float AspectSmoothing = 0.3f;
+
+    /// <summary>Folds a detection's shape into <see cref="RefAspect"/>, unless it's cut off or weak.</summary>
+    public void NoteShape(STrack detection, float minScore)
+    {
+        if (detection.IsClipped || detection.Score < minScore || detection.Tlwh[2] <= 0 || detection.Tlwh[3] <= 0) return;
+        var aspect = detection.Tlwh[2] / detection.Tlwh[3];
+        RefAspect = AspectSamples == 0 ? aspect : RefAspect + (AspectSmoothing * (aspect - RefAspect));
+        AspectSamples++;
+    }
+
     /// <summary>Converts top-left/width/height to the filter's [cx, cy, aspect, height].</summary>
     public static void TlwhToXyah(ReadOnlySpan<float> tlwh, Span<float> xyah)
     {

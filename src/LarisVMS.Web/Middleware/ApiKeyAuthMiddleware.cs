@@ -5,7 +5,8 @@ using LarisVMS.Core.Interfaces;
 namespace LarisVMS.Web.Middleware;
 
 /// <summary>
-/// Authenticates the M20 REST API (/api/v1/*) via an "X-Api-Key" header — a distinct header from
+/// Authenticates the M20 REST API (/api/v1/*) via an "X-Api-Key" header (or HTTP Basic with the user
+/// name "apikey" and the key as the password, for programs that can't set a header) — a distinct header from
 /// NodeAuthMiddleware's "Authorization: Bearer {nodeId}:{secret}", which is a differently-shaped
 /// credential for a different caller (recorder nodes). Registered right after NodeAuthMiddleware, same
 /// placement between UseAuthentication and UseAuthorization.
@@ -39,9 +40,12 @@ public class ApiKeyAuthMiddleware(RequestDelegate next)
             return;
         }
 
-        if (context.Request.Headers.TryGetValue(HeaderName, out var header) && !string.IsNullOrEmpty(header))
+        var presented = context.Request.Headers.TryGetValue(HeaderName, out var header) && !string.IsNullOrEmpty(header)
+            ? header.ToString()
+            : TryReadBasicKey(context.Request.Headers.Authorization.ToString());
+        if (presented is not null)
         {
-            var result = await apiKeyService.AuthenticateAsync(header.ToString(), context.RequestAborted);
+            var result = await apiKeyService.AuthenticateAsync(presented, context.RequestAborted);
             if (result is { } auth)
             {
                 // The name is what audit entries and "created by" fields show. Still no NameIdentifier:
@@ -64,5 +68,23 @@ public class ApiKeyAuthMiddleware(RequestDelegate next)
         }
 
         await next(context);
+    }
+
+    /// <summary>The user name programs that can only send a user name and password (Home Assistant's
+    /// Generic Camera, VLC) use, with the key as the password.</summary>
+    public const string BasicUserName = "apikey";
+
+    /// <summary>The key from an "Authorization: Basic" header whose user name is
+    /// <see cref="BasicUserName"/>; null for anything else, so other Basic credentials are left alone.</summary>
+    internal static string? TryReadBasicKey(string? authorization)
+    {
+        if (string.IsNullOrEmpty(authorization) || !authorization.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase)) return null;
+        string decoded;
+        try { decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(authorization[6..].Trim())); }
+        catch (FormatException) { return null; }
+        var colon = decoded.IndexOf(':');
+        if (colon < 0 || !string.Equals(decoded[..colon], BasicUserName, StringComparison.OrdinalIgnoreCase)) return null;
+        var key = decoded[(colon + 1)..];
+        return key.Length == 0 ? null : key;
     }
 }

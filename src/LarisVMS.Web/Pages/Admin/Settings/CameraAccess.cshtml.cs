@@ -14,10 +14,9 @@ namespace LarisVMS.Web.Pages.Admin.Settings;
 
 /// <summary>
 /// Grants a role narrowed access to specific cameras or camera groups — the admin surface for the
-/// CameraAccess table M1 defined and nothing wrote to or enforced until M14. Role-scoped only: this
-/// app has no user-management page yet to pick an individual user from (RBAC's per-user grant path,
-/// CameraAccessPrincipalType.User, is schema-ready and enforced identically by
-/// CameraAccessService — it just has no admin surface here until that page exists).
+/// CameraAccess table M1 defined and nothing wrote to or enforced until M14. Role-based by design:
+/// access is given to roles, never to individual users, so a person's cameras always follow the
+/// roles they're in.
 ///
 /// A role with no rows here has no cameras (Super Admin always has every camera).
 /// </summary>

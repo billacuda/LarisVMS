@@ -68,6 +68,14 @@
                             {
                                 <span class="badge text-bg-light text-dark border ms-1" title="@L["settings.permissions.users.linkedToAMicrosoftAccount"]">@L["settings.permissions.users.microsoftPending"]</span>
                             }
+                            @if (u.GoogleLink == "linked")
+                            {
+                                <span class="badge text-bg-primary ms-1" title="@L["settings.permissions.users.canSignInWithGoogle"]">@L["settings.permissions.users.google"]</span>
+                            }
+                            else if (u.GoogleLink == "pending")
+                            {
+                                <span class="badge text-bg-light text-dark border ms-1" title="@L["settings.permissions.users.linkedToAGoogleAccount", new { email = u.GooglePendingEmail }]">@L["settings.permissions.users.googlePending"]</span>
+                            }
                             @if (u.TwoFactor)
                             {
                                 <span class="badge text-bg-success ms-1" title="@L["settings.permissions.users.twoFactorOn"]">@L["settings.permissions.users.twoFactor"]</span>
@@ -171,6 +179,12 @@
                                     @L["settings.permissions.users.microsoftSignIn"]
                                 </button>
                             }
+                            @if (GoogleEnabled && !u.IsDirectoryManaged)
+                            {
+                                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#google-@u.Id">
+                                    @L["settings.permissions.users.googleSignIn"]
+                                </button>
+                            }
                         </td>
                     </tr>
                     @if (EntraEnabled && !u.IsDirectoryManaged)
@@ -184,6 +198,25 @@
                                         <input type="text" name="EntraObjectId" id="entra-@u.Id" class="form-control form-control-sm font-monospace"
                                                placeholder="00000000-0000-0000-0000-000000000000" />
                                         <div class="form-text">@L["settings.permissions.users.fromTheUserPageIn"]</div>
+                                    </div>
+                                    <div class="col-auto">
+                                        <button type="submit" class="btn btn-sm btn-primary">@L["common.save"]</button>
+                                    </div>
+                                </EditForm>
+                            </td>
+                        </tr>
+                    }
+                    @if (GoogleEnabled && !u.IsDirectoryManaged)
+                    {
+                        <tr class="collapse" id="google-@u.Id">
+                            <td colspan="5" class="bg-body-secondary">
+                                <EditForm Model="this" FormName="@($"google-link-{u.Id}")" OnValidSubmit="HandleSetGoogleLinkAsync" class="row g-2 align-items-end py-2">
+                                    <input type="hidden" name="GoogleLinkUserId" value="@u.Id" />
+                                    <div class="col-sm-5">
+                                        <label class="form-label small mb-1" for="google-email-@u.Id">@L["settings.permissions.users.googleEmailFor", new { email = u.Email }]</label>
+                                        <input type="email" name="GoogleEmail" id="google-email-@u.Id" class="form-control form-control-sm"
+                                               value="@u.GooglePendingEmail" placeholder="name@gmail.com" autocomplete="off" />
+                                        <div class="form-text">@L["settings.permissions.users.googleEmailHint"]</div>
                                     </div>
                                     <div class="col-auto">
                                         <button type="submit" class="btn btn-sm btn-primary">@L["common.save"]</button>
@@ -265,7 +298,8 @@
     /// for an AD account (whose own email, if AD has one, is AdEmail).</summary>
     /// <param name="EntraLink">"linked", "pending" (an object ID entered, no sign-in yet), or null.</param>
     private sealed record UserRow(string Id, string Email, string? DisplayName, bool IsEnabled, IReadOnlyList<string> RoleNames,
-        IReadOnlyList<ExpiryRow> ActiveExpiries, bool IsDirectoryManaged, string? AdEmail, string? EntraLink = null, bool TwoFactor = false);
+        IReadOnlyList<ExpiryRow> ActiveExpiries, bool IsDirectoryManaged, string? AdEmail, string? EntraLink = null, bool TwoFactor = false,
+        string? GoogleLink = null, string? GooglePendingEmail = null);
 
     private sealed record ExpiryRow(Guid Id, string RoleName, DateTime ExpiresAtUtc);
 
@@ -321,6 +355,13 @@
                 .Select(l => new { l.UserId, l.ProviderKey }).ToListAsync())
             .GroupBy(l => l.UserId)
             .ToDictionary(g => g.Key, g => g.Any(l => !EntraLinks.IsPending(l.ProviderKey)) ? "linked" : "pending");
+        GoogleEnabled = await Db.GoogleSsoSettings.AnyAsync(s => s.IsEnabled);
+        var googleLogins = (await Db.UserLogins.Where(l => l.LoginProvider == GoogleOidcOptionsConfigurator.SchemeName)
+                .Select(l => new { l.UserId, l.ProviderKey }).ToListAsync())
+            .GroupBy(l => l.UserId)
+            .ToDictionary(g => g.Key, g => (
+                State: g.Any(l => !GoogleLinks.IsPending(l.ProviderKey)) ? "linked" : "pending",
+                PendingEmail: g.Select(l => GoogleLinks.PendingEmailOf(l.ProviderKey)).FirstOrDefault(e => e is not null)));
 
         UserRows = users.Select(u => new UserRow(
             u.Id,
@@ -334,7 +375,9 @@
             adUserIds.Contains(u.Id),
             adUserIds.Contains(u.Id) ? u.Email : null,
             entraLinks.GetValueOrDefault(u.Id),
-            u.TwoFactorEnabled
+            u.TwoFactorEnabled,
+            googleLogins.TryGetValue(u.Id, out var google) ? google.State : null,
+            google.PendingEmail
         )).OrderBy(r => r.Email, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
@@ -753,6 +796,55 @@
         SavedMessage = objectId is null
             ? Loc.T("settings.permissions.users.microsoftSignInRemovedFor", new { email = user.Email })
             : Loc.T("settings.permissions.users.canNowSignInWith", new { email = user.Email });
+        await LoadAsync();
+    }
+
+    private bool GoogleEnabled;
+
+    /// <summary>Links an account to a Google account by email (completed on that person's first Google
+    /// sign-in with that address verified, then pinned to Google's subject ID), or removes the link
+    /// when blank. Replaces any earlier link.</summary>
+    private async Task HandleSetGoogleLinkAsync()
+    {
+        var form = HttpContext?.Request.Form;
+        var user = await UserManagerService.FindByIdAsync(form?["GoogleLinkUserId"].ToString() ?? "");
+        if (user is null) { await LoadAsync(); return; }
+        if (await CannotActOnAsync(user, allowSelf: false) is { } denied)
+        {
+            ErrorMessage = denied;
+            await LoadAsync();
+            return;
+        }
+        var raw = form?["GoogleEmail"].ToString().Trim() ?? "";
+        string? email = null;
+        if (raw.Length > 0)
+        {
+            if (!GoogleLinks.LooksLikeEmail(raw))
+            {
+                ErrorMessage = Loc.T("settings.permissions.users.theGoogleEmailIsNot");
+                await LoadAsync();
+                return;
+            }
+            email = GoogleLinks.NormalizeEmail(raw);
+            var pendingKey = GoogleLinks.PendingKey(email);
+            if (await Db.UserLogins.AnyAsync(l => l.LoginProvider == GoogleOidcOptionsConfigurator.SchemeName && l.ProviderKey == pendingKey && l.UserId != user.Id))
+            {
+                ErrorMessage = Loc.T("settings.permissions.users.thatGoogleEmailIsAlready");
+                await LoadAsync();
+                return;
+            }
+        }
+
+        foreach (var login in (await UserManagerService.GetLoginsAsync(user)).Where(l => l.LoginProvider == GoogleOidcOptionsConfigurator.SchemeName))
+            await UserManagerService.RemoveLoginAsync(user, login.LoginProvider, login.ProviderKey);
+        if (email is not null)
+            await UserManagerService.AddLoginAsync(user, new UserLoginInfo(GoogleOidcOptionsConfigurator.SchemeName, GoogleLinks.PendingKey(email), "Google"));
+
+        await AuditService.LogAsync("User.GoogleLink", CurrentUserId, CurrentUserName, RemoteIp,
+            email is not null ? $"{user.Email}: linked to Google account {email}" : $"{user.Email}: Google sign-in removed");
+        SavedMessage = email is null
+            ? Loc.T("settings.permissions.users.googleSignInRemovedFor", new { email = user.Email })
+            : Loc.T("settings.permissions.users.canNowSignInWithGoogle", new { email = user.Email, google = email });
         await LoadAsync();
     }
 

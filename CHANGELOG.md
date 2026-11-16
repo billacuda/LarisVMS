@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.222.0] - 2026-11-16
+
+View folders, Sign in with Google, Home Assistant (experimental), and a standalone export player for
+handing footage to investigators.
+
+### ➕ Added
+
+- **View folders.** Views are kept in folders: your Private views, and a folder for each role that
+  everyone in the role sees. Folders can hold folders, as deep as needed. Right-click a view or folder
+  to open, edit, rename, copy, cut, paste, or delete; drag to move, with a confirmation that can be
+  turned off until you sign out. Moving a view to another role's folder always asks first. Copies
+  pasted where the name is taken are named "- copy". Live and Play pick views from the same tree.
+- **View access.** Settings → View access lets one role open another role's views, open-only. Roles
+  can't share their own views; to change another role's views, a person is added to that role. It
+  has a card on the Settings page.
+- **Two-way audio method per camera.** A camera's edit page has a Talk method: Auto (as before), ONVIF
+  only, or the camera's own audio API (Dahua, Amcrest, Lorex). Use the camera's own API when talk
+  connects but nothing comes out of the speaker, as on some Amcrest doorbells.
+- **Sign in with Google.** Settings → Security → Google sign-in adds a "Sign in with Google" button
+  for accounts an admin links by Gmail or Google Workspace address on the Users page. It never
+  creates accounts, only links an address Google has verified, and can be limited to your Workspace
+  domains.
+- **Home Assistant (experimental).** Settings → Home Assistant sends cameras, detections, and
+  recording nodes to Home Assistant over MQTT, where they appear on their own: motion, person,
+  vehicle, and animal sensors, camera and node status, the latest detection's picture, last speed, a
+  manual recording switch, and a bookmark button. It acts as a role you choose, so it only gets that
+  role's cameras and can only do what the role may. Test connection checks the broker login before
+  saving. The page and Help mark it as experimental and ask for feedback. Please
+  [share how it works for you](https://github.com/billacuda/LarisVMS/discussions/new?category=general&title=Home%20Assistant%20feedback):
+  what you use it for and what goes wrong.
+- **Live stream for other programs.** `/api/v1/cameras/{id}/stream.mp4` plays a camera's live video
+  in Home Assistant's Generic Camera, VLC, or ffmpeg, from the same stream the web pages use, so the
+  camera isn't asked for another. It needs the new Live → Stream permission, which no role has until
+  you give it. API keys can also sign in with HTTP Basic (user name `apikey`).
+- **Standalone export player.** Tick Include the standalone player when exporting (or send
+  `includePlayer` to the API) and the Exports page offers one zip for handing to investigators,
+  police, or attorneys: Player.html opens from disk in any browser, with a camera grid, one timeline,
+  speed from 1/8× to 16×, frame steps, events, and detection boxes, plus a Verify tab that checks
+  every file against a signed list and each camera's footage chain. H.265 video can get an H.264 copy
+  that plays in every browser; the original is kept. Every camera plays in step, following the video
+  itself, so a slow decoder can't leave tiles stuck jumping back and forth. The H.264 copy needs the
+  recorder updated.
+
+### ⚙️ Changed
+
+- **Exports line up.** On the Exports page, each camera's status and buttons sit in their own
+  columns, so a long list of cameras reads straight down.
+- **Webhooks send event details.** An alert's webhook now also sends the event, camera, node,
+  detected object, speed, and a path to the detection's picture, alongside the rule, message, and
+  time it sent before.
+- **Export manifests carry the whole footage chain.** A camera's signed manifest now includes every
+  chain link between its first and last exported recording, including the camera's other recordings
+  in between (its sub stream, say), so the chain can be checked with no gaps.
+- **Shared views move to Private.** Views that were shared with everyone move to the Private folder
+  of the person who made them; copy them into a role's folder to share them again. Views with the
+  same name in one folder are renamed "Name (2)". Editing your own Private views needs only the
+  Views → View permission.
+- **Camera access is set by role only.** Cameras are given to roles, never to individual accounts.
+  Personal camera access left over from older versions becomes role access where that gives nobody
+  more than they had; otherwise it's removed, and Super Admins get a notice naming the accounts to
+  review.
+
+### 🛠️ Fixed
+
+- **Boxes stay on the right car.** A car driving past a parked one no longer hands its box and id to
+  the parked car, or takes the parked car's. Tracking now compares each object's usual shape, so the
+  side of one car can't become the back of another. A parked car that something covers for a while
+  gets its own id back when it's uncovered.
+- **Views fit the window.** On Live and Play, a view's rows now shrink and grow with the window's
+  height as well as its width, so the whole view stays on screen without scroll bars.
+- **Verifying an export no longer reports a broken chain by mistake.** When a camera also records
+  another stream, Verify an export said its footage chain didn't add up, though nothing had changed.
+  It now checks the whole chain. Manifests made before this can't cover the recordings in between,
+  so they show a warning that suggests exporting again instead of a failure.
+
 ## [0.221.4] - 2026-11-14
 
 The latest .NET 10 patch: runtime and libraries at 10.0.15.
@@ -1919,7 +1994,8 @@ Only the 10 most recent versions are kept in this file. Older entries are archiv
 - [v0.21.1 – v0.40.0](changelog-archive/v0.21.1-to-v0.40.0.md) (2026-08-09 – 2026-08-11)
 - [v0.1.0 – v0.21.0](changelog-archive/v0.1.0-to-v0.21.0.md) (2026-08-08 – 2026-08-09)
 
-[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.221.4...HEAD
+[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.222.0...HEAD
+[0.222.0]: https://github.com/billacuda/LarisVMS/compare/v0.221.4...v0.222.0
 [0.221.4]: https://github.com/billacuda/LarisVMS/compare/v0.221.3...v0.221.4
 [0.221.3]: https://github.com/billacuda/LarisVMS/compare/v0.221.2...v0.221.3
 [0.221.2]: https://github.com/billacuda/LarisVMS/compare/v0.221.1...v0.221.2

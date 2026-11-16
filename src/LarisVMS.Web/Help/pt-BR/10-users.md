@@ -1,10 +1,10 @@
 # Usuários e acesso
 
-Contas, funções, permissões, acesso às câmeras, Active Directory e login com a Microsoft.
+Contas, funções, permissões, acesso às câmeras e login com uma conta local, Active Directory, Google ou Microsoft.
 
 ## Usuários
 
-O autocadastro está desativado. As contas são criadas em **Configurações → Usuários**, onde você também pode atribuir funções, desativar uma conta e redefinir uma senha. As contas locais entram com o endereço de e-mail. Desativar uma conta a desconecta de todos os lugares na hora e encerra seu vídeo ao vivo.
+O autocadastro está desativado. As contas são criadas em **Configurações → Usuários**, onde você também pode atribuir funções, desativar uma conta e redefinir uma senha. As contas locais entram com o endereço de e-mail. Desativar uma conta a desconecta de todos os lugares na hora e encerra seu vídeo ao vivo. O login é feito com uma conta local, uma conta do [Active Directory](#active-directory) (via LDAPS) ou uma conta vinculada do [Google](#google) ou do [Microsoft Entra ID](#entra).
 
 ## Senhas
 
@@ -24,13 +24,13 @@ No login, **Não perguntar novamente neste navegador por 14 dias** pula o códig
 
 Se alguém perder o celular e os códigos de recuperação, **Desativar 2FA** ao lado do nome da pessoa em **Configurações → Usuários** permite que ela entre só com a senha e configure de novo.
 
-**Configurações → Segurança → Login em duas etapas** obriga todos que entram com senha a configurá-lo antes de poderem fazer qualquer outra coisa, e impede que o desativem. Os logins da Microsoft ficam a cargo das verificações do próprio Entra.
+**Configurações → Segurança → Login em duas etapas** obriga todos que entram com senha a configurá-lo antes de poderem fazer qualquer outra coisa, e impede que o desativem. Os logins da Microsoft e do Google ficam a cargo das verificações de cada um.
 
 ## Sessões
 
 Selecione seu nome no alto da página, depois **Sessões**, para ver todos os navegadores em que você está conectado, com o endereço e o último uso. Encerre os que você não reconhecer, ou todos menos o que está usando, e depois altere sua senha. Alterar a senha ou ativar o login em duas etapas encerra suas outras sessões na hora.
 
-Com **Configurações → Segurança → Confirmar a senha para páginas de administração** ativado, as páginas de administração pedem sua senha de novo (e um código, com o login em duas etapas ativado) a menos que você tenha entrado ou confirmado nos últimos 15 minutos; usá-las mantém isso valendo. Quem encontra seu navegador conectado pode então usar o sistema, mas não alterar suas configurações, usuários nem chaves. Os logins da Microsoft entram de novo. Vem desativado por padrão.
+Com **Configurações → Segurança → Confirmar a senha para páginas de administração** ativado, as páginas de administração pedem sua senha de novo (e um código, com o login em duas etapas ativado) a menos que você tenha entrado ou confirmado nos últimos 15 minutos; usá-las mantém isso valendo. Quem encontra seu navegador conectado pode então usar o sistema, mas não alterar suas configurações, usuários nem chaves. Os logins da Microsoft e do Google entram de novo. Vem desativado por padrão.
 
 Em **Configurações → Usuários**, **Encerrar sessões** ao lado de uma pessoa a desconecta em todos os navegadores. Ela pode entrar de novo; desative a conta para mantê-la fora.
 
@@ -61,6 +61,10 @@ Uma função é um conjunto nomeado de permissões, gerenciado em **Configuraç�
 ## Entra
 
 **Configurações → Segurança → Login do Entra ID** adiciona um botão "Entrar com a Microsoft". Ele nunca cria contas e não associa contas por e-mail: em **Configurações → Usuários**, use **Login com a Microsoft** na linha de uma pessoa para informar o **ID de objeto** do Entra dela (da página do usuário no centro de administração do Microsoft Entra). O primeiro login dela com a Microsoft conclui o vínculo; em branco o remove. Registre um app no Entra com o URI de redirecionamento mostrado na página Segurança e depois informe o ID de locatário dele (o GUID ou domínio do seu diretório, não `common`), o ID do cliente e o segredo. As alterações têm efeito imediato. As contas já vinculadas continuam funcionando.
+
+## Google
+
+**Configurações → Segurança → Login com o Google** adiciona um botão "Entrar com o Google". Ele nunca cria contas: em **Configurações → Usuários**, use **Login com o Google** na linha de uma pessoa para informar o endereço do Gmail ou do Google Workspace dela. O primeiro login com o Google com esse endereço conclui o vínculo, mas só se o Google tiver verificado o endereço. Depois disso, o vínculo acompanha a conta Google, não o endereço, então mudar o endereço depois não o move. Em branco remove o vínculo. No console do Google Cloud, crie um ID do cliente OAuth do tipo **Aplicativo da Web** com o URI de redirecionamento mostrado na página Segurança e informe o ID do cliente e o segredo. **Domínios permitidos** limita o login aos domínios do Google Workspace listados, um por linha, o que recusa contas pessoais do Gmail, inclusive as já vinculadas. Deixe em branco para permitir qualquer conta Google. As alterações valem imediatamente.
 
 ## Active Directory
 

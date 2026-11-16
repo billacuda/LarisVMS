@@ -4,7 +4,17 @@ Visualizações, blocos ao vivo, a linha do tempo de reprodução, exportações
 
 ## Visualizações
 
-Uma **visualização** é um layout de câmeras salvo. Crie visualizações em **Visualizações** arrastando e redimensionando blocos. **Ao vivo** e **Reprodução** mostram uma visualização. Em celulares, o layout colapsa para uma ou duas colunas. As visualizações podem rodar em tela cheia no modo quiosque, ou alternar entre várias visualizações por um temporizador. Uma visualização compartilhada pode ser usada por todos que veem visualizações, mas apenas o proprietário ou um administrador pode alterá-la ou excluí-la.
+Uma **visualização** é um layout de câmeras salvo. Crie visualizações em **Visualizações** arrastando e redimensionando blocos. **Ao vivo** e **Reprodução** mostram uma visualização. Em celulares, o layout colapsa para uma ou duas colunas. As visualizações podem rodar em tela cheia no modo quiosque, ou alternar entre várias visualizações por um temporizador.
+
+As visualizações ficam em pastas, e as pastas podem conter outras pastas:
+
+- **Privadas** guarda suas próprias visualizações. Só você as vê.
+- Cada função tem uma pasta que todos na função veem. Membros que também têm a permissão **Visualizações → Editar** podem adicionar, alterar, renomear, mover e excluir visualizações e pastas nela. Um Super Admin pode alterar a pasta de qualquer função.
+- Um administrador pode permitir que uma função abra as visualizações de outra função em **Configurações → Acesso às visualizações**. Essas visualizações podem ser abertas, mas não alteradas; para que alguém possa alterá-las, adicione a pessoa à função. Funções não podem compartilhar as próprias visualizações.
+
+Clique com o botão direito em uma visualização ou pasta (ou pressione a tecla de menu ou Shift+F10, ou toque e segure em uma tela sensível ao toque) para abrir, editar, renomear, copiar, recortar, colar ou excluir. Arraste uma visualização ou pasta para uma pasta para movê-la. Mover algo dentro da pasta da mesma função, ou dentro da sua pasta Privadas, pergunta antes, a menos que você escolha **Não perguntar de novo até eu sair**. Mover algo para a pasta de outra função sempre pergunta, porque quem não está nessa função deixa de vê-lo. Excluir uma pasta mantém o conteúdo: as visualizações e pastas dela sobem um nível.
+
+Os nomes são únicos dentro da pasta de cada função e dentro da sua pasta Privadas, contando todas as pastas internas. Uma cópia colada onde o nome já é usado recebe o nome "*nome* - cópia" (depois "- cópia 2", e assim por diante). A partir daí é uma visualização separada: renomear ou alterar uma não altera a outra. Quando uma função é excluída, as visualizações dela vão para a pasta Privadas do administrador que a excluiu.
 
 ## Blocos ao vivo
 
@@ -25,7 +35,7 @@ As câmeras com alto-falante mostram um botão 🎙️ no bloco ao vivo. Segure-
 
 - Seu navegador pede acesso ao microfone na primeira vez. Ele só permite isso quando o site é aberto por **HTTPS**; veja [Certificados](/Help/security#certificates).
 - Só uma pessoa por vez pode falar por uma câmera.
-- Exige a permissão **Falar** na câmera (**Configurações → Acesso às câmeras**). A câmera deve suportar áudio bidirecional ONVIF (uma saída de áudio no seu perfil ONVIF). As câmeras Dahua, Amcrest, Lorex e EmpireTech cujo firmware não oferece isso recorrem à API de áudio própria da câmera.
+- Exige a permissão **Falar** na câmera (**Configurações → Acesso às câmeras**). A câmera deve suportar áudio bidirecional ONVIF (uma saída de áudio no seu perfil ONVIF). As câmeras Dahua, Amcrest, Lorex e EmpireTech cujo firmware não oferece isso recorrem à API de áudio própria da câmera. Se a conexão abrir mas nada sair do alto-falante, na página de edição da câmera defina **Áudio bidirecional → Método para falar** como **API de áudio própria da câmera**.
 - Tudo o que é dito é gravado. O microfone da própria câmera faz parte da gravação de vídeo como de costume, e cada pressão do botão é salva junto das gravações. As pressões aparecem na linha do tempo da reprodução em verde-azulado e tocam sincronizadas com o vídeo, usando o volume do bloco. As exportações as incluem, misturadas ao áudio da própria câmera. Elas são mantidas pelo mesmo tempo que as gravações da câmera.
 - Cada sessão é escrita no log de auditoria.
 
@@ -67,6 +77,20 @@ Para conferir uma exportação, abra **Exportações → Verificar uma exportaç
 Mantenha o manifesto junto com o vídeo ao repassar uma exportação. Qualquer pessoa pode conferir a assinatura sem o LarisVMS: salve o `publicKeyPem` do manifesto em `key.pem`, o texto do seu `signedPayload` em `payload.txt` e o seu `signatureDer` decodificado de base64 em `sig.der`, e depois execute `openssl dgst -sha256 -verify key.pem -signature sig.der payload.txt`. As gravações feitas antes deste recurso não têm impressões digitais, então só a própria exportação pode ser conferida.
 
 A assinatura está sempre ativada. A chave de assinatura do servidor, com um download da sua chave pública, fica em **Configurações → Criptografia e assinatura**.
+
+### Player independente
+
+Para entregar gravações a alguém sem o LarisVMS, como investigadores, a polícia ou advogados, marque **Incluir o player independente** no painel de exportação (ou envie `includePlayer` à [API](/Help/api)). Quando a exportação termina, **📦 Baixar com o player** na página Exportações baixa um único zip com:
+
+- **Player.html**, que abre direto da pasta descompactada no Chrome, Edge, Firefox ou Safari, sem instalar nada e sem internet;
+- o vídeo de cada câmera, e os eventos, marcadores e bloqueios de provas do período, com o registro da exportação;
+- o manifesto assinado de cada vídeo, e o **package.manifest.json**, uma lista assinada de todos os arquivos do pacote.
+
+No player, arraste câmeras para uma grade de até 16 e reproduza todas juntas em uma única linha do tempo: mude a velocidade de 1/8× a 16×, avance quadro a quadro, pule entre eventos, dê zoom em um quadro e mostre as caixas de detecção. **Eventos** lista cada movimento e detecção, **Sobre** mostra os detalhes e o registro da exportação, e **Verificar** compara a pasta inteira com a lista assinada e a cadeia de gravações de cada câmera, tudo naquele computador. Os horários podem aparecer no fuso daquele computador, no do local ou em UTC.
+
+Alguns navegadores não reproduzem vídeo H.265. **Criar também uma cópia H.264 do vídeo H.265** (ativado por padrão) adiciona uma cópia do vídeo de cada câmera H.265 que toca em qualquer lugar. O original é mantido, e os dois estão na lista assinada. Demora mais, porque o gravador recodifica o vídeo.
+
+O download é montado a partir dos gravadores conforme avança. Se um arquivo mudou no gravador depois da exportação, o download é interrompido em vez de incluí-lo.
 
 ## Marcadores
 

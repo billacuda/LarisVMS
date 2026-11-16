@@ -48,7 +48,7 @@ Ces vérifications se dressent entre un téléchargement et une installation en 
 
 ## Secrets chiffrés
 
-Les identifiants des caméras, les identifiants SMB, les clés des nœuds, les secrets d’e-mail, le secret client Entra et le mot de passe du compte de service Active Directory sont chiffrés dans la base de données, à l’aide des clés de protection des données de `%ProgramData%\LarisVMS\keys`. Seuls SYSTEM, les administrateurs et les comptes des services LarisVMS peuvent ouvrir `%ProgramData%\LarisVMS` : tout autre accès trouvé là, comme un dossier créé par un utilisateur local avant l’installation de LarisVMS, est supprimé au démarrage d’un service. Sauvegardez ce dossier, et ne le supprimez jamais lors d’un déploiement.
+Les identifiants des caméras, les identifiants SMB, les clés des nœuds, les secrets d’e-mail, les secrets client Entra et Google, et le mot de passe du compte de service Active Directory sont chiffrés dans la base de données, à l’aide des clés de protection des données de `%ProgramData%\LarisVMS\keys`. Seuls SYSTEM, les administrateurs et les comptes des services LarisVMS peuvent ouvrir `%ProgramData%\LarisVMS` : tout autre accès trouvé là, comme un dossier créé par un utilisateur local avant l’installation de LarisVMS, est supprimé au démarrage d’un service. Sauvegardez ce dossier, et ne le supprimez jamais lors d’un déploiement.
 
 ## Protection supplémentaire pour les entreprises
 

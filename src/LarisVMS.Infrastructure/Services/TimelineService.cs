@@ -478,7 +478,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         return await db.Segments
             .Where(s => s.CameraId == cameraId && s.StartUtc < toUtc && s.EndUtc > fromUtc)
             .OrderBy(s => s.StartUtc)
-            .Select(s => new SegmentFileInfo(s.FilePath, s.NodeId, s.StartUtc, s.EndUtc, s.HasAudio, s.ContentSha256))
+            .Select(s => new SegmentFileInfo(s.FilePath, s.NodeId, s.StartUtc, s.EndUtc, s.HasAudio, s.ContentSha256, s.Codec))
             .ToListAsync(ct);
     }
 

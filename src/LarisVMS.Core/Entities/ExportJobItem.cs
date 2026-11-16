@@ -51,6 +51,12 @@ public class ExportJobItem
     /// evidence, or it couldn't be built). The manifest itself lives in its own table so listing
     /// exports never loads it.</summary>
     public DateTime? ManifestSignedUtc { get; set; }
+
+    /// <summary>The H.264 copy made for the standalone player (ExportJob.ConvertH265) beside the
+    /// original on the node, with its size and SHA-256. Null when there's none.</summary>
+    public string? ConvertedFilePath { get; set; }
+    public long? ConvertedSizeBytes { get; set; }
+    public string? ConvertedSha256 { get; set; }
     public string? ErrorMessage { get; set; }
 
     public DateTime? StartedUtc { get; set; }

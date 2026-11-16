@@ -68,6 +68,10 @@ public sealed class PermissionSet(bool isAdministrator, IReadOnlySet<(string Res
 public interface IRoleSeedService
 {
     Task SeedAsync(CancellationToken ct = default);
+
+    /// <summary>After <see cref="SeedAsync"/>: accounts whose personal camera access was removed this
+    /// run, when camera access became role-only, because no role gives it to them. Empty otherwise.</summary>
+    IReadOnlyList<string> AccountsLosingPersonalCameraAccess { get; }
 }
 
 /// <summary>

@@ -105,6 +105,8 @@ public sealed class OnvifBackchannelClient : ITalkSink
         if (describe.Status == 551)
             throw new BackchannelException("This camera doesn't support two-way audio (it rejected the ONVIF audio backchannel).");
         EnsureOk(describe, "DESCRIBE");
+        // What the camera offered, for diagnosing one that accepts the session but stays silent.
+        _logger.LogDebug("Audio backchannel DESCRIBE from {Host} returned:{NewLine}{Sdp}", rtspUri.Host, Environment.NewLine, describe.Body);
 
         var baseUri = new Uri(describe.Header("Content-Base") ?? describe.Header("Content-Location") ?? uri);
         Track = BackchannelSdp.Parse(describe.Body, baseUri)

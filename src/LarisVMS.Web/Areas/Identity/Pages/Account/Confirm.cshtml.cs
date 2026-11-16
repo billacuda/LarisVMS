@@ -17,7 +17,7 @@ namespace LarisVMS.Web.Areas.Identity.Pages.Account;
 /// <summary>
 /// Confirm your password before admin pages (<see cref="StepUpPolicy"/>): checked locally, or by
 /// Active Directory for an AD account, plus a current code when two-factor sign-in is on. A wrong
-/// password or code counts toward lockout. Accounts without a password (Microsoft sign-in) sign in
+/// password or code counts toward lockout. Accounts without a password (Microsoft or Google sign-in) sign in
 /// again instead.
 /// </summary>
 [Authorize]
@@ -37,6 +37,8 @@ public class ConfirmModel(
     public string ReturnUrl { get; private set; } = "/";
     public bool HasPassword { get; private set; }
     public bool NeedsCode { get; private set; }
+    /// <summary>Microsoft or Google, for an account without a password here.</summary>
+    public string ProviderName { get; private set; } = "Microsoft";
 
     public class InputModel
     {
@@ -148,5 +150,6 @@ public class ConfirmModel(
         ReturnUrl = SafeReturnUrl(returnUrl);
         HasPassword = await IsActiveDirectoryAsync(user) || await userManager.HasPasswordAsync(user);
         NeedsCode = HasPassword && await userManager.GetTwoFactorEnabledAsync(user);
+        if (!HasPassword) ProviderName = await ExternalSignInProvider.NameAsync(db, user.Id);
     }
 }

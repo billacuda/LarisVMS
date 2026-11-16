@@ -4,7 +4,17 @@ Ansichten, Live-Kacheln, die Wiedergabe-Zeitleiste, Exporte, Lesezeichen, Beweis
 
 ## Ansichten
 
-Eine **Ansicht** ist ein gespeichertes Kamera-Layout. Erstellen Sie Ansichten unter **Ansichten**, indem Sie Kacheln ziehen und in der Größe ändern. **Live** und **Wiedergabe** zeigen beide eine Ansicht. Auf Telefonen klappt das Layout auf eine oder zwei Spalten zusammen. Ansichten können im Kioskmodus im Vollbild laufen oder per Zeitgeber zwischen mehreren Ansichten wechseln. Eine geteilte Ansicht kann von allen genutzt werden, die Ansichten sehen, aber nur ihr Besitzer oder ein Administrator kann sie ändern oder löschen.
+Eine **Ansicht** ist ein gespeichertes Kamera-Layout. Erstellen Sie Ansichten unter **Ansichten**, indem Sie Kacheln ziehen und in der Größe ändern. **Live** und **Wiedergabe** zeigen beide eine Ansicht. Auf Telefonen klappt das Layout auf eine oder zwei Spalten zusammen. Ansichten können im Kioskmodus im Vollbild laufen oder per Zeitgeber zwischen mehreren Ansichten wechseln.
+
+Ansichten liegen in Ordnern, und Ordner können weitere Ordner enthalten:
+
+- **Privat** enthält Ihre eigenen Ansichten. Nur Sie sehen sie.
+- Jede Rolle hat einen Ordner, den alle Mitglieder der Rolle sehen. Mitglieder, die zusätzlich die Berechtigung **Ansichten → Bearbeiten** haben, können darin Ansichten und Ordner hinzufügen, ändern, umbenennen, verschieben und löschen. Ein Super Admin kann den Ordner jeder Rolle ändern.
+- Ein Administrator kann unter **Einstellungen → Ansichtenzugriff** einer Rolle erlauben, die Ansichten einer anderen Rolle zu öffnen. Diese Ansichten lassen sich öffnen, aber nicht ändern; damit jemand sie ändern kann, fügen Sie die Person der Rolle hinzu. Rollen können ihre eigenen Ansichten nicht teilen.
+
+Klicken Sie mit der rechten Maustaste auf eine Ansicht oder einen Ordner (oder drücken Sie die Menütaste oder Umschalt+F10, oder tippen Sie auf einem Touchscreen lange darauf), um sie zu öffnen, zu bearbeiten, umzubenennen, zu kopieren, auszuschneiden, einzufügen oder zu löschen. Ziehen Sie eine Ansicht oder einen Ordner auf einen Ordner, um sie zu verschieben. Eine Verschiebung innerhalb des Ordners derselben Rolle oder innerhalb Ihres privaten Ordners fragt zuerst nach, außer Sie wählen **Bis zur Abmeldung nicht mehr fragen**. Eine Verschiebung in den Ordner einer anderen Rolle fragt immer nach, weil Personen, die nicht zu dieser Rolle gehören, sie dann nicht mehr sehen. Beim Löschen eines Ordners bleibt sein Inhalt erhalten: Seine Ansichten und Ordner rücken eine Ebene nach oben.
+
+Namen sind innerhalb des Ordners jeder Rolle und innerhalb Ihres privaten Ordners eindeutig, einschließlich aller Ordner darin. Eine Kopie, die dort eingefügt wird, wo ihr Name schon vergeben ist, heißt „*Name* - Kopie“ (dann „- Kopie 2“ usw.). Ab dann ist sie eine eigene Ansicht: Wird eine umbenannt oder geändert, ändert sich die andere nicht. Wird eine Rolle gelöscht, wandern ihre Ansichten in den privaten Ordner des Administrators, der sie gelöscht hat.
 
 ## Live-Kacheln
 
@@ -25,7 +35,7 @@ Kameras mit Lautsprecher zeigen auf ihrer Live-Kachel eine Schaltfläche 🎙️
 
 - Ihr Browser fragt beim ersten Mal nach dem Mikrofonzugriff. Er erlaubt dies nur, wenn die Website über **HTTPS** geöffnet wird; siehe [Zertifikate](/Help/security#certificates).
 - Es kann immer nur eine Person über eine Kamera sprechen.
-- Es benötigt die Berechtigung **Sprechen** auf der Kamera (**Einstellungen → Kamerazugriff**). Die Kamera muss ONVIF-Gegensprechen unterstützen (einen Audioausgang in ihrem ONVIF-Profil). Kameras von Dahua, Amcrest, Lorex und EmpireTech, deren Firmware das nicht bietet, greifen auf die eigene Audio-API der Kamera zurück.
+- Es benötigt die Berechtigung **Sprechen** auf der Kamera (**Einstellungen → Kamerazugriff**). Die Kamera muss ONVIF-Gegensprechen unterstützen (einen Audioausgang in ihrem ONVIF-Profil). Kameras von Dahua, Amcrest, Lorex und EmpireTech, deren Firmware das nicht bietet, greifen auf die eigene Audio-API der Kamera zurück. Steht die Verbindung, aber aus dem Lautsprecher kommt nichts, stellen Sie auf der Bearbeitungsseite der Kamera **Gegensprechen → Sprechmethode** auf **Eigene Audio-API der Kamera**.
 - Alles Gesagte wird aufgezeichnet. Das eigene Mikrofon der Kamera ist wie gewohnt Teil der Videoaufzeichnung, und jeder Tastendruck wird neben den Aufnahmen gespeichert. Tastendrücke erscheinen auf der Wiedergabe-Zeitleiste in Blaugrün und werden synchron zum Video mit der Lautstärke der Kachel abgespielt. Exporte enthalten sie, gemischt mit dem eigenen Audio der Kamera. Sie werden so lange aufbewahrt wie die Aufnahmen der Kamera.
 - Jede Sitzung wird in das Audit-Protokoll geschrieben.
 
@@ -67,6 +77,20 @@ Um einen Export zu prüfen, öffnen Sie **Exporte → Export prüfen** und wähl
 Bewahren Sie das Manifest beim Weitergeben eines Exports zusammen mit dem Video auf. Jeder kann die Signatur ohne LarisVMS prüfen: Speichern Sie den `publicKeyPem` des Manifests als `key.pem`, seinen Text `signedPayload` als `payload.txt` und sein Base64-dekodiertes `signatureDer` als `sig.der` und führen Sie dann `openssl dgst -sha256 -verify key.pem -signature sig.der payload.txt` aus. Aufnahmen, die vor dieser Funktion aufgezeichnet wurden, haben keine Fingerabdrücke, daher kann nur der Export selbst geprüft werden.
 
 Die Signierung ist immer aktiv. Der Signaturschlüssel des Servers, mit Download seines öffentlichen Schlüssels, befindet sich unter **Einstellungen → Verschlüsselung und Signierung**.
+
+### Eigenständiger Player
+
+Um Material an jemanden ohne LarisVMS weiterzugeben, etwa an Ermittler, Polizei oder Anwälte, aktivieren Sie im Exportbereich **Eigenständigen Player beilegen** (oder senden Sie `includePlayer` an die [API](/Help/api)). Ist der Export fertig, lädt **📦 Mit Player herunterladen** auf der Seite Exporte eine ZIP-Datei herunter mit:
+
+- **Player.html**, die sich direkt aus dem entpackten Ordner in Chrome, Edge, Firefox oder Safari öffnen lässt, ohne Installation und ohne Internet;
+- dem Video jeder Kamera sowie den Ereignissen, Lesezeichen und Beweissicherungen im Zeitraum, mit dem Exportprotokoll;
+- dem signierten Manifest jedes Videos und **package.manifest.json**, einer signierten Liste aller Dateien im Paket.
+
+Ziehen Sie im Player Kameras in ein Raster mit bis zu 16 Kacheln und spielen Sie sie gemeinsam auf einer Zeitleiste ab: Geschwindigkeit von 1/8× bis 16×, Einzelbildschritte, Sprünge zwischen Ereignissen, Zoom in eine Kachel und Erkennungsrahmen. **Ereignisse** listet jede Bewegung und Erkennung, **Info** zeigt die Details und das Protokoll des Exports, und **Prüfen** vergleicht den ganzen Ordner mit seiner signierten Liste und die Aufnahmekette jeder Kamera, alles auf diesem Computer. Zeiten lassen sich in der Zone dieses Computers, des Standorts oder in UTC anzeigen.
+
+Manche Browser können H.265-Video nicht abspielen. **Zusätzlich eine H.264-Kopie von H.265-Video erstellen** (standardmäßig aktiv) fügt für jede H.265-Kamera eine Kopie hinzu, die überall läuft. Das Original bleibt erhalten, und beide stehen in der signierten Liste. Das dauert länger, weil der Rekorder das Video neu kodiert.
+
+Der Download wird beim Herunterladen von den Rekordern zusammengestellt. Wurde eine Datei auf ihrem Rekorder nach dem Export geändert, bricht der Download ab, statt sie mitzuliefern.
 
 ## Lesezeichen
 

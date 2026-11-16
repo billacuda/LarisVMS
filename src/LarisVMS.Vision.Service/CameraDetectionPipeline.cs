@@ -532,7 +532,9 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         // Per-family tracker tuning, anchored to this camera's own detection confidence — see
         // ByteTrackOptions.ForFamily for why the tracker's gates must follow the configured
         // confidence rather than sit at fixed values above it.
-        var trackerOptions = ByteTrackOptions.ForFamily(modelFamily, request.Confidence);
+        // Detection boxes are in the camera's own pixel space, so that's the frame the tracker checks
+        // a box against to tell whether it's cut off at the edge.
+        var trackerOptions = ByteTrackOptions.ForFamily(modelFamily, request.Confidence, _sourceWidth, _sourceHeight);
         _trackerNewTrackThreshold = trackerOptions.HighThreshold;
         _tracker = new ByteTracker(trackerOptions);
 

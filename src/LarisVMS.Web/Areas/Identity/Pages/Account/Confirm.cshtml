@@ -36,7 +36,7 @@
         }
         else
         {
-            <p>@L["account.confirm.signInAgainIntro"]</p>
+            <p>@L["account.confirm.signInAgainIntro", new { provider = Model.ProviderName }]</p>
             <form method="post" asp-page-handler="SignInAgain">
                 <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
                 <button type="submit" class="btn btn-primary w-100">@L["account.confirm.signInAgain"]</button>

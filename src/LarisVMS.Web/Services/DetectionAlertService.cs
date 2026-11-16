@@ -89,7 +89,7 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
                 _handled[key] = now;
                 var first = matched[0];
                 var count = matched.Count;
-                await FireAsync(rule, e.CameraId, null, (camera, _, _) =>
+                await FireAsync(rule, e.CameraId, null, Details(rule, e, first.Label, null), (camera, _, _) =>
                 {
                     var what = DetectionAlertMatcher.Describe(e.Category, e.Label, first);
                     return count > 1
@@ -107,7 +107,7 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
                 if (fast.Count == 0) continue;
                 foreach (var o in fast) _handled[$"{rule.Id}:{e.SpanId}:{o.TrackId}"] = now;
                 var top = fast[0];
-                await FireAsync(rule, e.CameraId, top.SpeedTrapId, (camera, units, trap) => Loc.T(trap is null ? "alerts.speeding" : "alerts.speedingAtTrap", new
+                await FireAsync(rule, e.CameraId, top.SpeedTrapId, Details(rule, e, top.Label, top.SpeedKph), (camera, units, trap) => Loc.T(trap is null ? "alerts.speeding" : "alerts.speedingAtTrap", new
                 {
                     what = DetectionAlertMatcher.Describe(e.Category, e.Label, top),
                     speed = SpeedUnits.Format(top.SpeedKph!.Value, units),
@@ -134,7 +134,8 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
             if (_handled.ContainsKey(key)) continue;
             _handled[key] = now;
             var zone = rule.MotionZoneName;
-            await FireAsync(rule, m.CameraId, null, (camera, _, _) => zone is null
+            await FireAsync(rule, m.CameraId, null, new AlertEventDetails(rule.Condition, m.CameraId, SpanId: m.SpanId, StartedUtc: m.StartUtc),
+                (camera, _, _) => zone is null
                 ? Loc.T("alerts.motion", new { camera })
                 : Loc.T("alerts.motionInZone", new { camera, zone }), now, ct);
         }
@@ -143,7 +144,7 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
     /// <summary>Re-reads the rule (cooldown, deliveries) and fires it if the cooldown allows.
     /// <paramref name="message"/> gets the camera name, the speed units setting and the speed trap's
     /// name (null when there's no trap), and builds the text in the current UI language.</summary>
-    private async Task FireAsync(DetectionRule rule, Guid cameraId, Guid? speedTrapId,
+    private async Task FireAsync(DetectionRule rule, Guid cameraId, Guid? speedTrapId, AlertEventDetails details,
         Func<string, string, string?, string> message, DateTime now, CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
@@ -170,7 +171,9 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
         entity.LastFiredAt = now;
         await db.SaveChangesAsync(ct);
 
-        var cameraName = await db.Cameras.Where(c => c.Id == cameraId).Select(c => c.Name).FirstOrDefaultAsync(ct) ?? Loc.T("common.deletedCamera");
+        var cameraRow = await db.Cameras.Where(c => c.Id == cameraId).Select(c => new { c.Name, c.NodeId, NodeName = c.Node != null ? c.Node.Name : null }).FirstOrDefaultAsync(ct);
+        var cameraName = cameraRow?.Name ?? Loc.T("common.deletedCamera");
+        details = details with { CameraName = cameraRow?.Name, NodeId = cameraRow?.NodeId, NodeName = cameraRow?.NodeName };
         var units = await scope.ServiceProvider.GetRequiredService<ISettingsResolver>()
             .GetAsync(SpeedUnits.SettingKey, SpeedUnits.Default, ct: ct);
         var trapName = speedTrapId is { } trapId
@@ -180,8 +183,15 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
             scope.ServiceProvider.GetRequiredService<AlertChannelSenderFactory>(),
             scope.ServiceProvider.GetRequiredService<IAuditService>(), logger, ct,
             scope.ServiceProvider.GetRequiredService<INotificationService>(), cameraId,
-            $"/Playback?cameraId={cameraId}&atUtc={now:o}");
+            $"/Playback?cameraId={cameraId}&atUtc={now:o}", details);
     }
+
+    /// <summary>What a detection alert is about, for the webhook. The label is the matched object's
+    /// (or the span's when the object has none).</summary>
+    private static AlertEventDetails Details(DetectionRule rule, DetectionEvent e, string? objectLabel, double? speedKph) =>
+        new(rule.Condition, e.CameraId, Category: e.Category,
+            Label: string.IsNullOrEmpty(objectLabel) ? e.Label : objectLabel,
+            SpanId: e.SpanId, StartedUtc: e.StartUtc, SpeedKph: speedKph);
 
     // Per-camera cooldowns for multi-camera rules: "{ruleId}:{cameraId}" → last fired. In-process,
     // like _handled; after a restart a multi-camera rule may fire once more per camera.

@@ -141,7 +141,10 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
         var request = new ExportRequest(candidate.ExportItemId, candidate.CameraId, segmentPaths, outputFileName,
             talkClips.Count > 0 ? talkClips : null, segmentsStart, segments.Any(s => s.HasAudio), candidate.RedactionJson,
             // Tamper evidence: the node re-hashes each source file against these before exporting.
-            segments.Select(s => s.ContentSha256).ToList());
+            segments.Select(s => s.ContentSha256).ToList(),
+            // The standalone player's H.264 copy: only H.265 needs it, and a redacted export is
+            // already re-encoded to H.264.
+            ConvertToH264: candidate.ConvertH265 && candidate.RedactionJson is null && segments.Any(s => IsH265(s.Codec)));
 
         // Marked Running *before* the POST, not after — the node is expected to return 202 quickly
         // and may finish (and report completion) before this method would otherwise get around to
@@ -197,4 +200,11 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
             ? $"{safeName}_{fromUtc:yyyyMMddTHHmmss}_{toUtc:yyyyMMddTHHmmss}.mp4"
             : $"{safeName}_{safeNode}_{fromUtc:yyyyMMddTHHmmss}_{toUtc:yyyyMMddTHHmmss}.mp4";
     }
+
+    /// <summary>Whether a recorded codec name is H.265, which not every browser plays.</summary>
+    internal static bool IsH265(string? codec) =>
+        codec is not null && (codec.Contains("hevc", StringComparison.OrdinalIgnoreCase)
+            || codec.Contains("265", StringComparison.Ordinal)
+            || codec.StartsWith("hvc1", StringComparison.OrdinalIgnoreCase)
+            || codec.StartsWith("hev1", StringComparison.OrdinalIgnoreCase));
 }

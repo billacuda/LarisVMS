@@ -1,0 +1,320 @@
+@page "/Admin/Settings/HomeAssistant"
+@attribute [Authorize("Settings.Edit")]
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using LarisVMS.Core
+@using LarisVMS.Core.Entities
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Infrastructure.Data
+@using LarisVMS.Web.Services
+@using LarisVMS.Web.Services.HomeAssistant
+@inject ApplicationDbContext Db
+@inject IAuditService AuditService
+@inject IPermissionService Permissions
+@inject ICameraAccessService CameraAccess
+@inject HomeAssistantBridge Bridge
+
+<PageTitle>@L["settings.tabs.homeAssistant"] - @AppName</PageTitle>
+
+<h1>@L["nav.settings"]</h1>
+<SettingsTabs ActiveKey="HomeAssistant" />
+
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success" role="status">@SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
+}
+
+<div class="lv-page-narrow">
+<p class="text-muted">@L["settings.homeAssistant.intro"] <a href="/Help/home-assistant">@L["common.learnMore"]</a></p>
+@* Experimental: people use Home Assistant for too many different things to guess them all, so the
+   page asks for feedback directly. *@
+<div class="alert alert-info d-flex flex-wrap align-items-center gap-2" role="note">
+    <span class="badge text-bg-warning">@L["settings.homeAssistant.experimental"]</span>
+    <span class="flex-grow-1">@L["settings.homeAssistant.experimentalNotice"]</span>
+    <a class="btn btn-sm btn-outline-primary" href="https://github.com/billacuda/LarisVMS/discussions/new?category=general&amp;title=Home%20Assistant%20feedback" target="_blank" rel="noopener">@L["settings.homeAssistant.shareFeedback"]</a>
+</div>
+
+<EditForm Model="this" FormName="home-assistant-settings" OnSubmit="HandleSubmitAsync" data-dirty-guard>
+    <SettingSection Title="@L["settings.homeAssistant.mqttBroker"]" Subtitle="@L["settings.homeAssistant.mqttBrokerSubtitle"]">
+        <SettingField Label="@L["common.status"]" Wide>
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="Enabled" class="form-check-input" id="haEnabled" />
+                <label class="form-check-label" for="haEnabled">@L["common.enabled"]</label>
+            </div>
+            <div class="small @StatusClass">@StatusText</div>
+        </SettingField>
+        <SettingField For="field-haHost" Label="@L["settings.homeAssistant.brokerHost"]" Hint="@L["settings.homeAssistant.brokerHostHint"]" ShowWhen="Enabled=true">
+            <InputText id="field-haHost" @bind-Value="BrokerHost" class="form-control font-monospace" placeholder="homeassistant.local" autocomplete="off" />
+        </SettingField>
+        <SettingField For="field-haPort" Label="@L["common.port"]" ShowWhen="Enabled=true">
+            <InputNumber id="field-haPort" @bind-Value="BrokerPort" class="form-control" min="1" max="65535" />
+        </SettingField>
+        <SettingField Label="TLS" Wide ShowWhen="Enabled=true" Hint="@L["settings.homeAssistant.tlsHint"]">
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="UseTls" class="form-check-input" id="haTls" />
+                <label class="form-check-label" for="haTls">@L["settings.homeAssistant.useTls"]</label>
+            </div>
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="AllowUntrusted" class="form-check-input" id="haUntrusted" />
+                <label class="form-check-label" for="haUntrusted">@L["settings.homeAssistant.allowUntrusted"]</label>
+            </div>
+        </SettingField>
+        <SettingField For="field-haUser" Label="@L["common.username"]" ShowWhen="Enabled=true">
+            <InputText id="field-haUser" @bind-Value="Username" class="form-control" autocomplete="off" />
+        </SettingField>
+        <SettingField For="field-haPassword" Label="@L["common.password"]" Hint="@L["settings.security.leaveBlankToKeepThe"]" ShowWhen="Enabled=true">
+            <InputText id="field-haPassword" @bind-Value="Password" type="password" class="form-control" autocomplete="new-password"
+                       placeholder="@(HasStoredPassword ? L["cameras.edit.unchanged"].Value : "")" />
+        </SettingField>
+    </SettingSection>
+
+    <SettingSection Title="@L["settings.homeAssistant.whatToPublish"]">
+        <SettingField For="field-haRole" Label="@L["settings.homeAssistant.role"]" Hint="@L["settings.homeAssistant.roleHint"]" ShowWhen="Enabled=true">
+            <InputSelect id="field-haRole" @bind-Value="RoleId" class="form-select">
+                <option value="">@L["settings.homeAssistant.chooseRole"]</option>
+                @foreach (var role in Roles)
+                {
+                    <option value="@role.Id">@role.Name</option>
+                }
+            </InputSelect>
+        </SettingField>
+        <SettingField For="field-haPrefix" Label="@L["settings.homeAssistant.topicPrefix"]" Hint="@L["settings.homeAssistant.topicPrefixHint"]" ShowWhen="Enabled=true">
+            <InputText id="field-haPrefix" @bind-Value="TopicPrefix" class="form-control font-monospace" placeholder="@HomeAssistantSettings.DefaultTopicPrefix" />
+        </SettingField>
+        <SettingField For="field-haDiscovery" Label="@L["settings.homeAssistant.discoveryPrefix"]" Hint="@L["settings.homeAssistant.discoveryPrefixHint"]" ShowWhen="Enabled=true">
+            <InputText id="field-haDiscovery" @bind-Value="DiscoveryPrefix" class="form-control font-monospace" placeholder="@HomeAssistantSettings.DefaultDiscoveryPrefix" />
+        </SettingField>
+    </SettingSection>
+
+    <div class="lv-savebar">
+        <button type="submit" name="Action" value="save" class="btn btn-primary">@L["common.save"]</button>
+        <button type="submit" name="Action" value="test" class="btn btn-outline-secondary">@L["settings.homeAssistant.testConnection"]</button>
+    </div>
+</EditForm>
+
+@if (StreamCameras is not null)
+{
+    <h2 class="h5 mt-4" id="streams">@L["settings.homeAssistant.streamsTitle"]</h2>
+    <p class="text-muted small">@L["settings.homeAssistant.streamsIntro", new { user = ApiKeyAuthMiddlewareUser }]</p>
+    @if (!RoleCanStream)
+    {
+        <div class="alert alert-warning small">@L["settings.homeAssistant.noLiveStream"]</div>
+    }
+    @if (StreamCameras.Count == 0)
+    {
+        <p class="text-muted">@L["settings.homeAssistant.noCameras"]</p>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-sm small align-middle">
+                <thead><tr><th>@L["common.camera"]</th><th>@L["settings.homeAssistant.stillImage"]</th><th>@L["settings.homeAssistant.streamSource"]</th></tr></thead>
+                <tbody>
+                    @foreach (var camera in StreamCameras)
+                    {
+                        <tr>
+                            <td>@camera.Name</td>
+                            <td><code class="text-break user-select-all">@($"{BaseUrl}/api/v1/cameras/{camera.Id}/thumbnail/latest")</code></td>
+                            <td><code class="text-break user-select-all">@($"{BaseUrl}/api/v1/cameras/{camera.Id}/stream.mp4")</code></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+</div>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromForm(FormName = "home-assistant-settings")] private string? Action { get; set; }
+    [SupplyParameterFromForm(FormName = "home-assistant-settings")] private bool Enabled { get; set; }
+    [SupplyParameterFromForm(FormName = "home-assistant-settings")] private string? BrokerHost { get; set; }
+    [SupplyParameterFromForm(FormName = "home-assistant-settings")] private int BrokerPort { get; set; }
+    [SupplyParameterFromForm(FormName = "home-assistant-settings")] private bool UseTls { get; set; }
+    [SupplyParameterFromForm(FormName = "home-assistant-settings")] private bool AllowUntrusted { get; set; }
+    [SupplyParameterFromForm(FormName = "home-assistant-settings")] private string? Username { get; set; }
+    // Blank on save means "leave unchanged"; the stored value never goes back to the browser.
+    [SupplyParameterFromForm(FormName = "home-assistant-settings")] private string? Password { get; set; }
+    [SupplyParameterFromForm(FormName = "home-assistant-settings")] private string? RoleId { get; set; }
+    [SupplyParameterFromForm(FormName = "home-assistant-settings")] private string? TopicPrefix { get; set; }
+    [SupplyParameterFromForm(FormName = "home-assistant-settings")] private string? DiscoveryPrefix { get; set; }
+
+    private bool HasStoredPassword;
+    private List<(string Id, string Name)> Roles = [];
+    private List<(Guid Id, string Name)>? StreamCameras;
+    private bool RoleCanStream;
+    private string BaseUrl => $"https://{HttpContext?.Request.Host}";
+    private static string ApiKeyAuthMiddlewareUser => LarisVMS.Web.Middleware.ApiKeyAuthMiddleware.BasicUserName;
+    private string? SavedMessage;
+    private string? ErrorMessage;
+
+    private string StatusText
+    {
+        get
+        {
+            var status = Bridge.Status;
+            return status.State switch
+            {
+                HomeAssistantBridgeState.Connected => L.Plural("settings.homeAssistant.statusConnected", status.Cameras),
+                HomeAssistantBridgeState.Connecting => Loc.T("settings.homeAssistant.statusConnecting"),
+                HomeAssistantBridgeState.Error => Loc.T("settings.homeAssistant.statusError", new { error = status.LastError }),
+                _ => Loc.T("settings.homeAssistant.statusOff"),
+            };
+        }
+    }
+
+    private string StatusClass => Bridge.Status.State switch
+    {
+        HomeAssistantBridgeState.Connected => "text-success",
+        HomeAssistantBridgeState.Error => "text-danger",
+        _ => "text-muted",
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        Roles = (await Db.Roles.AsNoTracking().OrderBy(r => r.Name).Select(r => new { r.Id, r.Name }).ToListAsync())
+            .Select(r => (r.Id, r.Name ?? r.Id)).ToList();
+        var settings = await Db.HomeAssistantSettings.AsNoTracking().FirstOrDefaultAsync();
+        HasStoredPassword = !string.IsNullOrEmpty(settings?.Password);
+        await LoadStreamsAsync(settings?.RoleId);
+
+        // Skip the form fields on a POST: the submitted values are already bound.
+        if (HttpContext?.Request.HasFormContentType == true) return;
+        Enabled = settings?.IsEnabled ?? false;
+        BrokerHost = settings?.BrokerHost;
+        BrokerPort = settings?.BrokerPort ?? HomeAssistantSettings.DefaultPort;
+        UseTls = settings?.UseTls ?? false;
+        AllowUntrusted = settings?.AllowUntrustedCertificate ?? false;
+        Username = settings?.Username;
+        RoleId = settings?.RoleId;
+        TopicPrefix = settings?.TopicPrefix ?? HomeAssistantSettings.DefaultTopicPrefix;
+        DiscoveryPrefix = settings?.DiscoveryPrefix ?? HomeAssistantSettings.DefaultDiscoveryPrefix;
+    }
+
+    /// <summary>The cameras the chosen role can view, with their Generic Camera addresses.</summary>
+    private async Task LoadStreamsAsync(string? roleId)
+    {
+        StreamCameras = null;
+        if (string.IsNullOrEmpty(roleId)) return;
+        var roleName = await Db.Roles.AsNoTracking().Where(r => r.Id == roleId).Select(r => r.Name).FirstOrDefaultAsync();
+        if (roleName is null) return;
+        var principal = HomeAssistantBridge.BuildPrincipal(roleName);
+        var viewable = await CameraAccess.GetAccessibleCameraIdsAsync(principal, LarisVMS.Core.Enums.CameraAccessActions.View);
+        StreamCameras = (await Db.Cameras.AsNoTracking()
+                .Where(c => c.IsEnabled && (viewable == null || viewable.Contains(c.Id)))
+                .OrderBy(c => c.Name).Select(c => new { c.Id, c.Name }).ToListAsync())
+            .Select(c => (c.Id, c.Name)).ToList();
+        RoleCanStream = await Permissions.HasPermissionForRoleNameAsync(roleName, "Live", "Stream");
+    }
+
+    private HomeAssistantSettings FromForm(HomeAssistantSettings? existing) => new()
+    {
+        Id = existing?.Id ?? Guid.NewGuid(),
+        IsEnabled = Enabled,
+        BrokerHost = string.IsNullOrWhiteSpace(BrokerHost) ? null : BrokerHost.Trim(),
+        BrokerPort = BrokerPort,
+        UseTls = UseTls,
+        AllowUntrustedCertificate = AllowUntrusted,
+        Username = string.IsNullOrWhiteSpace(Username) ? null : Username.Trim(),
+        Password = string.IsNullOrEmpty(Password) ? existing?.Password : Password,
+        RoleId = string.IsNullOrEmpty(RoleId) ? null : RoleId,
+        TopicPrefix = HaTopics.Clean(TopicPrefix, HomeAssistantSettings.DefaultTopicPrefix),
+        DiscoveryPrefix = HaTopics.Clean(DiscoveryPrefix, HomeAssistantSettings.DefaultDiscoveryPrefix),
+    };
+
+    private async Task HandleSubmitAsync()
+    {
+        var existing = await Db.HomeAssistantSettings.FirstOrDefaultAsync();
+        HasStoredPassword = !string.IsNullOrEmpty(existing?.Password);
+        var form = FromForm(existing);
+
+        if (BrokerPort is < 1 or > 65535)
+        {
+            ErrorMessage = Loc.T("settings.homeAssistant.badPort");
+            return;
+        }
+
+        if (Action == "test")
+        {
+            if (string.IsNullOrWhiteSpace(form.BrokerHost))
+            {
+                ErrorMessage = Loc.T("settings.homeAssistant.enterBroker");
+                return;
+            }
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var error = await HomeAssistantBridge.TestAsync(form, timeout.Token);
+            if (error is null) SavedMessage = Loc.T("settings.homeAssistant.testOk");
+            else ErrorMessage = Loc.T("settings.homeAssistant.testFailed", new { error });
+            Password = null;
+            return;
+        }
+
+        if (Enabled && (string.IsNullOrWhiteSpace(form.BrokerHost) || form.RoleId is null))
+        {
+            ErrorMessage = Loc.T("settings.homeAssistant.enterBroker");
+            return;
+        }
+        if (form.RoleId is not null && !Roles.Any(r => r.Id == form.RoleId))
+        {
+            ErrorMessage = Loc.T("settings.homeAssistant.roleMissing");
+            return;
+        }
+
+        var user = AuthenticationStateTask is not null ? (await AuthenticationStateTask).User : new ClaimsPrincipal(new ClaimsIdentity());
+        var by = user.Identity?.Name;
+        string? RoleName(string? id) => id is null ? null : Roles.FirstOrDefault(r => r.Id == id).Name;
+
+        var details = AuditDiff.Build(
+            AuditDiff.Of("Home Assistant enabled", (existing?.IsEnabled ?? false).ToString(), form.IsEnabled.ToString()),
+            AuditDiff.Of("MQTT broker", $"{existing?.BrokerHost}:{existing?.BrokerPort}", $"{form.BrokerHost}:{form.BrokerPort}"),
+            AuditDiff.Of("MQTT TLS", (existing?.UseTls ?? false).ToString(), form.UseTls.ToString()),
+            AuditDiff.Of("MQTT accepts self-signed certificate", (existing?.AllowUntrustedCertificate ?? false).ToString(), form.AllowUntrustedCertificate.ToString()),
+            AuditDiff.Of("MQTT user name", existing?.Username ?? "", form.Username ?? ""),
+            AuditDiff.Of("Home Assistant role", RoleName(existing?.RoleId) ?? "", RoleName(form.RoleId) ?? ""),
+            AuditDiff.Of("MQTT topic prefix", existing?.TopicPrefix ?? "", form.TopicPrefix),
+            AuditDiff.Of("MQTT discovery prefix", existing?.DiscoveryPrefix ?? "", form.DiscoveryPrefix),
+            AuditDiff.SecretChanged("MQTT password", !string.IsNullOrEmpty(Password)));
+
+        if (existing is null)
+        {
+            form.LastModifiedAt = DateTime.UtcNow;
+            form.LastModifiedBy = by;
+            Db.HomeAssistantSettings.Add(form);
+        }
+        else
+        {
+            existing.IsEnabled = form.IsEnabled;
+            existing.BrokerHost = form.BrokerHost;
+            existing.BrokerPort = form.BrokerPort;
+            existing.UseTls = form.UseTls;
+            existing.AllowUntrustedCertificate = form.AllowUntrustedCertificate;
+            existing.Username = form.Username;
+            existing.Password = form.Password;
+            existing.RoleId = form.RoleId;
+            existing.TopicPrefix = form.TopicPrefix;
+            existing.DiscoveryPrefix = form.DiscoveryPrefix;
+            existing.LastModifiedAt = DateTime.UtcNow;
+            existing.LastModifiedBy = by;
+        }
+        await Db.SaveChangesAsync();
+        Bridge.Reload();
+
+        await AuditService.LogAsync("Settings.Update", user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
+            HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
+
+        Password = null;
+        HasStoredPassword = !string.IsNullOrEmpty(form.Password);
+        TopicPrefix = form.TopicPrefix;
+        DiscoveryPrefix = form.DiscoveryPrefix;
+        await LoadStreamsAsync(form.RoleId);
+        SavedMessage = form.IsEnabled ? Loc.T("settings.homeAssistant.savedReconnecting") : Loc.T("common.saved");
+    }
+}

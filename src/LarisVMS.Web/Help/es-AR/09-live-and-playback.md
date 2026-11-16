@@ -4,7 +4,17 @@ Vistas, mosaicos en vivo, la línea de tiempo de reproducción, exportaciones, m
 
 ## Vistas
 
-Una **vista** es un diseño de cámaras guardado. Armá vistas en **Vistas** arrastrando y cambiando el tamaño de mosaicos. **En vivo** y **Reproducción** muestran una vista. En teléfonos, el diseño se colapsa a una o dos columnas. Las vistas pueden correr a pantalla completa en modo kiosco, o rotar entre varias vistas con un temporizador. Una vista compartida la puede usar cualquiera que vea vistas, pero solo su dueño o un administrador puede cambiarla o eliminarla.
+Una **vista** es un diseño de cámaras guardado. Armá vistas en **Vistas** arrastrando y cambiando el tamaño de mosaicos. **En vivo** y **Reproducción** muestran una vista. En teléfonos, el diseño se colapsa a una o dos columnas. Las vistas pueden correr a pantalla completa en modo kiosco, o rotar entre varias vistas con un temporizador.
+
+Las vistas se guardan en carpetas, y las carpetas pueden contener más carpetas:
+
+- **Privadas** tiene tus propias vistas. Solo vos las ves.
+- Cada rol tiene una carpeta que ven todos los miembros del rol. Los miembros que además tienen el permiso **Vistas → Editar** pueden agregar, cambiar, renombrar, mover y eliminar vistas y carpetas ahí. Un Super Admin puede cambiar la carpeta de cualquier rol.
+- Un administrador puede permitir que un rol abra las vistas de otro rol en **Configuración → Acceso a vistas**. Esas vistas se pueden abrir, pero no cambiar; para que alguien pueda cambiarlas, agregalo al rol. Los roles no pueden compartir sus propias vistas.
+
+Hacé clic derecho en una vista o carpeta (o presioná la tecla de menú o Mayús+F10, o mantené presionado en una pantalla táctil) para abrirla, editarla, renombrarla, copiarla, cortarla, pegar o eliminarla. Arrastrá una vista o carpeta sobre una carpeta para moverla. Mover algo dentro de la carpeta del mismo rol, o dentro de tu carpeta Privadas, pregunta primero, salvo que elijas **No volver a preguntar hasta que cierre la sesión**. Mover algo a la carpeta de otro rol siempre pregunta, porque quienes no están en ese rol dejan de verlo. Al eliminar una carpeta, su contenido se conserva: sus vistas y carpetas suben un nivel.
+
+Los nombres son únicos dentro de la carpeta de cada rol y dentro de tu carpeta Privadas, contando todas las carpetas internas. Una copia pegada donde su nombre ya se usa se llama "*nombre* - copia" (después "- copia 2", y así). Desde ese momento es una vista aparte: renombrar o cambiar una no cambia la otra. Cuando se elimina un rol, sus vistas pasan a la carpeta Privadas del administrador que lo eliminó.
 
 ## Mosaicos en vivo
 
@@ -25,7 +35,7 @@ Las cámaras con altavoz muestran un botón 🎙️ en su mosaico en vivo. Mante
 
 - Tu navegador pide acceso al micrófono la primera vez. Solo lo permite cuando el sitio se abre por **HTTPS**; ver [Certificados](/Help/security#certificates).
 - Solo una persona puede hablar por una cámara a la vez.
-- Necesita el permiso **Hablar** en la cámara (**Configuración → Acceso a cámaras**). La cámara debe soportar audio bidireccional ONVIF (una salida de audio en su perfil ONVIF). Las cámaras Dahua, Amcrest, Lorex y EmpireTech cuyo firmware no ofrece eso vuelven a la API de audio propia de la cámara.
+- Necesita el permiso **Hablar** en la cámara (**Configuración → Acceso a cámaras**). La cámara debe soportar audio bidireccional ONVIF (una salida de audio en su perfil ONVIF). Las cámaras Dahua, Amcrest, Lorex y EmpireTech cuyo firmware no ofrece eso vuelven a la API de audio propia de la cámara. Si la conexión se establece pero no sale nada del parlante, en la página de edición de la cámara poné **Audio bidireccional → Método para hablar** en **API de audio propia de la cámara**.
 - Todo lo que se dice se graba. El micrófono propio de la cámara es parte de la grabación de video como siempre, y cada presión del botón se guarda junto a las grabaciones. Las presiones se muestran en la línea de tiempo de reproducción en verde azulado y se reproducen sincronizadas con el video, usando el volumen del mosaico. Las exportaciones las incluyen, mezcladas con el audio propio de la cámara. Se conservan tanto como las grabaciones de la cámara.
 - Cada sesión se escribe en el registro de auditoría.
 
@@ -67,6 +77,20 @@ Para verificar una exportación, abrí **Exportaciones → Verificar una exporta
 Quedate con el manifiesto junto al video cuando entregás una exportación. Cualquiera puede verificar la firma sin LarisVMS: guardá el `publicKeyPem` del manifiesto como `key.pem`, su texto `signedPayload` como `payload.txt`, y su `signatureDer` decodificado de base64 como `sig.der`, y después ejecutá `openssl dgst -sha256 -verify key.pem -signature sig.der payload.txt`. Las grabaciones hechas antes de esta función no tienen huellas, así que solo se puede verificar la propia exportación.
 
 La firma siempre está activada. La clave de firma del servidor, con una descarga de su clave pública, está en **Configuración → Cifrado y firma**.
+
+### Reproductor independiente
+
+Para entregar grabaciones a alguien sin LarisVMS, como investigadores, la policía o abogados, marcá **Incluir el reproductor independiente** en el panel de exportación (o mandá `includePlayer` a la [API](/Help/api)). Cuando termina la exportación, **📦 Descargar con reproductor** en la página Exportaciones descarga un solo zip con:
+
+- **Player.html**, que se abre directamente desde la carpeta descomprimida en Chrome, Edge, Firefox o Safari, sin instalar nada y sin internet;
+- el video de cada cámara, y los eventos, marcadores y bloqueos de evidencia del rango, con el registro de la exportación;
+- el manifiesto firmado de cada video, y **package.manifest.json**, una lista firmada de todos los archivos del paquete.
+
+En el reproductor, arrastrá cámaras a una cuadrícula de hasta 16 y reproducilas juntas en una sola línea de tiempo: cambiá la velocidad de 1/8× a 16×, avanzá cuadro por cuadro, saltá entre eventos, hacé zoom en un recuadro y mostrá los recuadros de detección. **Eventos** lista cada movimiento y detección, **Información** muestra los datos y el registro de la exportación, y **Verificar** compara toda la carpeta con su lista firmada y la cadena de grabaciones de cada cámara, todo en esa computadora. Las horas se pueden mostrar en la zona de esa computadora, la del sitio o UTC.
+
+Algunos navegadores no pueden reproducir video H.265. **Hacer además una copia H.264 del video H.265** (activado de forma predeterminada) agrega una copia del video de cada cámara H.265 que se reproduce en cualquier lado. Se conserva el original, y los dos están en la lista firmada. Tarda más, porque el grabador vuelve a codificar el video.
+
+La descarga se arma desde los grabadores sobre la marcha. Si un archivo cambió en su grabador después de la exportación, la descarga se detiene en vez de incluirlo.
 
 ## Marcadores
 

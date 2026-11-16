@@ -2287,6 +2287,13 @@
 
         var submitBtn = opts.exportSubmitId && document.getElementById(opts.exportSubmitId);
         if (submitBtn) submitBtn.addEventListener('click', submitExport);
+
+        // The H.264 choice only matters with the standalone player.
+        var playerEl = opts.exportPlayerId && document.getElementById(opts.exportPlayerId);
+        var convertRow = opts.exportConvertRowId && document.getElementById(opts.exportConvertRowId);
+        if (playerEl && convertRow) {
+            playerEl.addEventListener('change', function () { convertRow.classList.toggle('d-none', !playerEl.checked); });
+        }
     }
 
     // Per camera, polygons to black out in its export (redaction-editor.js); kept while the page is
@@ -2379,6 +2386,9 @@
 
         setStatus(larisvmsI18n.t('js.playbackPlayer.starting'), null);
         if (submitBtn) submitBtn.disabled = true;
+        var playerEl = opts.exportPlayerId && document.getElementById(opts.exportPlayerId);
+        var convertEl = opts.exportConvertId && document.getElementById(opts.exportConvertId);
+        var includePlayer = !!(playerEl && playerEl.checked);
 
         fetch('/api/exports', {
             method: 'POST',
@@ -2390,7 +2400,9 @@
                 redactions: cameraIds.reduce(function (acc, id) {
                     if (exportRedactions[id] && exportRedactions[id].length) acc[id] = exportRedactions[id];
                     return acc;
-                }, {})
+                }, {}),
+                includePlayer: includePlayer,
+                convertH265: includePlayer && !!(convertEl && convertEl.checked)
             })
         }).then(function (resp) {
             if (!resp.ok) return resp.text().then(function (t) { throw new Error(t || ('HTTP ' + resp.status)); });

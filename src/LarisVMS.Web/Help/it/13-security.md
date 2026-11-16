@@ -48,7 +48,7 @@ Questi controlli si frappongono tra un download e un’installazione in esecuzio
 
 ## Segreti cifrati
 
-Credenziali delle telecamere, credenziali SMB, chiavi dei nodi, segreti e-mail, il segreto client Entra e la password dell’account di servizio Active Directory sono cifrati nel database, usando le chiavi di protezione dei dati in `%ProgramData%\LarisVMS\keys`. Solo SYSTEM, Administrators e gli account dei servizi LarisVMS possono aprire `%ProgramData%\LarisVMS`: qualsiasi altro accesso trovato lì, come una cartella creata da un utente locale prima dell’installazione di LarisVMS, viene rimosso all’avvio di un servizio. Faccia il backup di quella cartella e non la elimini mai durante un deploy.
+Credenziali delle telecamere, credenziali SMB, chiavi dei nodi, segreti e-mail, i segreti client di Entra e Google e la password dell’account di servizio Active Directory sono cifrati nel database, usando le chiavi di protezione dei dati in `%ProgramData%\LarisVMS\keys`. Solo SYSTEM, Administrators e gli account dei servizi LarisVMS possono aprire `%ProgramData%\LarisVMS`: qualsiasi altro accesso trovato lì, come una cartella creata da un utente locale prima dell’installazione di LarisVMS, viene rimosso all’avvio di un servizio. Faccia il backup di quella cartella e non la elimini mai durante un deploy.
 
 ## Protezione aggiuntiva per le aziende
 

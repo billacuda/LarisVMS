@@ -9,8 +9,12 @@ namespace LarisVMS.Core.Dtos;
 /// own range params.</summary>
 /// <summary>Redactions: per camera, polygons to black out in that camera's export — each polygon a list
 /// of [x, y] points in 0..1 frame coordinates (rectangles arrive as four points).</summary>
+/// <summary>IncludePlayer: download as a package with the standalone player (off by default).
+/// ConvertH265: with the player, also make an H.264 copy of H.265 video so any browser plays it.</summary>
 public record CreateExportRequest(List<Guid> CameraIds, DateTime FromUtc, DateTime ToUtc,
-    Dictionary<Guid, List<List<double[]>>>? Redactions = null);
+    Dictionary<Guid, List<List<double[]>>>? Redactions = null,
+    bool IncludePlayer = false,
+    bool ConvertH265 = true);
 
 /// <summary>How much one export request may ask for, so a single request can't tie up the recorders
 /// for days: enough for a whole site for a while, or a few cameras for a month.</summary>
@@ -51,7 +55,10 @@ public record ExportRequest(Guid ExportItemId, Guid CameraId, List<string> Segme
     /// <summary>Each segment's recorded content hash, parallel to SegmentFilePaths (null where none
     /// was recorded). The node re-hashes every file before exporting and reports whether it still
     /// matches — the export manifest's "unchanged since recording" check.</summary>
-    List<string?>? SegmentSha256 = null);
+    List<string?>? SegmentSha256 = null,
+    /// <summary>Also write an H.264 copy beside the export ({name}.h264.mp4), for the standalone
+    /// player. A node that predates this ignores it.</summary>
+    bool ConvertToH264 = false);
 
 /// <summary>One recorded push-to-talk WAV on the exporting node.</summary>
 public record ExportTalkClip(string FilePath, DateTime StartUtc);
@@ -64,7 +71,11 @@ public record ExportCompleteReportItem(Guid ExportItemId, bool Success, string? 
     /// <summary>SHA-256 of the exported file. Null from an older node.</summary>
     string? OutputSha256 = null,
     /// <summary>Each source segment as hashed just before exporting. Null from an older node.</summary>
-    List<ExportSegmentCheck>? SegmentChecks = null);
+    List<ExportSegmentCheck>? SegmentChecks = null,
+    /// <summary>The H.264 copy, when one was asked for and made.</summary>
+    string? ConvertedFilePath = null,
+    long? ConvertedSizeBytes = null,
+    string? ConvertedSha256 = null);
 
 /// <summary>One source segment of an export, re-hashed on the node at export time. Matches is null
 /// when there was no recorded hash to compare against.</summary>
@@ -76,7 +87,9 @@ public record ExportSegmentCheck(string FilePath, string? Sha256, bool? Matches)
 /// camera's current node — see ExportJobItem.NodeId's own doc comment for why an item can carry a
 /// node id before ever having been dispatched.</summary>
 public record ExportDispatchCandidate(Guid ExportItemId, Guid CameraId, string CameraName, Guid? NodeId, bool IsPinnedToNode, DateTime FromUtc, DateTime ToUtc,
-    string? RedactionJson = null);
+    string? RedactionJson = null,
+    /// <summary>The job wants an H.264 copy of H.265 video for the standalone player.</summary>
+    bool ConvertH265 = false);
 
 /// <summary>What the Web-side /export-download proxy needs to reach a Done item's file on its owning
 /// node — same shape as PlaybackSegmentInfo. Null node fields mean that node hasn't reported

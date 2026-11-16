@@ -50,11 +50,13 @@ public class LoginModel(
     [TempData] public string? ErrorMessage { get; set; }
 
     public bool ShowEntraButton { get; set; }
+    public bool ShowGoogleButton { get; set; }
 
     // The password was right and the account has two-factor sign-in on: the code comes next.
     private bool _needsCode;
     public bool AdEnabled { get; set; }
     public static string EntraSchemeName => EntraOidcOptionsConfigurator.SchemeName;
+    public static string GoogleSchemeName => GoogleOidcOptionsConfigurator.SchemeName;
 
     public class InputModel
     {
@@ -269,6 +271,7 @@ public class LoginModel(
     private async Task<ActiveDirectorySettings?> LoadPageStateAsync()
     {
         ShowEntraButton = await db.EntraSsoSettings.AsNoTracking().Select(s => s.IsEnabled).FirstOrDefaultAsync();
+        ShowGoogleButton = await db.GoogleSsoSettings.AsNoTracking().Select(s => s.IsEnabled).FirstOrDefaultAsync();
         var ad = await db.ActiveDirectorySettings.AsNoTracking().FirstOrDefaultAsync();
         AdEnabled = ad?.IsEnabled == true;
         return ad;

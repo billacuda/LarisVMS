@@ -30,7 +30,7 @@ public class ExportRunner(NodeApiClient api, string ffmpegPath, ILogger<ExportRu
         string storageRoot, string outputFileName, CancellationToken ct,
         IReadOnlyList<TalkClip>? talkClips = null, bool segmentsHaveAudio = false,
         IReadOnlyList<string>? redactionFilters = null, string? videoEncoder = null,
-        IReadOnlyList<string?>? expectedSha256 = null)
+        IReadOnlyList<string?>? expectedSha256 = null, bool convertToH264 = false, string? h264Encoder = null)
     {
         var exportsDir = Path.Combine(storageRoot, "exports");
         Directory.CreateDirectory(exportsDir);
@@ -97,7 +97,9 @@ public class ExportRunner(NodeApiClient api, string ffmpegPath, ILogger<ExportRu
 
             var size = new FileInfo(outputPath).Length;
             var outputSha256 = await SegmentChain.HashFileAsync(outputPath, ct);
-            await api.ReportExportCompleteAsync([new ExportCompleteReportItem(exportItemId, true, outputPath, size, null, outputSha256, checks)], ct);
+            var converted = convertToH264 ? await ConvertAsync(exportItemId, outputPath, h264Encoder, ct) : null;
+            await api.ReportExportCompleteAsync([new ExportCompleteReportItem(exportItemId, true, outputPath, size, null, outputSha256, checks,
+                converted?.Path, converted?.Size, converted?.Sha256)], ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -116,6 +118,54 @@ public class ExportRunner(NodeApiClient api, string ffmpegPath, ILogger<ExportRu
             try { File.Delete(listFilePath); } catch (IOException) { /* best-effort cleanup */ }
         }
     }
+
+    /// <summary>The H.264 copy of a finished export for the standalone player, beside it as
+    /// {name}.h264.mp4. A copy that can't be made is logged and left out; the export itself is fine
+    /// without it (the player falls back to the original).</summary>
+    private async Task<(string Path, long Size, string Sha256)?> ConvertAsync(Guid exportItemId, string outputPath, string? encoder, CancellationToken ct)
+    {
+        var convertedPath = ConvertedPath(outputPath);
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = ffmpegPath,
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                RedirectStandardInput = true,
+                CreateNoWindow = true
+            };
+            foreach (var a in BuildConvertArgs(outputPath, convertedPath, encoder)) psi.ArgumentList.Add(a);
+            logger.LogInformation("Converting export item {ExportItemId} to H.264 for the standalone player -> {Path}", exportItemId, convertedPath);
+            using var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
+            var stderrTask = DrainStderrAsync(process, ct);
+            await process.WaitForExitAsync(ct);
+            await stderrTask;
+            if (process.ExitCode != 0 || !File.Exists(convertedPath))
+                throw new InvalidOperationException($"ffmpeg exited with code {process.ExitCode}.");
+            return (convertedPath, new FileInfo(convertedPath).Length, await SegmentChain.HashFileAsync(convertedPath, ct));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Export item {ExportItemId}: the H.264 copy for the standalone player couldn't be made; the export is kept without it.", exportItemId);
+            try { File.Delete(convertedPath); } catch (IOException) { /* best effort */ }
+            return null;
+        }
+    }
+
+    /// <summary>"x.mp4" -> "x.h264.mp4", in the same folder.</summary>
+    internal static string ConvertedPath(string outputPath) =>
+        Path.Combine(Path.GetDirectoryName(outputPath) ?? "", Path.GetFileNameWithoutExtension(outputPath) + ".h264.mp4");
+
+    /// <summary>Re-encodes the video to H.264 (the audio is copied), with the index at the front so a
+    /// browser can start playing and seek straight away.</summary>
+    internal static List<string> BuildConvertArgs(string inputPath, string outputPath, string? encoder) =>
+    [
+        "-nostdin", "-i", inputPath, "-map", "0:v", "-map", "0:a?",
+        .. EncodePipeline.BuildArgs(new EncodePipelineOptions(encoder ?? "libx264", Preset: EncodePipeline.RealtimePreset(encoder ?? "libx264"))),
+        "-c:a", "copy", "-movflags", "+faststart", "-y", outputPath,
+    ];
 
     /// <summary>The ffmpeg command for one export. With no talk clips: a pure remux (-c copy). With
     /// some: video is still copied, and the audio is the camera's own track (or silence, when it has

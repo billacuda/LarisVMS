@@ -35,5 +35,14 @@ public class ExportJob
     /// them.</summary>
     public ExportJobStatus Status { get; set; } = ExportJobStatus.Queued;
 
+    /// <summary>Whether the download is a package with the standalone player (Player.html, the
+    /// timeline and events, and a signed list of every file) instead of the bare video files. Off by
+    /// default; see ExportPackageBuilder.</summary>
+    public bool IncludePlayer { get; set; }
+
+    /// <summary>With the player: also make an H.264 copy of any H.265 camera's video, which every
+    /// browser plays. The original is kept.</summary>
+    public bool ConvertH265 { get; set; }
+
     public List<ExportJobItem> Items { get; set; } = [];
 }

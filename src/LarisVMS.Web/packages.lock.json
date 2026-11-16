@@ -70,6 +70,12 @@
         "resolved": "10.0.15",
         "contentHash": "u0WnRcZgBZYHlVFpbe/3Adpmb9rmNJ8/fmEwqc/xjB7fFppq+gfaLJd3Sdaw+J02zV0eP/T9dneQ3Dv5jWw6bw=="
       },
+      "MQTTnet": {
+        "type": "Direct",
+        "requested": "[5.1.0.1559, )",
+        "resolved": "5.1.0.1559",
+        "contentHash": "9mkk0H+76CToIzp9ru5Uj5BuC3P5hQdkhvXM+CLmmTDdZWqajjICCHuUMbDd1yVBt9BWL77Rvzt0A+/PA4WMCA=="
+      },
       "SecurityCodeScan.VS2019": {
         "type": "Direct",
         "requested": "[5.6.7, )",
@@ -547,7 +553,7 @@
         "type": "Project",
         "dependencies": {
           "Azure.Identity": "[1.21.0, )",
-          "LarisVMS.Core": "[0.221.4, )",
+          "LarisVMS.Core": "[0.222.0, )",
           "LarisVMS.Onvif": "[1.0.0, )",
           "MailKit": "[4.17.0, )",
           "Microsoft.AspNetCore.Identity.EntityFrameworkCore": "[10.0.15, )",
@@ -568,7 +574,7 @@
       "larisvms.onvif": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.221.4, )"
+          "LarisVMS.Core": "[0.222.0, )"
         }
       },
       "larisvms.relay": {

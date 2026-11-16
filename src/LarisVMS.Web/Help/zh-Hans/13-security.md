@@ -48,7 +48,7 @@ IP 允许列表、独立的实时/回放端口、严格脚本策略、证书、�
 
 ## 加密的密钥
 
-摄像头凭据、SMB 凭据、节点密钥、电子邮件密钥、Entra 客户端密钥和 Active Directory 服务账户的密码，使用 `%ProgramData%\LarisVMS\keys` 中的数据保护密钥加密后存放在数据库中。只有 SYSTEM、Administrators 和 LarisVMS 服务的账户才能打开 `%ProgramData%\LarisVMS`：在那里发现的任何其他访问权限，例如本地用户在安装 LarisVMS 之前创建的文件夹，会在服务启动时被移除。请备份该文件夹，并且在部署期间绝不要删除它。
+摄像头凭据、SMB 凭据、节点密钥、电子邮件密钥、Entra 和 Google 客户端密钥，以及 Active Directory 服务账户的密码，使用 `%ProgramData%\LarisVMS\keys` 中的数据保护密钥加密后存放在数据库中。只有 SYSTEM、Administrators 和 LarisVMS 服务的账户才能打开 `%ProgramData%\LarisVMS`：在那里发现的任何其他访问权限，例如本地用户在安装 LarisVMS 之前创建的文件夹，会在服务启动时被移除。请备份该文件夹，并且在部署期间绝不要删除它。
 
 ## 面向企业的额外保护
 

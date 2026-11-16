@@ -459,6 +459,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             // Archive-storage: same Camera -> Node -> Global chain as RetentionDays above.
             var archiveEnabled = await settings.GetAsync("Archive.Enabled", false, cameraId: c.Id, nodeId: nodeId, ct: ct);
             var archiveRetentionDays = await settings.GetAsync<int?>("Archive.RetentionDays", 0, cameraId: c.Id, nodeId: nodeId, ct: ct);
+            var talkMethod = await settings.GetAsync("Talk.Method", "Auto", cameraId: c.Id, nodeId: nodeId, ct: ct);
             cameraDtos.Add(new NodeConfigCameraDto(
                 c.Id, c.Name, c.Username, c.Password,
                 c.Streams.Where(s => s.IsEnabled).Select(s => new NodeConfigStreamDto(
@@ -486,7 +487,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 EncryptFootage: encryptFootage,
                 EncryptExistingRequestedUtc: encryptFootage == "Off" ? null : encryptExisting,
                 MovementMode: movementMode, MovementSensitivity: movementSensitivity,
-                IgnoredObjects: ignoredObjects));
+                IgnoredObjects: ignoredObjects,
+                TalkMethod: talkMethod,
+                DeviceBaseUri: ResolveDeviceBaseUri(c)));
         }
 
         // Cameras this node has leftover Segments for but doesn't currently record — reassigned to a
@@ -591,12 +594,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
     /// was added) rather than Host/OnvifPort, so a camera reached over https, or on a non-default
     /// port, keeps working. Null when there's no integration to serve or the stored URI isn't
     /// parseable.</summary>
-    private static string? ResolveIntegrationBaseUri(Camera camera)
-    {
-        if (CameraIntegrations.ByKey(camera.IntegrationKey) is null) return null;
-        if (!Uri.TryCreate(camera.DeviceServiceUri, UriKind.Absolute, out var deviceUri)) return null;
-        return $"{deviceUri.Scheme}://{deviceUri.Authority}";
-    }
+    private static string? ResolveIntegrationBaseUri(Camera camera) =>
+        CameraIntegrations.ByKey(camera.IntegrationKey) is null ? null : ResolveDeviceBaseUri(camera);
+
+    /// <summary>The camera's scheme+host+port from its DeviceServiceUri, whether or not a vendor
+    /// integration is active — two-way audio's "camera's own audio API" needs it either way.</summary>
+    private static string? ResolveDeviceBaseUri(Camera camera) =>
+        Uri.TryCreate(camera.DeviceServiceUri, UriKind.Absolute, out var deviceUri) ? $"{deviceUri.Scheme}://{deviceUri.Authority}" : null;
 
     private static string? ResolveEventsServiceUri(CameraCapabilities? capabilities)
     {

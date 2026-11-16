@@ -6,75 +6,59 @@
 <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
     <h1>@L["nav.views"]</h1>
     <div class="d-flex flex-wrap gap-2">
-        @if (Model.TourViews.Count > 0)
+        @if (Model.TourViewCount > 0)
         {
-            <a class="btn btn-outline-secondary" asp-page="Play" asp-route-tour="true">@L["views.startTour", new { count = Model.TourViews.Count }]</a>
+            <a class="btn btn-outline-secondary" asp-page="Play" asp-route-tour="true">@L["views.startTour", new { count = Model.TourViewCount }]</a>
         }
-        <form method="post" asp-page-handler="Create" class="d-inline">
-            <input type="hidden" name="name" value="New view" />
-            <button type="submit" class="btn btn-primary">@L["views.newView"]</button>
+        <button type="button" class="btn btn-outline-secondary" id="vtNewFolder">@L["views.newFolder"]</button>
+        <button type="button" class="btn btn-primary" id="vtNewView">@L["views.newView"]</button>
+    </div>
+</div>
+
+<div class="alert alert-danger d-none" role="alert" id="vtAlert"></div>
+
+<div class="row g-2 align-items-center mb-2">
+    <div class="col-sm-5">
+        <input type="search" class="form-control" id="vtFilter" placeholder="@L["views.filterByName"]" aria-label="@L["views.filterByName"]" />
+    </div>
+    <div class="col-sm-7 small text-muted">@L["views.treeHint"] <a href="/Help/live-and-playback#views">@L["common.learnMore"]</a></div>
+</div>
+
+<div id="viewTree" class="view-tree" role="tree" aria-label="@L["nav.views"]">
+    <p class="text-muted small">@L["views.loading"]</p>
+</div>
+
+<div id="vtMenu" class="dropdown-menu shadow" role="menu" style="position: fixed;"></div>
+
+<div class="modal fade" id="vtDialog" tabindex="-1" aria-labelledby="vtDialogTitle" aria-hidden="true">
+    <div class="modal-dialog">
+        <form class="modal-content" id="vtDialogForm">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="vtDialogTitle"></h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="@L["common.close"]"></button>
+            </div>
+            <div class="modal-body">
+                <p id="vtDialogMessage" class="mb-2"></p>
+                <input type="text" class="form-control d-none" id="vtDialogInput" maxlength="200" autocomplete="off" aria-labelledby="vtDialogTitle" />
+                <div class="form-check mt-2 d-none" id="vtDialogCheckWrap">
+                    <input type="checkbox" class="form-check-input" id="vtDialogCheck" />
+                    <label class="form-check-label" for="vtDialogCheck" id="vtDialogCheckLabel"></label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">@L["common.cancel"]</button>
+                <button type="submit" class="btn btn-primary" id="vtDialogOk"></button>
+            </div>
         </form>
     </div>
 </div>
 
-@if (!string.IsNullOrEmpty(Model.ErrorMessage))
-{
-    <div class="alert alert-danger" role="alert">@Model.ErrorMessage</div>
-}
-
-@if (Model.Views.Count == 0)
-{
-    <p class="text-muted">@L["views.noViewsYet"]</p>
-}
-else
-{
-    <div class="row g-2 align-items-center mb-2">
-        <div class="col-sm-4">
-            <input type="search" class="form-control" data-filter-table="viewsTable" placeholder="@L["views.filterByName"]" />
-        </div>
-    </div>
-
-    <div class="table-responsive">
-        <table class="table table-hover align-middle" id="viewsTable" data-sortable>
-            <thead>
-                <tr>
-                    <th>@L["common.name"]</th>
-                    <th>@L["views.owner"]</th>
-                    <th>@L["views.shared"]</th>
-                    <th data-sort-numeric>@L["nav.cameras"]</th>
-                    <th data-sort-numeric>@L["views.tourInterval"]</th>
-                    <th data-no-sort></th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var v in Model.Views)
-                {
-                    var cellCount = ViewLayout.CountCells(v.LayoutJson);
-                    var isOwner = v.OwnerId == Model.CurrentUserId;
-                    <tr>
-                        <td><a asp-page="Play" asp-route-id="@v.Id">@v.Name</a></td>
-                        <td>@(isOwner ? L["views.you"].Value : L["views.anotherUser"].Value)</td>
-                        <td>@(v.IsShared ? L["views.shared"].Value : L["views.personal"].Value)</td>
-                        <td>@cellCount</td>
-                        <td data-sort-value="@v.SequenceIntervalSeconds">
-                            @(v.SequenceIntervalSeconds > 0 ? $"{v.SequenceIntervalSeconds}s" : "—")
-                        </td>
-                        <td class="text-end text-nowrap">
-                            @if (Model.CanEditViews)
-                            {
-                                <a class="btn btn-sm btn-outline-secondary" asp-page="Editor" asp-route-id="@v.Id">@L["common.edit"]</a>
-                            }
-                            @if (isOwner || Model.CanManageAll)
-                            {
-                                <form method="post" asp-page-handler="Delete" asp-route-id="@v.Id" class="d-inline"
-                                      data-confirm="@L["views.deleteConfirm", new { name = v.Name }]">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger">@L["common.delete"]</button>
-                                </form>
-                            }
-                        </td>
-                    </tr>
-                }
-            </tbody>
-        </table>
-    </div>
+@section Scripts {
+    <script src="~/js/view-tree.js" asp-append-version="true"></script>
+    <script nonce="@Csp.Value">
+        window.larisvmsViewTree.init({
+            treeId: 'viewTree', menuId: 'vtMenu', filterId: 'vtFilter', alertId: 'vtAlert',
+            newViewId: 'vtNewView', newFolderId: 'vtNewFolder', dialogId: 'vtDialog'
+        });
+    </script>
 }

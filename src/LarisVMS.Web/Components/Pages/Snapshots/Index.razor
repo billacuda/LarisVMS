@@ -53,9 +53,14 @@
     <div class="col-md-3 snapshot-mode-target d-none" data-for-mode="view">
         <select name="viewId" class="form-select form-select-sm">
             <option value="">@L["snapshots.selectAView"]</option>
-            @foreach (var v in Views)
+            @foreach (var group in Views.GroupBy(v => ViewPaths.GetValueOrDefault(v.Id, "")))
             {
-                <option value="@v.Id" selected="@(ViewId == v.Id)">@v.Name</option>
+                <optgroup label="@group.Key">
+                    @foreach (var v in group)
+                    {
+                        <option value="@v.Id" selected="@(ViewId == v.Id)">@v.Name</option>
+                    }
+                </optgroup>
             }
         </select>
     </div>
@@ -319,6 +324,7 @@
     private List<Camera> Cameras { get; set; } = [];
     private List<CameraGroup> Groups { get; set; } = [];
     private List<View> Views { get; set; } = [];
+    private Dictionary<Guid, string> ViewPaths { get; set; } = [];
     private string Mode => ModeParam ?? (CameraId is null ? "all" : "single");
     private List<DetectedObjectCategoryDto> DetectedObjectCategories { get; set; } = [];
     private List<DetectedObjectLabelDto> DetectedObjectLabels { get; set; } = [];
@@ -379,7 +385,7 @@
         var groupsTask = groupsScope.ServiceProvider.GetRequiredService<ICameraGroupService>().GetTreeAsync();
         var categoriesTask = categoriesScope.ServiceProvider.GetRequiredService<ITimelineService>().GetDetectedObjectCategoriesAsync();
         var labelsTask = labelsScope.ServiceProvider.GetRequiredService<ITimelineService>().GetDetectedObjectLabelsAsync();
-        var viewsTask = viewsScope.ServiceProvider.GetRequiredService<IViewService>().ListVisibleToAsync(currentUserId);
+        var viewsTask = viewsScope.ServiceProvider.GetRequiredService<IViewService>().ListVisibleWithPathAsync(currentUserId);
 
         await Task.WhenAll(camerasTask, groupsTask, categoriesTask, labelsTask, viewsTask);
 
@@ -389,7 +395,9 @@
         Groups = await groupsTask;
         DetectedObjectCategories = await categoriesTask;
         DetectedObjectLabels = await labelsTask;
-        Views = await viewsTask;
+        var withPaths = await viewsTask;
+        Views = withPaths.Select(p => p.View).ToList();
+        ViewPaths = withPaths.ToDictionary(p => p.View.Id, p => p.Path);
 
         var topLevelKinds = DetectionDisplay.AllKinds
             .Select(k => (Name: k.ToString(), Emoji: (string?)DetectionDisplay.Emoji(k), ColorHex: (string?)null))

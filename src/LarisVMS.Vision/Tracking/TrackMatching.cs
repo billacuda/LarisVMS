@@ -76,6 +76,97 @@ internal static class TrackMatching
         return cost;
     }
 
+    /// <summary>
+    /// 1 - IoU between where each track was last actually seen (<see cref="STrack.LastSeenTlwh"/>,
+    /// not its prediction) and each detection, same class only. Used to hand a parked object's box
+    /// back to its own track when whatever covered it moves on.
+    /// </summary>
+    public static float[,] LastSeenIouDistance(IReadOnlyList<STrack> tracks, IReadOnlyList<STrack> detections)
+    {
+        var cost = new float[tracks.Count, detections.Count];
+
+        Span<float> a = stackalloc float[4];
+        Span<float> b = stackalloc float[4];
+
+        for (var i = 0; i < tracks.Count; i++)
+        {
+            var last = tracks[i].LastSeenTlwh;
+            a[0] = last[0];
+            a[1] = last[1];
+            a[2] = last[0] + last[2];
+            a[3] = last[1] + last[3];
+
+            for (var j = 0; j < detections.Count; j++)
+            {
+                if (tracks[i].ClassId != detections[j].ClassId)
+                {
+                    cost[i, j] = 1f;
+                    continue;
+                }
+                detections[j].GetTlbr(b);
+                cost[i, j] = 1f - Iou(a, b);
+            }
+        }
+
+        return cost;
+    }
+
+    /// <summary>
+    /// Rules out pairing a track with a detection of a clearly different shape — the side of one car
+    /// against the back of another — by setting that pair's cost to 1 (never a match). See
+    /// <see cref="ShapeDiffers"/>; <paramref name="exempt"/> lets the caller excuse a pair.
+    /// </summary>
+    public static void ApplyShapeGate(float[,] cost, IReadOnlyList<STrack> tracks, IReadOnlyList<STrack> detections,
+        float maxChange, Func<STrack, STrack, bool> exempt)
+    {
+        for (var i = 0; i < tracks.Count; i++)
+        {
+            for (var j = 0; j < detections.Count; j++)
+            {
+                if (ShapeDiffers(tracks[i], detections[j], maxChange) && !exempt(tracks[i], detections[j]))
+                {
+                    cost[i, j] = 1f;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether a detection's shape (width / height) is further than <paramref name="maxChange"/> from
+    /// the track's usual shape. False when the track's shape isn't settled yet, the detection is cut
+    /// off at the frame edge, or the check is turned off (<paramref name="maxChange"/> of 1 or less).
+    /// </summary>
+    public static bool ShapeDiffers(STrack track, STrack detection, float maxChange)
+    {
+        if (maxChange <= 1f || track.AspectSamples < MinShapeSamples || track.RefAspect <= 0f
+            || detection.IsClipped || detection.Tlwh[2] <= 0f || detection.Tlwh[3] <= 0f)
+        {
+            return false;
+        }
+
+        var aspect = detection.Tlwh[2] / detection.Tlwh[3];
+        return Math.Max(aspect, track.RefAspect) / Math.Min(aspect, track.RefAspect) > maxChange;
+    }
+
+    /// <summary>Share of the detection's area that lies inside the box the track was last seen in.</summary>
+    public static float ShareInsideLastSeen(STrack track, STrack detection)
+    {
+        var last = track.LastSeenTlwh;
+        var box = detection.Tlwh;
+        var area = box[2] * box[3];
+        if (area <= 0f)
+        {
+            return 0f;
+        }
+
+        var width = Math.Min(box[0] + box[2], last[0] + last[2]) - Math.Max(box[0], last[0]);
+        var height = Math.Min(box[1] + box[3], last[1] + last[3]) - Math.Max(box[1], last[1]);
+        return width <= 0f || height <= 0f ? 0f : width * height / area;
+    }
+
+    /// <summary>Sightings needed before a track's shape is trusted for <see cref="ApplyShapeGate"/>.</summary>
+    public const int MinShapeSamples = 3;
+
     private static void Expand(Span<float> tlbr, float buffer)
     {
         var dx = (tlbr[2] - tlbr[0]) * buffer;

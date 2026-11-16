@@ -35,7 +35,7 @@ else
                 <optgroup label="Views" data-view-option>
                     @foreach (var v in Views)
                     {
-                        <option value="view:@v.Id" data-view-option selected="@(SelectedViewKey == "view:" + v.Id)">@v.Name</option>
+                        <option value="view:@v.Id" data-view-option selected="@(SelectedViewKey == "view:" + v.Id)">@ViewPaths.GetValueOrDefault(v.Id, "") / @v.Name</option>
                     }
                 </optgroup>
             }
@@ -179,6 +179,7 @@ else
 
     private List<Camera> Cameras { get; set; } = [];
     private List<View> Views { get; set; } = [];
+    private Dictionary<Guid, string> ViewPaths { get; set; } = [];
     private string? SelectedViewKey { get; set; }
     private Guid? SelectedCameraId { get; set; }
     private bool AllCameras { get; set; }
@@ -201,7 +202,9 @@ else
         // Views for Scene: each with the cameras in it this viewer can review, in layout order.
         var userId = user.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
         var reviewable = Cameras.Select(c => c.Id).ToHashSet();
-        Views = (await ViewService.ListVisibleToAsync(userId)).OrderBy(v => v.Name).ToList();
+        var withPaths = await ViewService.ListVisibleWithPathAsync(userId);
+        Views = withPaths.Select(p => p.View).ToList();
+        ViewPaths = withPaths.ToDictionary(p => p.View.Id, p => p.Path);
         var viewCameras = Views.ToDictionary(v => v.Id,
             v => LarisVMS.Web.Helpers.ViewLayout.CameraIds(v.LayoutJson).Where(reviewable.Contains).Distinct().ToList());
         if (CameraIdParam?.StartsWith("view:", StringComparison.OrdinalIgnoreCase) == true

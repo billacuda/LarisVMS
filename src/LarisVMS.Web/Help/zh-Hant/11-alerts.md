@@ -35,7 +35,7 @@
 
 ### 團隊管道
 
-每條規則還可以傳送到電子郵件清單、Webhook、ntfy、Pushover、Slack 和 Teams。開啟一個管道並填寫其欄位。
+每條規則還可以傳送到電子郵件清單、Webhook、ntfy、Pushover、Slack 和 Teams。開啟一個管道並填寫其欄位。Webhook 也會傳送觸發警報的內容，例如攝影機和偵測到的物體，[Home Assistant](/Help/home-assistant#alerts-by-webhook) 可以使用這些資訊。
 
 ## 通知
 

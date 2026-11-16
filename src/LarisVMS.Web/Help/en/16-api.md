@@ -18,6 +18,8 @@ Each camera in the response has a `cameraId`, which the other commands use.
 
 Only paths starting with `/api/v1` accept API keys. Other paths are internal to the web interface and may change without notice.
 
+Programs that can only send a user name and password, such as Home Assistant's Generic Camera, can sign in with HTTP Basic instead: enter `apikey` as the user name and the key as the password.
+
 ## Keys and permissions
 
 You can have as many keys as you like, each with its own permissions. A key's access comes from three things:
@@ -246,6 +248,30 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o latest.jpg \
   https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/thumbnail/latest
 ```
 
+### GET /api/v1/cameras/{cameraId}/events/{spanId}/snapshot
+
+The picture of one detection, cut to the object. A webhook alert sends this address as `snapshotPath`, with the detection's `spanId`.
+
+**Permission:** Play back recorded footage, plus **Playback** camera access.
+
+```bash
+curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o detection.jpg \
+  https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/events/123456/snapshot
+```
+
+## Live video
+
+### GET /api/v1/cameras/{cameraId}/stream.mp4
+
+The camera's live video as one continuous MP4 stream, for programs that play a web address, such as Home Assistant's Generic Camera, VLC, and ffmpeg. It's the same stream the web interface shows, so the camera isn't asked for another one, and privacy masks still apply. Add `?quality=sub` for the camera's smaller stream. The stream ends if the recorder restarts the camera's video; the program then reconnects.
+
+**Permission:** Stream live video to other programs, plus **View** camera access. No role has this permission until you give it one under **Settings → Permissions**.
+
+```bash
+ffplay -headers "X-Api-Key: lvk_EXAMPLEKEY" \
+  https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/stream.mp4
+```
+
 ## PTZ
 
 ### POST /api/v1/cameras/{cameraId}/ptz/move
@@ -418,6 +444,8 @@ curl -X POST -H "X-Api-Key: lvk_EXAMPLEKEY" -H "Content-Type: application/json" 
 { "jobId": "00000000-0000-0000-0000-00000000000e" }
 ```
 
+To hand the footage to someone without LarisVMS, add `"includePlayer": true`: the export can then also be downloaded as one package with the [standalone player](/Help/live-and-playback#standalone-player). With it, `"convertH265"` (on unless you send `false`) adds an H.264 copy of H.265 video, which plays in every browser.
+
 ### GET /api/v1/exports
 
 Lists exports and their progress. Each export has `items`, one for each camera. An item's `id` is what you use to download or retry it.
@@ -437,6 +465,7 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
     "fromUtc": "2026-11-06T14:00:00Z",
     "toUtc": "2026-11-06T14:30:00Z",
     "status": "Completed",
+    "includePlayer": false,
     "items": [
       {
         "id": "00000000-0000-0000-0000-00000000000f",
@@ -446,7 +475,8 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
         "status": "Completed",
         "errorMessage": null,
         "outputSizeBytes": 104857600,
-        "redacted": false
+        "redacted": false,
+        "converted": false
       }
     ]
   }
@@ -462,6 +492,17 @@ Downloads one finished export file.
 ```bash
 curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o workshop.mp4 \
   https://vms.example.com/api/v1/exports/items/00000000-0000-0000-0000-00000000000f/download
+```
+
+### GET /api/v1/exports/{jobId}/package
+
+Downloads a finished export made with `includePlayer` as one zip: every camera's video, the standalone player, the events, and a signed list of every file. It's put together from the recorders as it downloads, so it starts straight away.
+
+**Permission:** Create and download exports, plus **Export** camera access.
+
+```bash
+curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o export.zip \
+  https://vms.example.com/api/v1/exports/00000000-0000-0000-0000-00000000000e/package
 ```
 
 ### POST /api/v1/exports/{itemId}/retry
@@ -554,7 +595,7 @@ curl -X POST -H "X-Api-Key: lvk_EXAMPLEKEY" \
 
 These aren't available to API keys:
 
-- Live video. Use the web interface, or the images above.
+- Live video over the web interface's own connection. Use the MP4 stream above.
 - Playing back footage directly. Use an export.
 - Settings, users, roles, API keys, encryption, and backups.
 - Camera setup, such as zones, schedules, and device settings.

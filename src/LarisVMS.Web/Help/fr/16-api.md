@@ -18,6 +18,8 @@ Chaque caméra de la réponse a un `cameraId`, que les autres commandes utilisen
 
 Seuls les chemins commençant par `/api/v1` acceptent les clés API. Les autres chemins sont internes à l’interface web et peuvent changer sans préavis.
 
+Les programmes qui ne peuvent envoyer qu’un nom d’utilisateur et un mot de passe, comme la Generic Camera de Home Assistant, peuvent se connecter en HTTP Basic : saisissez `apikey` comme nom d’utilisateur et la clé comme mot de passe.
+
 ## Clés et autorisations
 
 Vous pouvez avoir autant de clés que vous le souhaitez, chacune avec ses propres autorisations. L’accès d’une clé provient de trois éléments :
@@ -246,6 +248,30 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o latest.jpg \
   https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/thumbnail/latest
 ```
 
+### GET /api/v1/cameras/{cameraId}/events/{spanId}/snapshot
+
+L’image d’une détection, recadrée sur l’objet. Une alerte par webhook envoie cette adresse dans `snapshotPath`, avec le `spanId` de la détection.
+
+**Autorisation :** Lire les enregistrements, plus l’accès **Lecture** aux caméras.
+
+```bash
+curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o detection.jpg \
+  https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/events/123456/snapshot
+```
+
+## Vidéo en direct
+
+### GET /api/v1/cameras/{cameraId}/stream.mp4
+
+La vidéo en direct de la caméra en un flux MP4 continu, pour les programmes qui lisent une adresse web, comme la Generic Camera de Home Assistant, VLC et ffmpeg. C’est le même flux que l’interface web : la caméra n’a pas à en fournir un autre, et les masques de confidentialité s’appliquent toujours. Ajoutez `?quality=sub` pour le flux réduit de la caméra. Le flux se termine si l’enregistreur redémarre la vidéo de la caméra ; le programme se reconnecte alors.
+
+**Autorisation :** Diffuser la vidéo en direct vers d’autres programmes, plus l’accès **Voir** aux caméras. Aucun rôle n’a cette autorisation tant que vous ne l’accordez pas dans **Paramètres → Autorisations**.
+
+```bash
+ffplay -headers "X-Api-Key: lvk_EXAMPLEKEY" \
+  https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/stream.mp4
+```
+
 ## PTZ
 
 ### POST /api/v1/cameras/{cameraId}/ptz/move
@@ -418,6 +444,8 @@ curl -X POST -H "X-Api-Key: lvk_EXAMPLEKEY" -H "Content-Type: application/json" 
 { "jobId": "00000000-0000-0000-0000-00000000000e" }
 ```
 
+Pour remettre les images à quelqu’un sans LarisVMS, ajoutez `"includePlayer": true` : l’export peut alors aussi être téléchargé en un seul paquet avec le [lecteur autonome](/Help/live-and-playback#standalone-player). Avec cette option, `"convertH265"` (actif sauf si vous envoyez `false`) ajoute une copie H.264 des vidéos H.265, lisible dans tous les navigateurs.
+
 ### GET /api/v1/exports
 
 Liste les exports et leur progression. Chaque export a des `items`, un pour chaque caméra. L’`id` d’un élément sert à le télécharger ou à le relancer.
@@ -437,6 +465,7 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
     "fromUtc": "2026-11-06T14:00:00Z",
     "toUtc": "2026-11-06T14:30:00Z",
     "status": "Completed",
+    "includePlayer": false,
     "items": [
       {
         "id": "00000000-0000-0000-0000-00000000000f",
@@ -446,7 +475,8 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
         "status": "Completed",
         "errorMessage": null,
         "outputSizeBytes": 104857600,
-        "redacted": false
+        "redacted": false,
+        "converted": false
       }
     ]
   }
@@ -462,6 +492,17 @@ Télécharge un fichier d’export terminé.
 ```bash
 curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o workshop.mp4 \
   https://vms.example.com/api/v1/exports/items/00000000-0000-0000-0000-00000000000f/download
+```
+
+### GET /api/v1/exports/{jobId}/package
+
+Télécharge un export terminé créé avec `includePlayer` sous forme d’un seul zip : la vidéo de chaque caméra, le lecteur autonome, les événements et une liste signée de tous les fichiers. Il est assemblé depuis les enregistreurs pendant le téléchargement, qui commence donc tout de suite.
+
+**Autorisation :** Créer et télécharger des exports, plus l’accès **Export** aux caméras.
+
+```bash
+curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o export.zip \
+  https://vms.example.com/api/v1/exports/00000000-0000-0000-0000-00000000000e/package
 ```
 
 ### POST /api/v1/exports/{itemId}/retry
@@ -554,7 +595,7 @@ curl -X POST -H "X-Api-Key: lvk_EXAMPLEKEY" \
 
 Ces éléments ne sont pas disponibles pour les clés API :
 
-- La vidéo en direct. Utilisez l’interface web, ou les images ci-dessus.
+- La vidéo en direct par la connexion propre de l’interface web. Utilisez le flux MP4 ci-dessus.
 - La lecture directe des enregistrements. Utilisez un export.
 - Les paramètres, les utilisateurs, les rôles, les clés API, le chiffrement et les sauvegardes.
 - La configuration des caméras, comme les zones, les plannings et les paramètres de l’appareil.

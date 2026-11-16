@@ -1,5 +1,6 @@
 using LarisVMS.Core;
 using LarisVMS.Core.Entities;
+using LarisVMS.Core.Interfaces;
 
 namespace LarisVMS.Web.Pages.Views;
 
@@ -17,6 +18,9 @@ public sealed class PlayViewModel
 
     /// <summary>All other views the current user can switch to without leaving this page.</summary>
     public List<View> Views { get; set; } = [];
+
+    /// <summary>The same views in their trees and folders, for the view picker.</summary>
+    public ViewTreeDto? Tree { get; set; }
 
     public string EventBadgeCornerValue { get; set; } = EventBadgeCorner.Default;
     public bool AdaptiveStreamingEnabled { get; set; }

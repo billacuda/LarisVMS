@@ -18,6 +18,8 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/status
 
 API キーを受け付けるのは、`/api/v1` で始まるパスのみです。それ以外のパスは、ウェブインターフェースの内部用で、予告なく変更されることがあります。
 
+Home Assistant の Generic Camera のように、ユーザー名とパスワードしか送れないプログラムは HTTP Basic でサインインできます。ユーザー名に `apikey`、パスワードにキーを入力します。
+
 ## キーと権限
 
 キーは、必要なだけ作成でき、それぞれ独自の権限を持ちます。キーのアクセス権は、次の 3 つで決まります。
@@ -246,6 +248,30 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o latest.jpg \
   https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/thumbnail/latest
 ```
 
+### GET /api/v1/cameras/{cameraId}/events/{spanId}/snapshot
+
+1 件の検出の画像で、対象物に合わせて切り抜かれています。Webhook アラートはこのアドレスを、検出の `spanId` とともに `snapshotPath` として送ります。
+
+**権限:** 録画された映像を再生、および**再生**カメラアクセス。
+
+```bash
+curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o detection.jpg \
+  https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/events/123456/snapshot
+```
+
+## ライブ映像
+
+### GET /api/v1/cameras/{cameraId}/stream.mp4
+
+カメラのライブ映像を 1 本の連続した MP4 ストリームとして提供します。Home Assistant の Generic Camera、VLC、ffmpeg など、Web アドレスを再生するプログラム向けです。Web インターフェースと同じストリームなので、カメラに別のストリームを要求せず、プライバシーマスクも適用されたままです。カメラの小さいストリームには `?quality=sub` を付けます。レコーダーがカメラの映像を再起動するとストリームは終了し、プログラムが再接続します。
+
+**権限:** 他のプログラムへのライブ映像の配信、および**表示**カメラアクセス。この権限は **設定 → 権限** で付与するまで、どのロールにもありません。
+
+```bash
+ffplay -headers "X-Api-Key: lvk_EXAMPLEKEY" \
+  https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/stream.mp4
+```
+
 ## PTZ
 
 ### POST /api/v1/cameras/{cameraId}/ptz/move
@@ -418,6 +444,8 @@ curl -X POST -H "X-Api-Key: lvk_EXAMPLEKEY" -H "Content-Type: application/json" 
 { "jobId": "00000000-0000-0000-0000-00000000000e" }
 ```
 
+LarisVMS を持たない相手に映像を渡すには、`"includePlayer": true` を追加します。すると、エクスポートを[単体プレーヤー](/Help/live-and-playback#standalone-player)付きの 1 つのパッケージとしてもダウンロードできます。このとき `"convertH265"` (`false` を送らない限りオン) は、どのブラウザーでも再生できる H.265 映像の H.264 コピーを追加します。
+
 ### GET /api/v1/exports
 
 エクスポートとその進行状況を一覧表示します。各エクスポートには、カメラごとに 1 つの `items` があります。項目の `id` は、ダウンロードや再試行に使用します。
@@ -437,6 +465,7 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
     "fromUtc": "2026-11-06T14:00:00Z",
     "toUtc": "2026-11-06T14:30:00Z",
     "status": "Completed",
+    "includePlayer": false,
     "items": [
       {
         "id": "00000000-0000-0000-0000-00000000000f",
@@ -446,7 +475,8 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
         "status": "Completed",
         "errorMessage": null,
         "outputSizeBytes": 104857600,
-        "redacted": false
+        "redacted": false,
+        "converted": false
       }
     ]
   }
@@ -462,6 +492,17 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
 ```bash
 curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o workshop.mp4 \
   https://vms.example.com/api/v1/exports/items/00000000-0000-0000-0000-00000000000f/download
+```
+
+### GET /api/v1/exports/{jobId}/package
+
+`includePlayer` 付きで作成した完了済みのエクスポートを 1 つの zip としてダウンロードします。各カメラの映像、単体プレーヤー、イベント、全ファイルの署名付き一覧が含まれます。ダウンロードしながらレコーダーから組み立てるため、すぐに始まります。
+
+**権限:** エクスポートの作成とダウンロード、および**エクスポート**カメラアクセス。
+
+```bash
+curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o export.zip \
+  https://vms.example.com/api/v1/exports/00000000-0000-0000-0000-00000000000e/package
 ```
 
 ### POST /api/v1/exports/{itemId}/retry
@@ -554,7 +595,7 @@ curl -X POST -H "X-Api-Key: lvk_EXAMPLEKEY" \
 
 次のものは、API キーでは利用できません。
 
-- ライブ映像。ウェブインターフェース、または上記の画像を使用してください。
+- Web インターフェース独自の接続によるライブ映像。上の MP4 ストリームを使ってください。
 - 映像の直接再生。エクスポートを使用してください。
 - 設定、ユーザー、ロール、API キー、暗号化、バックアップ。
 - ゾーン、スケジュール、デバイス設定などのカメラのセットアップ。

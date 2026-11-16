@@ -75,6 +75,12 @@ Markdig
     Copyright (c) Alexandre Mutel
     Renders the in-app Help pages (LarisVMS.Web/Help/*.md).
 
+MQTTnet
+    MIT
+    https://github.com/dotnet/MQTTnet
+    Copyright (c) .NET Foundation and Contributors
+    MQTT client for the Home Assistant integration (LarisVMS.Web, HomeAssistant/).
+
 Microting.EntityFrameworkCore.MySql (fork of Pomelo.EntityFrameworkCore.MySql)
     MIT
     https://github.com/microting/Pomelo.EntityFrameworkCore.MySql

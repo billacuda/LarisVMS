@@ -59,25 +59,37 @@ public static class ManualRecordingApi
     private static async Task<(ManualRecordingChangeResult? Result, IResult? Denied)> ChangeAsync(
         HttpContext ctx, IReadOnlyCollection<Guid> cameraIds, bool start, Dependencies d, CancellationToken ct)
     {
-        var accessible = await d.CameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Record, ct);
-        if (accessible is not null && cameraIds.Any(id => !accessible.Contains(id)))
-            return (null, Results.Problem(Loc.T("api.youDontHaveRecordAccess"), statusCode: StatusCodes.Status403Forbidden));
+        var result = await ChangeAsync(ctx.User, ctx.Connection.RemoteIpAddress?.ToString(), cameraIds, start, d, ct);
+        return result is null
+            ? (null, Results.Problem(Loc.T("api.youDontHaveRecordAccess"), statusCode: StatusCodes.Status403Forbidden))
+            : (result, null);
+    }
 
-        var actor = ctx.User.Identity?.Name;
+    /// <summary>Starts or stops manual recording on the cameras as <paramref name="user"/>, with the
+    /// same per-camera Record check, audit entry and node nudge as the routes. Null when the user may
+    /// not record one of the cameras (nothing is changed then). Also used by the Home Assistant bridge,
+    /// whose commands run as its role; the caller checks Recording.Manual.</summary>
+    internal static async Task<ManualRecordingChangeResult?> ChangeAsync(System.Security.Claims.ClaimsPrincipal user, string? ipAddress,
+        IReadOnlyCollection<Guid> cameraIds, bool start, Dependencies d, CancellationToken ct)
+    {
+        var accessible = await d.CameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.Record, ct);
+        if (accessible is not null && cameraIds.Any(id => !accessible.Contains(id))) return null;
+
+        var actor = user.Identity?.Name;
         var result = start ? await d.Recordings.StartAsync(cameraIds, actor, ct) : await d.Recordings.StopAsync(cameraIds, actor, ct);
 
         if (result.Changed.Count > 0)
         {
             var cameras = await d.Db.Cameras.AsNoTracking().Where(c => result.Changed.Contains(c.Id))
                 .Select(c => new { c.Name, c.NodeId }).ToListAsync(ct);
-            await d.Audit.LogAsync(start ? "ManualRecording.Start" : "ManualRecording.Stop", ctx.User.ActorId(), actor,
-                ctx.Connection.RemoteIpAddress?.ToString(), string.Join(", ", cameras.Select(c => c.Name)), ct);
+            await d.Audit.LogAsync(start ? "ManualRecording.Start" : "ManualRecording.Stop", user.ActorId(), actor,
+                ipAddress, string.Join(", ", cameras.Select(c => c.Name)), ct);
 
             // Not awaited: the node's own 30s poll and the discard grace period cover a failed call.
             var nodeIds = cameras.Where(c => c.NodeId is not null).Select(c => c.NodeId!.Value).Distinct().ToList();
             foreach (var node in await d.Db.Nodes.AsNoTracking().Where(n => nodeIds.Contains(n.Id)).ToListAsync(ct))
                 _ = d.NodeControl.TriggerReconcileAsync(node, CancellationToken.None);
         }
-        return (result, null);
+        return result;
     }
 }

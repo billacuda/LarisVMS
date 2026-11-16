@@ -235,6 +235,40 @@ public class TamperEvidenceTests
         Assert.Equal(2, doc.RootElement.GetProperty("segments").GetArrayLength());
     }
 
+    // The camera's other recordings (here its sub stream) are chained between exported segments, so
+    // the manifest carries every link from the first exported one to the last for the chain to be
+    // walked without gaps.
+    [Fact]
+    public async Task TheManifestCarriesTheLinksBetweenExportedSegments()
+    {
+        var (db, service, cameraId, nodeId) = await SeedAsync();
+        var sub = new SegmentReportItem(cameraId, "Sub", T0, T0.AddSeconds(30), @"D:\Video\cam\sub0.mp4", 500, "h264", 640, 360, false, Sha("sub 0"));
+        await service.RecordSegmentsAsync(nodeId, [Seg(cameraId, 0)]);
+        await service.RecordSegmentsAsync(nodeId, [sub]);
+        await service.RecordSegmentsAsync(nodeId, [Seg(cameraId, 1)]);
+        var job = new ExportJob { Id = Guid.NewGuid(), FromUtc = T0, ToUtc = T0.AddSeconds(60), Status = ExportJobStatus.Running };
+        var item = new ExportJobItem { Id = Guid.NewGuid(), ExportJobId = job.Id, CameraId = cameraId, NodeId = nodeId, Status = ExportItemStatus.Running };
+        db.AddRange(job, item);
+        await db.SaveChangesAsync();
+
+        var json = await new ExportManifestBuilder(db, new SigningKeyService(db)).BuildAsync(item.Id,
+            new ExportCompleteReportItem(item.Id, true, @"D:\x.mp4", 1, null, Sha("x"),
+                [new ExportSegmentCheck(@"D:\Video\cam\0.mp4", Sha("content 0"), true), new ExportSegmentCheck(@"D:\Video\cam\1.mp4", Sha("content 1"), true)]));
+
+        using var doc = JsonDocument.Parse(JsonDocument.Parse(json!).RootElement.GetProperty("signedPayload").GetString()!);
+        var segments = doc.RootElement.GetProperty("segments").EnumerateArray().ToList();
+        Assert.Equal(2, segments.Count);
+        // The two exported segments aren't neighbours in the chain…
+        Assert.NotEqual(segments[0].GetProperty("chainHash").GetString(), segments[1].GetProperty("prevChainHash").GetString());
+
+        // …but the chain carries the sub-stream link between them, and walks without a break.
+        var chain = doc.RootElement.GetProperty("chain").EnumerateArray().ToList();
+        Assert.Equal([true, false, true], chain.Select(l => l.GetProperty("exported").GetBoolean()).ToArray());
+        for (var i = 1; i < chain.Count; i++)
+            Assert.Equal(chain[i - 1].GetProperty("chainHash").GetString(), chain[i].GetProperty("prevChainHash").GetString());
+        Assert.Equal(Sha("sub 0"), chain[1].GetProperty("sha256").GetString());
+    }
+
     // A segment the server already has is skipped before inserting, so it can't fail the batch and
     // take the new ones with it (SQL Server's unique FilePath index would; InMemory doesn't enforce it).
     [Fact]

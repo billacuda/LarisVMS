@@ -35,7 +35,7 @@ One detection alerts once. On a rule watching several cameras, the cooldown coun
 
 ### Team channels
 
-Each rule can also send to email lists, webhooks, ntfy, Pushover, Slack, and Teams. Turn on a channel and fill in its fields.
+Each rule can also send to email lists, webhooks, ntfy, Pushover, Slack, and Teams. Turn on a channel and fill in its fields. A webhook also sends what fired the alert, such as the camera and the detected object, which [Home Assistant](/Help/home-assistant#alerts-by-webhook) can use.
 
 ## Notifications
 

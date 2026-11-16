@@ -18,6 +18,8 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/status
 
 只有以 `/api/v1` 開頭的路徑接受 API 金鑰。其他路徑是 Web 介面的內部路徑，可能會不經通知而變更。
 
+只能傳送使用者名稱和密碼的程式（例如 Home Assistant 的 Generic Camera）可以改用 HTTP Basic 登入：使用者名稱填 `apikey`，密碼填該金鑰。
+
 ## 金鑰和權限
 
 您可以擁有任意數量的金鑰，每個都有自己的權限。金鑰的存取權限來自三點：
@@ -246,6 +248,30 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o latest.jpg \
   https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/thumbnail/latest
 ```
 
+### GET /api/v1/cameras/{cameraId}/events/{spanId}/snapshot
+
+一次偵測的影像，依目標裁切。Webhook 警報會把此位址作為 `snapshotPath` 傳送，並附上偵測的 `spanId`。
+
+**權限**：回放已錄製的錄影，外加**回放**攝影機存取權限。
+
+```bash
+curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o detection.jpg \
+  https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/events/123456/snapshot
+```
+
+## 即時影像
+
+### GET /api/v1/cameras/{cameraId}/stream.mp4
+
+以一路連續的 MP4 串流提供攝影機的即時影像，供播放網址的程式使用，例如 Home Assistant 的 Generic Camera、VLC 和 ffmpeg。它與網頁介面顯示的是同一路串流，因此不會向攝影機再要一路，隱私遮罩也照樣生效。加上 `?quality=sub` 可取得攝影機的較小串流。錄影機重新啟動攝影機影像時串流會結束，程式隨後會重新連線。
+
+**權限**：向其他程式串流即時影像，外加**檢視**攝影機存取權限。在**設定 → 權限**中授予之前，任何角色都沒有此權限。
+
+```bash
+ffplay -headers "X-Api-Key: lvk_EXAMPLEKEY" \
+  https://vms.example.com/api/v1/cameras/00000000-0000-0000-0000-000000000001/stream.mp4
+```
+
 ## PTZ
 
 ### POST /api/v1/cameras/{cameraId}/ptz/move
@@ -418,6 +444,8 @@ curl -X POST -H "X-Api-Key: lvk_EXAMPLEKEY" -H "Content-Type: application/json" 
 { "jobId": "00000000-0000-0000-0000-00000000000e" }
 ```
 
+要把錄影交給沒有 LarisVMS 的人，請加上 `"includePlayer": true`：這樣匯出還可以作為一個含[獨立播放器](/Help/live-and-playback#standalone-player)的套件下載。此時 `"convertH265"`（除非傳送 `false`，否則開啟）會為 H.265 影像新增可在所有瀏覽器播放的 H.264 副本。
+
 ### GET /api/v1/exports
 
 列出匯出及其進度。每個匯出都有 `items`，每台攝影機一項。某一項的 `id` 用於下載或重試它。
@@ -437,6 +465,7 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
     "fromUtc": "2026-11-06T14:00:00Z",
     "toUtc": "2026-11-06T14:30:00Z",
     "status": "Completed",
+    "includePlayer": false,
     "items": [
       {
         "id": "00000000-0000-0000-0000-00000000000f",
@@ -446,7 +475,8 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
         "status": "Completed",
         "errorMessage": null,
         "outputSizeBytes": 104857600,
-        "redacted": false
+        "redacted": false,
+        "converted": false
       }
     ]
   }
@@ -462,6 +492,17 @@ curl -H "X-Api-Key: lvk_EXAMPLEKEY" https://vms.example.com/api/v1/exports
 ```bash
 curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o workshop.mp4 \
   https://vms.example.com/api/v1/exports/items/00000000-0000-0000-0000-00000000000f/download
+```
+
+### GET /api/v1/exports/{jobId}/package
+
+將使用 `includePlayer` 建立且已完成的匯出下載為一個 zip：包含每台攝影機的影像、獨立播放器、事件以及所有檔案的已簽署清單。下載時直接從錄影機組裝，因此會立即開始。
+
+**權限**：建立和下載匯出，外加**匯出**攝影機存取權限。
+
+```bash
+curl -H "X-Api-Key: lvk_EXAMPLEKEY" -o export.zip \
+  https://vms.example.com/api/v1/exports/00000000-0000-0000-0000-00000000000e/package
 ```
 
 ### POST /api/v1/exports/{itemId}/retry
@@ -554,7 +595,7 @@ curl -X POST -H "X-Api-Key: lvk_EXAMPLEKEY" \
 
 API 金鑰無法使用以下內容：
 
-- 即時影像。請使用 Web 介面，或上面的圖像命令。
+- 透過網頁介面自身連線的即時影像。請使用上方的 MP4 串流。
 - 直接回放錄影。請使用匯出。
 - 設定、使用者、角色、API 金鑰、加密和備份。
 - 攝影機設定，例如區域、排程和裝置設定。

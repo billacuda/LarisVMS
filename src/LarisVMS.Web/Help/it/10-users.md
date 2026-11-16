@@ -1,10 +1,10 @@
 # Utenti e accesso
 
-Account, ruoli, autorizzazioni, accesso alle telecamere, Active Directory e accesso con Microsoft.
+Account, ruoli, autorizzazioni, accesso alle telecamere e accesso con un account locale, Active Directory, Google o Microsoft.
 
 ## Utenti
 
-L’auto-registrazione è disattivata. Gli account vengono creati in **Impostazioni → Utenti**, dove può anche assegnare ruoli, disattivare un account e reimpostare una password. Gli account locali accedono con il proprio indirizzo e-mail. Disattivare un account lo disconnette subito ovunque e chiude il suo video dal vivo.
+L’auto-registrazione è disattivata. Gli account vengono creati in **Impostazioni → Utenti**, dove può anche assegnare ruoli, disattivare un account e reimpostare una password. Gli account locali accedono con il proprio indirizzo e-mail. Disattivare un account lo disconnette subito ovunque e chiude il suo video dal vivo. Si accede con un account locale, un account [Active Directory](#active-directory) (tramite LDAPS) o un account [Google](#google) o [Microsoft Entra ID](#entra) collegato.
 
 ## Password
 
@@ -24,13 +24,13 @@ All’accesso, **Non chiedere più su questo browser per 14 giorni** salta il co
 
 Se qualcuno perde il telefono e i codici di ripristino, **Disattiva 2FA** accanto al suo nome in **Impostazioni → Utenti** gli permette di accedere con la sola password e di configurarlo di nuovo.
 
-**Impostazioni → Sicurezza → Accesso a due fattori** obbliga chiunque acceda con una password a configurarlo prima di poter fare qualsiasi altra cosa, e impedisce di disattivarlo. Gli accessi Microsoft sono lasciati ai controlli propri di Entra.
+**Impostazioni → Sicurezza → Accesso a due fattori** obbliga chiunque acceda con una password a configurarlo prima di poter fare qualsiasi altra cosa, e impedisce di disattivarlo. Gli accessi Microsoft e Google sono lasciati ai loro controlli.
 
 ## Sessioni
 
 Selezioni il Suo nome in alto nella pagina, poi **Sessioni**, per vedere ogni browser su cui ha effettuato l’accesso, con il suo indirizzo e l’ultimo utilizzo. Disconnetta quelli che non riconosce, o tutti tranne quello che sta usando, poi cambi la password. Cambiare la password o attivare l’accesso a due fattori disconnette subito le Sue altre sessioni.
 
-Con **Impostazioni → Sicurezza → Conferma la password per le pagine di amministrazione** attivo, le pagine di amministrazione richiedono di nuovo la password (e un codice, con l’accesso a due fattori attivo) a meno che abbia effettuato l’accesso o l’abbia confermata negli ultimi 15 minuti; usarle mantiene valido il periodo. Chi trova il Suo browser con l’accesso effettuato può allora usare il sistema ma non modificarne impostazioni, utenti o chiavi. Gli accessi Microsoft effettuano invece di nuovo l’accesso. È disattivato per impostazione predefinita.
+Con **Impostazioni → Sicurezza → Conferma la password per le pagine di amministrazione** attivo, le pagine di amministrazione richiedono di nuovo la password (e un codice, con l’accesso a due fattori attivo) a meno che abbia effettuato l’accesso o l’abbia confermata negli ultimi 15 minuti; usarle mantiene valido il periodo. Chi trova il Suo browser con l’accesso effettuato può allora usare il sistema ma non modificarne impostazioni, utenti o chiavi. Gli accessi Microsoft e Google effettuano invece di nuovo l’accesso. È disattivato per impostazione predefinita.
 
 In **Impostazioni → Utenti**, **Disconnetti** accanto a una persona la disconnette da ogni browser. Può accedere di nuovo; disattivi l’account per tenerla fuori.
 
@@ -61,6 +61,10 @@ Un ruolo è un insieme di autorizzazioni con un nome, gestito in **Impostazioni 
 ## Entra
 
 **Impostazioni → Sicurezza → Accesso Entra ID** aggiunge un pulsante «Accedi con Microsoft». Non crea mai account e non abbina gli account per e-mail: in **Impostazioni → Utenti**, usi **Accesso con Microsoft** sulla riga di una persona per inserire il suo **ID oggetto** Entra (dalla sua pagina utente nell’interfaccia di amministrazione di Microsoft Entra). Il suo primo accesso Microsoft completa il collegamento; vuoto lo rimuove. Registri un’app in Entra con l’URI di reindirizzamento mostrato nella pagina Sicurezza, poi inserisca il suo ID tenant (il GUID o il dominio della Sua directory, non `common`), l’ID client e il segreto. Le modifiche hanno effetto subito. Gli account già collegati continuano a funzionare.
+
+## Google
+
+**Impostazioni → Sicurezza → Accesso con Google** aggiunge un pulsante «Accedi con Google». Non crea mai account: in **Impostazioni → Utenti**, usi **Accesso con Google** nella riga di una persona per inserire il suo indirizzo Gmail o Google Workspace. Il suo primo accesso con Google con quell’indirizzo completa il collegamento, ma solo se Google ha verificato l’indirizzo. Da quel momento il collegamento segue il suo account Google e non l’indirizzo, quindi cambiare l’indirizzo in seguito non lo sposta. Vuoto rimuove il collegamento. Nella console Google Cloud, crei un ID client OAuth di tipo **Applicazione web** con l’URI di reindirizzamento mostrato nella pagina Sicurezza, quindi inserisca il suo ID client e il segreto. **Domini consentiti** limita l’accesso ai domini Google Workspace elencati, uno per riga, e rifiuta quindi gli account Gmail personali, compresi quelli già collegati. Lo lasci vuoto per consentire qualsiasi account Google. Le modifiche hanno effetto immediato.
 
 ## Active Directory
 

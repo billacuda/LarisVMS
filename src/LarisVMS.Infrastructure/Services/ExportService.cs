@@ -16,7 +16,7 @@ public class ExportService(ApplicationDbContext db, ExportManifestBuilder? manif
 {
     public async Task<ExportJob> CreateJobAsync(IReadOnlyList<Guid> cameraIds, DateTime fromUtc, DateTime toUtc,
         string requestedByUserId, string? requestedByUserName, CancellationToken ct = default,
-        IReadOnlyDictionary<Guid, string>? redactionJsonByCamera = null)
+        IReadOnlyDictionary<Guid, string>? redactionJsonByCamera = null, bool includePlayer = false, bool convertH265 = true)
     {
         fromUtc = TimelineService.NormalizeToUtc(fromUtc);
         toUtc = TimelineService.NormalizeToUtc(toUtc);
@@ -29,7 +29,9 @@ public class ExportService(ApplicationDbContext db, ExportManifestBuilder? manif
             CreatedUtc = DateTime.UtcNow,
             FromUtc = fromUtc,
             ToUtc = toUtc,
-            Status = ExportJobStatus.Queued
+            Status = ExportJobStatus.Queued,
+            IncludePlayer = includePlayer,
+            ConvertH265 = includePlayer && convertH265,
         };
 
         foreach (var cameraId in cameraIds.Distinct())
@@ -65,7 +67,7 @@ public class ExportService(ApplicationDbContext db, ExportManifestBuilder? manif
             select new ExportDispatchCandidate(
                 item.Id, item.CameraId, camera != null ? camera.Name : Loc.T("common.deletedCamera"),
                 item.NodeId ?? (camera != null ? camera.NodeId : null), item.NodeId != null,
-                job.FromUtc, job.ToUtc, item.RedactionJson)
+                job.FromUtc, job.ToUtc, item.RedactionJson, job.IncludePlayer && job.ConvertH265)
         ).ToListAsync(ct);
 
     public async Task SplitItemAcrossNodesAsync(Guid itemId, IReadOnlyList<Guid> nodeIds, CancellationToken ct = default)
@@ -128,6 +130,12 @@ public class ExportService(ApplicationDbContext db, ExportManifestBuilder? manif
                 ? report.OutputSha256!.ToLowerInvariant() : null;
             item.ErrorMessage = report.Success ? null : Truncate(report.ErrorMessage ?? Loc.T("server.export.exportFailed"), 2000);
             item.CompletedUtc = DateTime.UtcNow;
+            // The player's H.264 copy: only with a real hash, like the export itself.
+            var converted = report.Success && report.ConvertedFilePath is not null
+                && SegmentChain.IsHash(report.ConvertedSha256?.ToLowerInvariant());
+            item.ConvertedFilePath = converted ? report.ConvertedFilePath : null;
+            item.ConvertedSizeBytes = converted ? report.ConvertedSizeBytes : null;
+            item.ConvertedSha256 = converted ? report.ConvertedSha256!.ToLowerInvariant() : null;
             affectedJobIds.Add(item.ExportJobId);
         }
 
@@ -195,10 +203,12 @@ public class ExportService(ApplicationDbContext db, ExportManifestBuilder? manif
         var nodes = await db.Nodes.AsNoTracking().Where(n => nodeIds.Contains(n.Id))
             .ToDictionaryAsync(n => n.Id, n => new { n.LastIpAddress, n.LivePort, n.MediaSigningKey }, ct);
 
-        var files = doneItems.Select(i =>
+        // The player's H.264 copy too, when there is one.
+        var files = doneItems.SelectMany(i =>
         {
             nodes.TryGetValue(i.NodeId!.Value, out var node);
-            return new ExportJobDeletionFile(i.Id, i.OutputFilePath!, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey);
+            var paths = i.ConvertedFilePath is null ? new[] { i.OutputFilePath! } : [i.OutputFilePath!, i.ConvertedFilePath];
+            return paths.Select(path => new ExportJobDeletionFile(i.Id, path, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey));
         }).ToList();
 
         return new ExportJobDeletionInfo(true, null, files);
@@ -222,6 +232,9 @@ public class ExportService(ApplicationDbContext db, ExportManifestBuilder? manif
         item.NodeId = null;
         item.OutputFilePath = null;
         item.OutputSizeBytes = null;
+        item.ConvertedFilePath = null;
+        item.ConvertedSizeBytes = null;
+        item.ConvertedSha256 = null;
         item.ErrorMessage = null;
         item.StartedUtc = null;
         item.CompletedUtc = null;

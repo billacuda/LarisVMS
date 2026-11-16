@@ -1238,8 +1238,10 @@ app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Ex
 
     var redactionEncoder = redactionFilters.Count > 0 ? EncoderSelection.ChooseH264Encoder(worker.DetectedEncoders) : null;
 
+    // The standalone player's H.264 copy, when the export asked for one.
+    var convertEncoder = request.ConvertToH264 ? EncoderSelection.ChooseH264Encoder(worker.DetectedEncoders) : null;
     _ = Task.Run(() => exportRunner.RunAsync(request.ExportItemId, cameraId, validatedPaths, storageRoot, outputFileName, CancellationToken.None,
-        talkClips, request.SegmentsHaveAudio, redactionFilters, redactionEncoder, request.SegmentSha256));
+        talkClips, request.SegmentsHaveAudio, redactionFilters, redactionEncoder, request.SegmentSha256, request.ConvertToH264, convertEncoder));
 });
 
 // Export download side — serves exactly one finished export item's file to LarisVMS.Web's

@@ -14,6 +14,7 @@
 @inject ISettingsResolver Settings
 @inject IAuditService AuditService
 @inject IPermissionService PermissionService
+@inject IViewService ViewService
 
 <PageTitle>@L["settings.permissions.roles.permissionsRoles"] - @AppName</PageTitle>
 
@@ -450,6 +451,8 @@
         Db.RoleAssignmentExpiries.RemoveRange(Db.RoleAssignmentExpiries.Where(a => a.RoleId == role.Id));
         if (profile is not null) Db.RoleProfiles.Remove(profile);
         await Db.SaveChangesAsync();
+        // The role's views aren't lost: they move into the Private views of whoever deleted it.
+        await ViewService.MoveDeletedRoleTreeAsync(role.Id, CurrentUserId ?? "");
 
         var name = role.Name;
         await RoleManagerService.DeleteAsync(role);

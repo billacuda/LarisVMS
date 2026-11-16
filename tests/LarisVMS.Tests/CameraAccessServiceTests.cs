@@ -14,7 +14,7 @@ namespace LarisVMS.Tests;
 public class CameraAccessServiceTests
 {
     private static CameraAccess Row(CameraAccessScopeType scope, Guid? scopeId, CameraAccessActions actions)
-        => new() { Id = Guid.NewGuid(), PrincipalType = CameraAccessPrincipalType.User, PrincipalId = "u1", ScopeType = scope, ScopeId = scopeId, Actions = actions };
+        => new() { Id = Guid.NewGuid(), PrincipalType = CameraAccessPrincipalType.Role, PrincipalId = "r1", ScopeType = scope, ScopeId = scopeId, Actions = actions };
 
     [Fact]
     public void AnAllScopeGrantForTheRequestedActionMeansUnrestricted()

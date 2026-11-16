@@ -6,20 +6,34 @@
 <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-2" id="viewPlayToolbar">
     <h1 class="mb-0 h4">@Model.Name</h1>
     <div class="d-flex flex-wrap gap-2 align-items-center">
-        @if (Model.Views.Count > 0)
+        @if (Model.Views.Count > 0 && Model.Tree is { } tree)
         {
-            <select class="form-select form-select-sm" style="width:auto;" id="viewPlayPicker"
-                    title="@L["playContent.switchViewNow"]" aria-label="@L["playContent.switchViewNow"]"
-                    data-navigate="view-play">
-                @* Camera count in the label, so switching views is a choice between "House (6)" and
-                   "Yard (2)" rather than between two bare names. Counts cells, matching the Cameras
-                   column on Views/Index — the two would otherwise disagree for a view that places
-                   the same camera in more than one cell. *@
-                @foreach (var v in Model.Views)
-                {
-                    <option value="@v.Id" selected="@(v.Id == Model.CurrentViewId ? "selected" : null)">@L["views.nameWithCells", new { name = v.Name, cells = ViewLayout.CountCells(v.LayoutJson) }]</option>
-                }
-            </select>
+            @* The same view tree as the Views page, open-only: Private, each role's folder, and roles'
+               views an admin let this person open. Camera count in each label, so switching is a
+               choice between "House (6)" and "Yard (2)" rather than between two bare names. Closed
+               on an outside click or Escape by view-play.js (wireViewTreePicker). *@
+            <details class="d-inline-block position-relative" id="viewTreePickerDetails">
+                <summary class="btn btn-sm btn-outline-secondary" style="list-style:none; cursor:pointer;"
+                         title="@L["playContent.switchViewNow"]" aria-label="@L["playContent.switchViewNow"]">
+                    <span aria-hidden="true">▦</span> @L["playContent.views"] ▾
+                </summary>
+                <nav class="position-absolute end-0 mt-1 p-2 bg-body border rounded shadow small"
+                     style="z-index:1000; width:20rem; max-width:calc(100vw - 24px); max-height:28rem; overflow-y:auto;"
+                     aria-label="@L["playContent.switchViewNow"]">
+                    <ul class="vt-list vt-top">
+                        @foreach (var root in tree.Trees.Where(t => t.Views.Count > 0))
+                        {
+                            <li class="vt-root">
+                                <div class="vt-row">
+                                    <span aria-hidden="true">@(root.Kind == "private" ? "🔒" : "👥")</span>
+                                    <span class="vt-name">@root.Name</span>
+                                </div>
+                                @{ PickerLevel(root, null); }
+                            </li>
+                        }
+                    </ul>
+                </nav>
+            </details>
         }
         @* Watch one camera directly, no saved View needed — explicit user ask. A <select> can't hold
            a filter box, so this is a <details> popover instead, same convention _ColumnPicker.cshtml
@@ -80,3 +94,35 @@
 </div>
 
 <div id="viewPlayGrid"></div>
+
+@functions {
+    // One level of a view tree in the view picker: folders that hold a view somewhere below, then
+    // views, each linking to it (the current one marked).
+    void PickerLevel(LarisVMS.Core.Interfaces.ViewTreeRootDto root, Guid? parentId)
+    {
+        var folders = root.Folders.Where(f => f.ParentId == parentId && HasViews(root, f.Id)).ToList();
+        var views = root.Views.Where(v => v.FolderId == parentId).ToList();
+        if (folders.Count == 0 && views.Count == 0) return;
+        <ul class="vt-list">
+            @foreach (var f in folders)
+            {
+                <li>
+                    <div class="vt-row"><span aria-hidden="true">📁</span> <span class="vt-name">@f.Name</span></div>
+                    @{ PickerLevel(root, f.Id); }
+                </li>
+            }
+            @foreach (var v in views)
+            {
+                <li>
+                    <a class="vt-row" href="/Views/Play/@v.Id" aria-current="@(v.Id == Model.CurrentViewId ? "page" : null)">
+                        <span aria-hidden="true">▦</span> @L["views.nameWithCells", new { name = v.Name, cells = v.Cells }]
+                    </a>
+                </li>
+            }
+        </ul>
+    }
+
+    static bool HasViews(LarisVMS.Core.Interfaces.ViewTreeRootDto root, Guid folderId) =>
+        root.Views.Any(v => v.FolderId == folderId)
+        || root.Folders.Any(f => f.ParentId == folderId && HasViews(root, f.Id));
+}

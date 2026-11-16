@@ -14,9 +14,8 @@ public class CameraAccessService(ApplicationDbContext db) : ICameraAccessService
     {
         // Checked on IsAuthenticated, not on NameIdentifier's presence: an API-key-authenticated
         // principal (M20) carries a Role claim but no NameIdentifier at all (it's bound to a Role, not
-        // a user — see ApiKeyAuthMiddleware). userId staying null below is fine — the User-scoped
-        // branch of the CameraAccess query just never matches a null PrincipalId, so a role-only
-        // principal still resolves correctly through its Role-scoped grants.
+        // a user — see ApiKeyAuthMiddleware). Access is granted to roles only, so either way it
+        // resolves through the principal's roles.
         if (user.Identity?.IsAuthenticated != true) return []; // not authenticated — sees nothing, not everything
         var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
@@ -43,9 +42,9 @@ public class CameraAccessService(ApplicationDbContext db) : ICameraAccessService
 
         var rows = await db.CameraAccesses
             .AsNoTracking()
-            .Where(a =>
-                (a.PrincipalType == CameraAccessPrincipalType.User && a.PrincipalId == userId) ||
-                (a.PrincipalType == CameraAccessPrincipalType.Role && roleIds.Contains(a.PrincipalId)))
+            // Role grants only: camera access is role-based (personal rows were folded into roles or
+            // removed once — RoleSeedService.RoleOnlyCameraAccessAsync).
+            .Where(a => a.PrincipalType == CameraAccessPrincipalType.Role && roleIds.Contains(a.PrincipalId))
             .ToListAsync(ct);
 
         // Nothing granted means no cameras. (This used to mean every camera; existing installs got

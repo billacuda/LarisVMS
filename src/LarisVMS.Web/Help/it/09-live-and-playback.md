@@ -4,7 +4,17 @@ Viste, riquadri dal vivo, timeline di riproduzione, esportazioni, segnalibri, bl
 
 ## Viste
 
-Una **vista** è un layout di telecamere salvato. Crei le viste in **Viste** trascinando e ridimensionando i riquadri. **Dal vivo** e **Riproduzione** mostrano entrambe una vista. Sui telefoni il layout si riduce a una o due colonne. Le viste possono girare a schermo intero in modalità kiosk, o ruotare tra più viste con un timer. Una vista condivisa può essere usata da tutti coloro che vedono le viste, ma solo il suo proprietario o un amministratore può modificarla o eliminarla.
+Una **vista** è un layout di telecamere salvato. Crei le viste in **Viste** trascinando e ridimensionando i riquadri. **Dal vivo** e **Riproduzione** mostrano entrambe una vista. Sui telefoni il layout si riduce a una o due colonne. Le viste possono girare a schermo intero in modalità kiosk, o ruotare tra più viste con un timer.
+
+Le viste sono conservate in cartelle, e le cartelle possono contenere altre cartelle:
+
+- **Private** contiene le Sue viste. Le vede solo Lei.
+- Ogni ruolo ha una cartella che vedono tutti i membri del ruolo. I membri che hanno anche l’autorizzazione **Viste → Modifica** possono aggiungere, modificare, rinominare, spostare ed eliminare viste e cartelle al suo interno. Un Super Admin può modificare la cartella di qualsiasi ruolo.
+- Un amministratore può consentire a un ruolo di aprire le viste di un altro ruolo in **Impostazioni → Accesso alle viste**. Quelle viste si possono aprire ma non modificare; per permettere a qualcuno di modificarle, lo aggiunga al ruolo. I ruoli non possono condividere le proprie viste.
+
+Faccia clic con il tasto destro su una vista o una cartella (oppure prema il tasto Menu o Maiusc+F10, o tenga premuto su uno schermo touch) per aprirla, modificarla, rinominarla, copiarla, tagliarla, incollare o eliminarla. Trascini una vista o una cartella su una cartella per spostarla. Uno spostamento all’interno della cartella dello stesso ruolo, o della Sua cartella Private, chiede prima conferma, a meno che non scelga **Non chiedere più fino alla disconnessione**. Uno spostamento nella cartella di un altro ruolo chiede sempre conferma, perché chi non fa parte di quel ruolo smette di vederla. Eliminando una cartella il suo contenuto resta: le sue viste e cartelle salgono di un livello.
+
+I nomi sono unici nella cartella di ogni ruolo e nella Sua cartella Private, contando tutte le cartelle al loro interno. Una copia incollata dove il suo nome è già usato si chiama «*nome* - copia» (poi «- copia 2» e così via). Da quel momento è una vista separata: rinominarne o modificarne una non cambia l’altra. Quando un ruolo viene eliminato, le sue viste passano nella cartella Private dell’amministratore che lo ha eliminato.
 
 ## Riquadri dal vivo
 
@@ -25,7 +35,7 @@ Le telecamere con altoparlante mostrano un pulsante 🎙️ sul loro riquadro da
 
 - Il browser chiede l’accesso al microfono la prima volta. Lo consente solo quando il sito è aperto tramite **HTTPS**; vedere [Certificati](/Help/security#certificates).
 - Una sola persona alla volta può parlare tramite una telecamera.
-- Serve l’autorizzazione **Parla** sulla telecamera (**Impostazioni → Accesso alle telecamere**). La telecamera deve supportare l’audio bidirezionale ONVIF (un’uscita audio nel suo profilo ONVIF). Le telecamere Dahua, Amcrest, Lorex ed EmpireTech il cui firmware non lo offre ripiegano sull’API audio della telecamera stessa.
+- Serve l’autorizzazione **Parla** sulla telecamera (**Impostazioni → Accesso alle telecamere**). La telecamera deve supportare l’audio bidirezionale ONVIF (un’uscita audio nel suo profilo ONVIF). Le telecamere Dahua, Amcrest, Lorex ed EmpireTech il cui firmware non lo offre ripiegano sull’API audio della telecamera stessa. Se la connessione riesce ma dall’altoparlante non esce nulla, nella pagina di modifica della telecamera imposti **Audio bidirezionale → Metodo per parlare** su **API audio della telecamera**.
 - Tutto ciò che viene detto è registrato. Il microfono della telecamera stessa fa parte della registrazione video come al solito, e ogni pressione del pulsante viene salvata insieme ai filmati. Le pressioni compaiono sulla timeline di riproduzione in verde acqua e vengono riprodotte in sincronia con il video, con il volume del riquadro. Le esportazioni le includono, mescolate all’audio della telecamera. Sono conservate quanto i filmati della telecamera.
 - Ogni sessione viene scritta nel registro di audit.
 
@@ -67,6 +77,20 @@ Per verificare un’esportazione, apra **Esportazioni → Verifica un’esportaz
 Conservi il manifest con il video quando consegna un’esportazione. Chiunque può verificare la firma senza LarisVMS: salvi il `publicKeyPem` del manifest in `key.pem`, il suo testo `signedPayload` in `payload.txt` e il suo `signatureDer` decodificato da base64 in `sig.der`, poi esegua `openssl dgst -sha256 -verify key.pem -signature sig.der payload.txt`. I filmati registrati prima di questa funzione non hanno impronte, quindi si può verificare solo l’esportazione stessa.
 
 La firma è sempre attiva. La chiave di firma del server, con un download della sua chiave pubblica, è in **Impostazioni → Cifratura e firma**.
+
+### Lettore autonomo
+
+Per consegnare i filmati a chi non ha LarisVMS, come investigatori, polizia o avvocati, selezioni **Includi il lettore autonomo** nel pannello di esportazione (oppure invii `includePlayer` all’[API](/Help/api)). Al termine dell’esportazione, **📦 Scarica con il lettore** nella pagina Esportazioni scarica un unico zip con:
+
+- **Player.html**, che si apre direttamente dalla cartella estratta in Chrome, Edge, Firefox o Safari, senza installare nulla e senza internet;
+- il video di ogni telecamera, con gli eventi, i segnalibri e i blocchi delle prove dell’intervallo, e il registro dell’esportazione;
+- il manifesto firmato di ogni video e **package.manifest.json**, un elenco firmato di tutti i file del pacchetto.
+
+Nel lettore, trascini le telecamere in una griglia fino a 16 riquadri e le riproduca insieme su un’unica linea temporale: velocità da 1/8× a 16×, avanzamento di un fotogramma alla volta, salti tra gli eventi, zoom su un riquadro e riquadri di rilevamento. **Eventi** elenca ogni movimento e rilevamento, **Informazioni** mostra i dettagli e il registro dell’esportazione e **Verifica** confronta l’intera cartella con il suo elenco firmato e la catena dei filmati di ogni telecamera, tutto su quel computer. Gli orari si possono mostrare nel fuso di quel computer, in quello del sito o in UTC.
+
+Alcuni browser non riproducono i video H.265. **Crea anche una copia H.264 dei video H.265** (attivo per impostazione predefinita) aggiunge una copia del video di ogni telecamera H.265 riproducibile ovunque. L’originale viene conservato ed entrambi sono nell’elenco firmato. Richiede più tempo, perché il registratore ricodifica il video.
+
+Il download viene composto dai registratori man mano. Se un file è cambiato sul suo registratore dopo l’esportazione, il download si interrompe invece di includerlo.
 
 ## Segnalibri
 

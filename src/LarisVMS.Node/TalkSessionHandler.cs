@@ -141,22 +141,46 @@ public static class TalkSessionHandler
         }
     }
 
-    /// <summary>The standard ONVIF audio backchannel first; for a Dahua-family camera (its event
+    private static Task<ITalkSink> OpenSinkAsync(NodeConfigCameraDto camera, Uri rtspUri, ILogger logger, CancellationToken ct) =>
+        OpenSinkAsync(camera, rtspUri, logger, ct,
+            async (uri, c) => await OnvifBackchannelClient.ConnectAsync(uri, camera.Username, camera.Password, logger, c),
+            async (uri, c) => await DahuaAudioPostClient.ConnectAsync(uri, camera.Username, camera.Password, logger, c));
+
+    /// <summary>Picks how audio reaches the camera's speaker, by the camera's Talk.Method:
+    /// <list type="bullet">
+    /// <item>"Auto": the standard ONVIF audio backchannel; for a Dahua-family camera (its event
     /// integration is in use) whose firmware refuses that, Dahua's own HTTP audio API. The ONVIF
-    /// error is what the operator sees if both fail — it's the one that applies to every camera.</summary>
-    private static async Task<ITalkSink> OpenSinkAsync(NodeConfigCameraDto camera, Uri rtspUri, ILogger logger, CancellationToken ct)
+    /// error is what the operator sees if both fail — it's the one that applies to every camera.</item>
+    /// <item>"Onvif": the ONVIF backchannel only.</item>
+    /// <item>"CameraApi": the Dahua/Amcrest/Lorex HTTP audio API only — for a camera that accepts the
+    /// ONVIF session but plays nothing, which "Auto" can't notice since nothing fails.</item>
+    /// </list></summary>
+    internal static async Task<ITalkSink> OpenSinkAsync(NodeConfigCameraDto camera, Uri rtspUri, ILogger logger, CancellationToken ct,
+        Func<Uri, CancellationToken, Task<ITalkSink>> connectOnvif, Func<Uri, CancellationToken, Task<ITalkSink>> connectCameraApi)
     {
+        if (string.Equals(camera.TalkMethod, "CameraApi", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!Uri.TryCreate(camera.IntegrationBaseUri ?? camera.DeviceBaseUri, UriKind.Absolute, out var apiBase))
+                throw new BackchannelException("This camera has no address for its own audio API. Re-probe it, or set Two-way audio to Auto.");
+            logger.LogInformation("Two-way audio to {Camera} uses the camera's own audio API.", camera.Name);
+            return await connectCameraApi(apiBase, ct);
+        }
+
+        var onvifOnly = string.Equals(camera.TalkMethod, "Onvif", StringComparison.OrdinalIgnoreCase);
+        logger.LogInformation("Two-way audio to {Camera} uses the ONVIF audio backchannel{Fallback}.", camera.Name,
+            onvifOnly ? " only" : "");
         try
         {
-            return await OnvifBackchannelClient.ConnectAsync(rtspUri, camera.Username, camera.Password, logger, ct);
+            return await connectOnvif(rtspUri, ct);
         }
-        catch (BackchannelException onvifError) when (camera.IntegrationKey == LarisVMS.Core.DahuaCgiIntegrationProvider.ProviderKey
+        catch (BackchannelException onvifError) when (!onvifOnly
+                                                     && camera.IntegrationKey == LarisVMS.Core.DahuaCgiIntegrationProvider.ProviderKey
                                                      && Uri.TryCreate(camera.IntegrationBaseUri, UriKind.Absolute, out var dahuaBase))
         {
             logger.LogInformation("ONVIF audio backchannel refused by {Camera} ({Reason}) — trying the Dahua audio API.", camera.Name, onvifError.Message);
             try
             {
-                return await DahuaAudioPostClient.ConnectAsync(dahuaBase, camera.Username, camera.Password, logger, ct);
+                return await connectCameraApi(dahuaBase, ct);
             }
             catch (BackchannelException dahuaError)
             {

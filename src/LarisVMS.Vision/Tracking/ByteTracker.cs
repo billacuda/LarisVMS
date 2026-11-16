@@ -34,7 +34,8 @@ public sealed class ByteTrackOptions
     /// relationship between them (the reference derives its new-track threshold as
     /// <c>track_thresh + 0.1</c>). A deployment left on the old 0.5 default lands back on exactly
     /// 0.5 / 0.6 and behaves as before.</summary>
-    public static ByteTrackOptions ForFamily(DetectionModelFamily family, double detectionConfidence)
+    public static ByteTrackOptions ForFamily(DetectionModelFamily family, double detectionConfidence,
+        int frameWidth = 0, int frameHeight = 0)
     {
         // Clamped so a confidence at either extreme can't produce a nonsensical pair: at 0 the tracker
         // would accept literally anything as a new track, and above ~0.9 nothing could ever start one.
@@ -50,14 +51,30 @@ public sealed class ByteTrackOptions
                 HighThreshold = trackThreshold + 0.1f,
                 MatchThreshold = 0.8f,
                 FuseScore = true,
+                FrameWidth = frameWidth,
+                FrameHeight = frameHeight,
             },
             _ => new ByteTrackOptions
             {
                 TrackThreshold = trackThreshold,
                 HighThreshold = trackThreshold + 0.1f,
+                FrameWidth = frameWidth,
+                FrameHeight = frameHeight,
             },
         };
     }
+
+    /// <summary>The frame's size in the detections' own pixel space, so a box touching its edge is
+    /// known to be cut off (its shape then says nothing). 0 when unknown: only the left and top
+    /// edges can be recognized then.</summary>
+    public int FrameWidth { get; init; }
+    public int FrameHeight { get; init; }
+
+    /// <summary>How far (as a ratio, wider or narrower) a detection's shape may differ from a moving
+    /// track's usual shape and still be that object. The side of a car is about 2.5 wide per 1 high
+    /// and its back about 1.2, so a car driving past can't take over the back of a parked one.
+    /// 1 or less turns the check off.</summary>
+    public float MaxAspectChange { get; init; } = 1.6f;
 
     /// <summary>Detections at or above this score enter the first association pass.</summary>
     public float TrackThreshold { get; init; } = 0.5f;
@@ -98,6 +115,10 @@ public sealed class ByteTracker
     private readonly ByteTrackOptions _options;
     private readonly ByteKalmanFilter _filter = new();
     private readonly int _maxTimeLost;
+    // A parked object hidden by something passing in front can be out of sight much longer than a
+    // mover in a brief gap, and it hasn't gone anywhere — keep it so it gets its own box back.
+    private readonly int _maxTimeLostParked;
+    private const int ParkedKeepFactor = 10;
 
     private readonly List<STrack> _tracked = [];
     private readonly List<STrack> _lost = [];
@@ -115,6 +136,41 @@ public sealed class ByteTracker
     {
         _options = options ?? new ByteTrackOptions();
         _maxTimeLost = (int)(_options.FrameRate / 30.0 * _options.TrackBuffer);
+        _maxTimeLostParked = _maxTimeLost * ParkedKeepFactor;
+    }
+
+    /// <summary>Whether a box touches the frame's edge (within 1%, at least 2 px), so it may be cut off.</summary>
+    private bool TouchesEdge(SKRectI box)
+    {
+        var marginX = Math.Max(2f, _options.FrameWidth * 0.01f);
+        var marginY = Math.Max(2f, _options.FrameHeight * 0.01f);
+        if (box.Left <= marginX || box.Top <= marginY) return true;
+        return (_options.FrameWidth > 0 && box.Right >= _options.FrameWidth - marginX)
+            || (_options.FrameHeight > 0 && box.Bottom >= _options.FrameHeight - marginY);
+    }
+
+    // A track that isn't moving may still take a box of a different shape that lies mostly inside
+    // where it was last seen: that's the same object cut at a slice seam or partly covered. A moving
+    // one may not, since a smaller box in its path can just as well be another object.
+    private const float CutBackShareInside = 0.8f;
+
+    private static bool ShapeExempt(STrack track, STrack detection) =>
+        !(track.State == TrackState.Lost ? track.MovingWhenLost : IsMoving(track))
+        && TrackMatching.ShareInsideLastSeen(track, detection) >= CutBackShareInside;
+
+    private void ApplyShapeGate(float[,] cost, IReadOnlyList<STrack> tracks, IReadOnlyList<STrack> detections) =>
+        TrackMatching.ApplyShapeGate(cost, tracks, detections, _options.MaxAspectChange, ShapeExempt);
+
+    /// <summary>A track that was there long enough to be a real object and wasn't moving when it went
+    /// out of sight — a parked car something drove in front of. Kept longer, and given its box back
+    /// first (step 1b).</summary>
+    private static bool IsParkedLost(STrack track) =>
+        track.State == TrackState.Lost && !track.MovingWhenLost && track.FrameId - track.StartFrame >= YoungTrackFrames;
+
+    private void Matched(STrack track, STrack detection)
+    {
+        track.DetectionIndex = detection.DetectionIndex;
+        track.NoteShape(detection, _options.TrackThreshold);
     }
 
     private int NextTrackId() => ++_nextTrackId;
@@ -203,7 +259,7 @@ public sealed class ByteTracker
             var box = detection.BoundingBox;
 
             Span<float> tlwh = [box.Left, box.Top, box.Width, box.Height];
-            var track = new STrack(tlwh, score, detection.Label?.Index ?? 0) { DetectionIndex = i };
+            var track = new STrack(tlwh, score, detection.Label?.Index ?? 0) { DetectionIndex = i, IsClipped = TouchesEdge(box) };
 
             if (score >= _options.TrackThreshold)
             {
@@ -238,11 +294,34 @@ public sealed class ByteTracker
 
         STrack.MultiPredict(pool, _filter);
 
+        // Step 1b - a parked object that something drove in front of: when it's uncovered, its box is
+        // right where it was last seen. Give that box back to its own (lost, not moving) track first,
+        // before the passing car's track — whose prediction may still overlap it as it leaves — can
+        // claim it. Matched on where it was last seen, not on a prediction, same class only.
+        var parked = pool.Where(IsParkedLost).ToList();
+        if (parked.Count > 0 && high.Count > 0)
+        {
+            var (reclaimed, _, _) = TrackMatching.LinearAssignment(
+                TrackMatching.LastSeenIouDistance(parked, high), parked.Count, high.Count, ParkedReclaimMaxCost);
+            var reclaimedDetections = new HashSet<STrack>();
+            foreach (var (t, d) in reclaimed)
+            {
+                var track = parked[t];
+                track.ReActivate(_filter, high[d], _frameId, newTrackId: null);
+                Matched(track, high[d]);
+                refound.Add(track);
+                pool.Remove(track);
+                reclaimedDetections.Add(high[d]);
+            }
+            high.RemoveAll(reclaimedDetections.Contains);
+        }
+
         var cost = TrackMatching.IouDistance(pool, high);
         if (_options.FuseScore)
         {
             TrackMatching.FuseScore(cost, high);
         }
+        ApplyShapeGate(cost, pool, high);
 
         var (matches, unmatchedTracks, unmatchedHigh) =
             TrackMatching.LinearAssignment(cost, pool.Count, high.Count, _options.MatchThreshold);
@@ -263,7 +342,7 @@ public sealed class ByteTracker
                 refound.Add(track);
             }
 
-            track.DetectionIndex = detection.DetectionIndex;
+            Matched(track, detection);
         }
 
         // Step 2b - an object that moved further than its own size since the last analysed frame
@@ -283,13 +362,14 @@ public sealed class ByteTracker
             for (var t = 0; t < tracksLeft.Count; t++)
                 for (var d = 0; d < highLeft.Count; d++)
                     if (!AheadOf(tracksLeft[t], highLeft[d])) bufferedCost[t, d] = 1f;
+            ApplyShapeGate(bufferedCost, tracksLeft, highLeft);
             var (bufferedMatches, _, _) = TrackMatching.LinearAssignment(bufferedCost, tracksLeft.Count, highLeft.Count, BufferedMatchThreshold);
             var usedTracks = new HashSet<int>();
             var usedHigh = new HashSet<int>();
             foreach (var (t, d) in bufferedMatches)
             {
                 tracksLeft[t].Update(_filter, highLeft[d], _frameId);
-                tracksLeft[t].DetectionIndex = highLeft[d].DetectionIndex;
+                Matched(tracksLeft[t], highLeft[d]);
                 activated.Add(tracksLeft[t]);
                 usedTracks.Add(leftTracks[t]);
                 usedHigh.Add(leftHigh[d]);
@@ -308,6 +388,7 @@ public sealed class ByteTracker
             .ToList();
 
         var lowCost = TrackMatching.IouDistance(stillTracked, low);
+        ApplyShapeGate(lowCost, stillTracked, low);
         var (lowMatches, unmatchedLowTracks, _) =
             TrackMatching.LinearAssignment(lowCost, stillTracked.Count, low.Count, 0.5f);
 
@@ -327,7 +408,7 @@ public sealed class ByteTracker
                 refound.Add(track);
             }
 
-            track.DetectionIndex = detection.DetectionIndex;
+            Matched(track, detection);
         }
 
         foreach (var index in unmatchedLowTracks)
@@ -356,7 +437,7 @@ public sealed class ByteTracker
         {
             var track = unconfirmed[trackIndex];
             track.Update(_filter, remainingHigh[detectionIndex], _frameId);
-            track.DetectionIndex = remainingHigh[detectionIndex].DetectionIndex;
+            Matched(track, remainingHigh[detectionIndex]);
             activated.Add(track);
         }
 
@@ -380,7 +461,7 @@ public sealed class ByteTracker
             {
                 var track = tracksLeft[t];
                 track.Update(_filter, highLeft[d], _frameId);
-                track.DetectionIndex = highLeft[d].DetectionIndex;
+                Matched(track, highLeft[d]);
                 activated.Add(track);
                 usedTracks.Add(leftUnconfirmed[t]);
                 usedHigh.Add(leftRemaining[d]);
@@ -421,7 +502,10 @@ public sealed class ByteTracker
                     for (var c = 0; c < candidates.Count; c++)
                     {
                         var (detection, young, _) = candidates[c];
+                        // A fresh detection must also be its shape. A young track is let off: it's
+                        // often the object's first, partly hidden sighting, cut narrow by the tree.
                         var allowed = (young is null || young.StartFrame > rejoinable[t].FrameId)
+                            && (young is not null || !TrackMatching.ShapeDiffers(rejoinable[t], detection, _options.MaxAspectChange))
                             && (canRejoin?.Invoke(rejoinable[t].TrackId, detection.DetectionIndex)
                                 ?? rejoinable[t].ClassId == detection.ClassId);
                         rejoinCost[t, c] = allowed && RejoinCost(rejoinable[t], detection) is { } fit ? fit : 1f;
@@ -436,7 +520,7 @@ public sealed class ByteTracker
                     var (detection, young, highIndex) = candidates[c];
                     var framesHidden = _frameId - hidden.FrameId;
                     hidden.ReActivate(_filter, detection, _frameId, newTrackId: null);
-                    hidden.DetectionIndex = detection.DetectionIndex;
+                    Matched(hidden, detection);
                     refound.Add(hidden);
                     if (young is not null)
                     {
@@ -470,6 +554,7 @@ public sealed class ByteTracker
             }
 
             detection.Activate(_filter, _frameId, NextTrackId());
+            detection.NoteShape(detection, _options.TrackThreshold);
             activated.Add(detection);
             TracksStarted++;
         }
@@ -477,7 +562,7 @@ public sealed class ByteTracker
         // Step 6 - retire tracks lost for too long.
         foreach (var track in _lost)
         {
-            if (_frameId - track.FrameId > _maxTimeLost)
+            if (_frameId - track.FrameId > (IsParkedLost(track) ? _maxTimeLostParked : _maxTimeLost))
             {
                 track.MarkRemoved();
                 removed.Add(track);
@@ -528,6 +613,8 @@ public sealed class ByteTracker
     private const float RejoinSpeedShare = 0.02f;
     // Step 4c cost is the distance from the predicted spot over the allowed spread; above this, no.
     private const float RejoinMaxCost = 0.99f;
+    // Step 1b: a parked object's box must be back where it was last seen — overlap of at least 0.7.
+    private const float ParkedReclaimMaxCost = 0.3f;
 
     /// <summary>How well a detection fits a hidden track coming back into view (step 4c), 0 best,
     /// or null when it can't be that object: a different size, behind where it was hidden, off its

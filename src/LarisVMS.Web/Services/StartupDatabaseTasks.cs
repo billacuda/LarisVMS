@@ -84,6 +84,28 @@ public sealed class StartupDatabaseTasks(
         // Seeds the built-in roles' RoleProfile rows (renaming Administrator/Viewer to Super
         // Admin/Guest-Viewer in place along the way) — idempotent, see RoleSeedService.
         await Timed("role seed", async () => { await services.GetRequiredService<IRoleSeedService>().SeedAsync(cancellationToken); return true; });
+        // Camera access became role-only: tell Super Admins who lost personal access no role gives them.
+        if (services.GetRequiredService<IRoleSeedService>().AccountsLosingPersonalCameraAccess is { Count: > 0 } lostAccess)
+        {
+            try
+            {
+                var accounts = string.Join(", ", lostAccess);
+                await services.GetRequiredService<INotificationService>().NotifySuperAdminsAsync(
+                    () => Loc.T("server.cameraAccess.roleOnlyTitle"), () => Loc.T("server.cameraAccess.roleOnlyNotice", new { accounts }),
+                    "/Admin/Settings/CameraAccess", cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Could not send the camera access notice.");
+            }
+        }
+        // View names became unique within each view tree; older views could share a name.
+        await Timed("view names", async () =>
+        {
+            var renamed = await services.GetRequiredService<IViewService>().MakeNamesUniqueAsync(cancellationToken);
+            if (renamed > 0) logger.LogInformation("Startup: {Count} views or folders renamed so names are unique in each view tree.", renamed);
+            return true;
+        });
         await Timed("camera group seed", async () => { await services.GetRequiredService<ICameraGroupSeedService>().SeedAsync(cancellationToken); return true; });
         // Notes the server certificate in use, so a changed self-signed one (which pinned nodes refuse)
         // is audited and shown on the Nodes page.

@@ -7,17 +7,17 @@ using LarisVMS.Core.Interfaces;
 
 namespace LarisVMS.Web.Pages.Views;
 
-[Authorize("Views.Edit")]
-public class EditorModel(IViewService viewService, ICameraService cameraService, ICameraAccessService cameraAccess,
-    IPermissionService permissions) : PageModel
+// Views.View, not Views.Edit: anyone may edit their own Private views. Whether this view may be
+// changed (its tree) is ViewService's call.
+[Authorize("Views.View")]
+public class EditorModel(IViewService viewService, ICameraService cameraService, ICameraAccessService cameraAccess) : PageModel
 {
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
-    public bool IsShared { get; set; }
     public string LayoutJson { get; set; } = "{\"cells\":[],\"mobileTwoColumn\":false}";
     public int SequenceIntervalSeconds { get; set; }
     public string? ErrorMessage { get; set; }
-    /// <summary>Someone else's shared view, for someone who isn't an administrator: shown, not saved.</summary>
+    /// <summary>A view in a tree this person may open but not change: shown, not saved.</summary>
     public bool ReadOnly { get; set; }
 
     /// <summary>Only cameras that could actually answer a /live request — same filter as
@@ -32,27 +32,25 @@ public class EditorModel(IViewService viewService, ICameraService cameraService,
 
         Id = view.Id;
         Name = view.Name;
-        IsShared = view.IsShared;
         LayoutJson = view.LayoutJson;
         SequenceIntervalSeconds = view.SequenceIntervalSeconds;
-        ReadOnly = view.OwnerId != userId && !await CanManageAllAsync();
+        ReadOnly = !await viewService.CanEditAsync(view.Id, userId);
 
         await LoadCamerasAsync();
         return Page();
     }
 
-    public async Task<IActionResult> OnPostAsync(Guid id, string name, bool isShared, string layoutJson, int sequenceIntervalSeconds)
+    public async Task<IActionResult> OnPostAsync(Guid id, string name, string layoutJson, int sequenceIntervalSeconds)
     {
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
         try
         {
-            await viewService.UpdateAsync(id, userId, name, isShared, layoutJson, sequenceIntervalSeconds, await CanManageAllAsync());
+            await viewService.UpdateAsync(id, userId, name, layoutJson, sequenceIntervalSeconds);
         }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception ex) when (ex is UnauthorizedAccessException or ViewTreeException)
         {
             Id = id;
             Name = name;
-            IsShared = isShared;
             LayoutJson = layoutJson;
             SequenceIntervalSeconds = sequenceIntervalSeconds;
             ErrorMessage = ex.Message;
@@ -61,8 +59,6 @@ public class EditorModel(IViewService viewService, ICameraService cameraService,
         }
         return RedirectToPage("Editor", new { id });
     }
-
-    private async Task<bool> CanManageAllAsync() => (await permissions.GetGrantedAsync(User)).IsAdministrator;
 
     private async Task LoadCamerasAsync()
     {

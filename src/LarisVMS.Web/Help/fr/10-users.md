@@ -1,10 +1,10 @@
 # Utilisateurs et accès
 
-Comptes, rôles, autorisations, accès aux caméras, Active Directory et connexion Microsoft.
+Comptes, rôles, autorisations, accès aux caméras et connexion avec un compte local, Active Directory, Google ou Microsoft.
 
 ## Utilisateurs
 
-L’auto-inscription est désactivée. Les comptes sont créés sous **Paramètres → Utilisateurs**, où vous pouvez aussi attribuer des rôles, désactiver un compte et réinitialiser un mot de passe. Les comptes locaux se connectent avec leur adresse e-mail. Désactiver un compte le déconnecte aussitôt partout et ferme sa vidéo en direct.
+L’auto-inscription est désactivée. Les comptes sont créés sous **Paramètres → Utilisateurs**, où vous pouvez aussi attribuer des rôles, désactiver un compte et réinitialiser un mot de passe. Les comptes locaux se connectent avec leur adresse e-mail. Désactiver un compte le déconnecte aussitôt partout et ferme sa vidéo en direct. On se connecte avec un compte local, un compte [Active Directory](#active-directory) (via LDAPS), ou un compte [Google](#google) ou [Microsoft Entra ID](#entra) lié.
 
 ## Mots de passe
 
@@ -24,13 +24,13 @@ Toute personne qui se connecte avec un mot de passe, local ou Active Directory, 
 
 Si quelqu’un perd son téléphone et ses codes de récupération, **Désactiver la 2FA** à côté de son nom sous **Paramètres → Utilisateurs** lui permet de se connecter avec son seul mot de passe et de la configurer de nouveau.
 
-**Paramètres → Sécurité → Connexion en deux étapes** oblige toutes les personnes qui se connectent avec un mot de passe à la configurer avant de pouvoir faire quoi que ce soit d’autre, et les empêche de la désactiver. Les connexions Microsoft relèvent des propres contrôles d’Entra.
+**Paramètres → Sécurité → Connexion en deux étapes** oblige toutes les personnes qui se connectent avec un mot de passe à la configurer avant de pouvoir faire quoi que ce soit d’autre, et les empêche de la désactiver. Les connexions Microsoft et Google relèvent de leurs propres contrôles.
 
 ## Sessions
 
 Sélectionnez votre nom en haut de la page, puis **Sessions**, pour voir chaque navigateur sur lequel vous êtes connecté, avec son adresse et sa dernière utilisation. Déconnectez celles que vous ne reconnaissez pas, ou toutes sauf celle que vous utilisez, puis changez votre mot de passe. Changer votre mot de passe ou activer la connexion en deux étapes déconnecte aussitôt vos autres sessions.
 
-Avec **Paramètres → Sécurité → Confirmer le mot de passe pour les pages d’administration** activé, les pages d’administration redemandent votre mot de passe (et un code, si la connexion en deux étapes est activée) sauf si vous vous êtes connecté ou l’avez confirmé au cours des 15 dernières minutes ; leur utilisation prolonge ce délai. Quelqu’un qui trouve votre navigateur connecté peut alors utiliser le système mais pas modifier ses paramètres, ses utilisateurs ou ses clés. Les connexions Microsoft se reconnectent à la place. C’est désactivé par défaut.
+Avec **Paramètres → Sécurité → Confirmer le mot de passe pour les pages d’administration** activé, les pages d’administration redemandent votre mot de passe (et un code, si la connexion en deux étapes est activée) sauf si vous vous êtes connecté ou l’avez confirmé au cours des 15 dernières minutes ; leur utilisation prolonge ce délai. Quelqu’un qui trouve votre navigateur connecté peut alors utiliser le système mais pas modifier ses paramètres, ses utilisateurs ou ses clés. Les connexions Microsoft et Google se reconnectent à la place. C’est désactivé par défaut.
 
 Sous **Paramètres → Utilisateurs**, **Déconnecter** à côté d’une personne la déconnecte sur tous les navigateurs. Elle peut se reconnecter ; désactivez le compte pour l’en empêcher.
 
@@ -61,6 +61,10 @@ Un rôle est un ensemble nommé d’autorisations, géré sous **Paramètres →
 ## Entra
 
 **Paramètres → Sécurité → Connexion Entra ID** ajoute un bouton « Se connecter avec Microsoft ». Il ne crée jamais de comptes, et il n’associe pas les comptes par e-mail : sous **Paramètres → Utilisateurs**, utilisez **Connexion Microsoft** sur la ligne d’une personne pour saisir son **ID d’objet** Entra (depuis sa page d’utilisateur dans le centre d’administration Microsoft Entra). Sa première connexion Microsoft finalise le lien ; vide : le supprime. Enregistrez une application dans Entra avec l’URI de redirection affiché sur la page Sécurité, puis saisissez son ID de locataire (le GUID ou le domaine de votre annuaire, pas `common`), son ID client et son secret. Les modifications prennent effet immédiatement. Les comptes déjà liés continuent de fonctionner.
+
+## Google
+
+**Paramètres → Sécurité → Connexion Google** ajoute un bouton « Se connecter avec Google ». Elle ne crée jamais de comptes : dans **Paramètres → Utilisateurs**, utilisez **Connexion Google** sur la ligne d’une personne pour saisir son adresse Gmail ou Google Workspace. Sa première connexion Google avec cette adresse finalise la liaison, mais seulement si Google a vérifié l’adresse. Ensuite, la liaison suit son compte Google plutôt que l’adresse : changer l’adresse plus tard ne la déplace pas. Vide retire la liaison. Dans la console Google Cloud, créez un ID client OAuth de type **Application Web** avec l’URI de redirection affiché sur la page Sécurité, puis saisissez son ID client et son secret. **Domaines autorisés** limite la connexion aux domaines Google Workspace indiqués, un par ligne, ce qui refuse les comptes Gmail personnels, y compris ceux déjà liés. Laissez-le vide pour autoriser tout compte Google. Les modifications s’appliquent immédiatement.
 
 ## Active Directory
 

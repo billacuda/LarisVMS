@@ -48,7 +48,7 @@ HTTPS로 접속하는 카메라에는 무엇과도 대조할 수 없는 자체 �
 
 ## 암호화된 비밀
 
-카메라 자격 증명, SMB 자격 증명, 노드 키, 이메일 비밀, Entra 클라이언트 비밀, Active Directory 서비스 계정 비밀번호는 `%ProgramData%\LarisVMS\keys`의 데이터 보호 키를 사용하여 데이터베이스에서 암호화됩니다. `%ProgramData%\LarisVMS`를 열 수 있는 것은 SYSTEM, Administrators, LarisVMS 서비스 계정뿐입니다. LarisVMS를 설치하기 전에 로컬 사용자가 만든 폴더처럼 그곳에서 발견된 다른 접근은 서비스가 시작될 때 제거됩니다. 그 폴더를 백업하고 배포 중에는 절대 삭제하지 마십시오.
+카메라 자격 증명, SMB 자격 증명, 노드 키, 이메일 비밀, Entra 및 Google 클라이언트 비밀, Active Directory 서비스 계정 비밀번호는 `%ProgramData%\LarisVMS\keys`의 데이터 보호 키를 사용하여 데이터베이스에서 암호화됩니다. `%ProgramData%\LarisVMS`를 열 수 있는 것은 SYSTEM, Administrators, LarisVMS 서비스 계정뿐입니다. LarisVMS를 설치하기 전에 로컬 사용자가 만든 폴더처럼 그곳에서 발견된 다른 접근은 서비스가 시작될 때 제거됩니다. 그 폴더를 백업하고 배포 중에는 절대 삭제하지 마십시오.
 
 ## 기업을 위한 추가 보호
 

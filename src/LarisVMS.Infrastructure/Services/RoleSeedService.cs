@@ -173,6 +173,71 @@ public class RoleSeedService(
 
         await ApplyOneTimeGrantsAsync(ct);
         await FailClosedUpgradeAsync(ct);
+        AccountsLosingPersonalCameraAccess = await RoleOnlyCameraAccessAsync(ct);
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<string> AccountsLosingPersonalCameraAccess { get; private set; } = [];
+
+    /// <summary>Camera access is set by role only. Once, personal (per-user) Camera Access rows are
+    /// folded into role rows wherever that grants nobody anything new — a role whose members all have
+    /// exactly the same personal rows gets those rows — and every personal row is then removed.
+    /// Returns the accounts that lost personal access no role now gives them, so an admin can review
+    /// their roles.</summary>
+    internal async Task<IReadOnlyList<string>> RoleOnlyCameraAccessAsync(CancellationToken ct)
+    {
+        const string markerKey = "CameraAccess.RoleOnly.v1";
+        if (await db.Settings.AnyAsync(s => s.Key == markerKey, ct)) return [];
+
+        var userRows = await db.CameraAccesses.Where(a => a.PrincipalType == CameraAccessPrincipalType.User).ToListAsync(ct);
+        IReadOnlyList<string> affectedNames = [];
+        if (userRows.Count > 0)
+        {
+            static string Signature(IEnumerable<CameraAccess> rows) => string.Join(";",
+                rows.Select(r => $"{(int)r.ScopeType}:{r.ScopeId}:{(int)r.Actions}").Distinct().OrderBy(s => s, StringComparer.Ordinal));
+
+            var rowsByUser = userRows.GroupBy(r => r.PrincipalId).ToDictionary(g => g.Key, g => g.ToList());
+            var signatureOf = rowsByUser.ToDictionary(kv => kv.Key, kv => Signature(kv.Value));
+            var superRoleIds = (await db.RoleProfiles.Where(p => p.Tag == RoleTags.SuperAdmin).Select(p => p.RoleId).ToListAsync(ct)).ToHashSet();
+            var memberships = await db.UserRoles.AsNoTracking().Select(ur => new { ur.UserId, ur.RoleId }).ToListAsync(ct);
+            var membersOf = memberships.ToLookup(m => m.RoleId, m => m.UserId);
+
+            // Super Admins reach every camera anyway, so they lose nothing.
+            var covered = memberships.Where(m => superRoleIds.Contains(m.RoleId)).Select(m => m.UserId).ToHashSet();
+            foreach (var roleId in memberships.Select(m => m.RoleId).Distinct().Where(r => !superRoleIds.Contains(r)))
+            {
+                var members = membersOf[roleId].Distinct().ToList();
+                if (!signatureOf.TryGetValue(members[0], out var first)
+                    || !members.All(u => signatureOf.TryGetValue(u, out var s) && s == first)) continue;
+
+                foreach (var row in rowsByUser[members[0]].DistinctBy(r => (r.ScopeType, r.ScopeId, r.Actions)))
+                {
+                    db.CameraAccesses.Add(new CameraAccess
+                    {
+                        Id = Guid.NewGuid(), PrincipalType = CameraAccessPrincipalType.Role, PrincipalId = roleId,
+                        ScopeType = row.ScopeType, ScopeId = row.ScopeId, Actions = row.Actions,
+                    });
+                }
+                covered.UnionWith(members);
+            }
+
+            var affectedIds = rowsByUser.Keys.Where(u => !covered.Contains(u)).ToList();
+            affectedNames = (await db.Users.Where(u => affectedIds.Contains(u.Id))
+                    .Select(u => u.Email ?? u.UserName ?? u.Id).ToListAsync(ct))
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            db.CameraAccesses.RemoveRange(userRows);
+            if (affectedNames.Count > 0)
+                logger.LogWarning("Camera access is set by role only now. These accounts had personal camera access no role gives them, and lost it: {Accounts}.",
+                    string.Join(", ", affectedNames));
+        }
+
+        db.Settings.Add(new Setting
+        {
+            Id = Guid.NewGuid(), Key = markerKey, Value = "done", IsSystemSetting = true,
+            Description = "Camera access is set by role only; personal grants were folded into roles or removed once.", CreatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync(ct);
+        return affectedNames;
     }
 
     private const CameraAccessActions AllCameraActions = CameraAccessActions.View | CameraAccessActions.Playback |

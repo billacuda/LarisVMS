@@ -35,7 +35,7 @@
 
 ### 团队渠道
 
-每条规则还可以发送到电子邮件列表、Webhook、ntfy、Pushover、Slack 和 Teams。开启一个渠道并填写其字段。
+每条规则还可以发送到电子邮件列表、Webhook、ntfy、Pushover、Slack 和 Teams。开启一个渠道并填写其字段。Webhook 还会发送触发警报的内容，例如摄像头和检测到的物体，[Home Assistant](/Help/home-assistant#alerts-by-webhook) 可以使用这些信息。
 
 ## 通知
 

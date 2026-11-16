@@ -11,10 +11,11 @@ public interface IExportService
 {
     /// <summary>Creates the job and one Queued item per distinct camera id, all pointing at the
     /// same job.</summary>
-    /// <summary>redactionJsonByCamera: per camera, the areas to black out (ExportJobItem.RedactionJson).</summary>
+    /// <summary>redactionJsonByCamera: per camera, the areas to black out (ExportJobItem.RedactionJson).
+    /// includePlayer/convertH265: see ExportJob.IncludePlayer and ConvertH265.</summary>
     Task<ExportJob> CreateJobAsync(IReadOnlyList<Guid> cameraIds, DateTime fromUtc, DateTime toUtc,
         string requestedByUserId, string? requestedByUserName, CancellationToken ct = default,
-        IReadOnlyDictionary<Guid, string>? redactionJsonByCamera = null);
+        IReadOnlyDictionary<Guid, string>? redactionJsonByCamera = null, bool includePlayer = false, bool convertH265 = true);
 
     /// <summary>Newest first, with each job's Items eager-loaded — the Exports page's whole feed in
     /// one call.</summary>

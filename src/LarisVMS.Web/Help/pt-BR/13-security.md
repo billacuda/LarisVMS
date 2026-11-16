@@ -48,7 +48,7 @@ Estas verificações ficam entre um download e uma instalação em execução:
 
 ## Segredos criptografados
 
-As credenciais das câmeras, as credenciais SMB, as chaves dos nós, os segredos de e-mail, o segredo do cliente do Entra e a senha da conta de serviço do Active Directory são criptografados no banco de dados, usando as chaves de proteção de dados em `%ProgramData%\LarisVMS\keys`. Somente SYSTEM, Administrators e as contas dos serviços do LarisVMS podem abrir `%ProgramData%\LarisVMS`: qualquer outro acesso encontrado ali, como uma pasta criada por um usuário local antes de o LarisVMS ser instalado, é removido quando um serviço inicia. Faça backup dessa pasta e nunca a exclua durante um deploy.
+As credenciais das câmeras, as credenciais SMB, as chaves dos nós, os segredos de e-mail, os segredos de cliente do Entra e do Google, e a senha da conta de serviço do Active Directory são criptografados no banco de dados, usando as chaves de proteção de dados em `%ProgramData%\LarisVMS\keys`. Somente SYSTEM, Administrators e as contas dos serviços do LarisVMS podem abrir `%ProgramData%\LarisVMS`: qualquer outro acesso encontrado ali, como uma pasta criada por um usuário local antes de o LarisVMS ser instalado, é removido quando um serviço inicia. Faça backup dessa pasta e nunca a exclua durante um deploy.
 
 ## Proteção extra para empresas
 
