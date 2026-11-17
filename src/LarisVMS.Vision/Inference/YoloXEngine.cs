@@ -154,7 +154,7 @@ public sealed class YoloXEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
         var input = NamedOnnxValue.CreateFromTensor(_inputName, Preprocess(frame, _inputTensor, imageIndex: 0));
         using var outputs = _lease.Run([input]);
 
-        var outTensor = outputs.First().AsTensor<float>();
+        var outTensor = outputs[0].AsTensor<float>();
         var dims = outTensor.Dimensions;
         if (dims.Length != 3 || dims[0] != 1 || dims[2] < 6)
             throw new InvalidOperationException(
@@ -224,7 +224,7 @@ public sealed class YoloXEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
         var input = NamedOnnxValue.CreateFromTensor(_inputName, _batchTensor);
         using var outputs = _lease.Run([input]);
 
-        var outTensor = outputs.First().AsTensor<float>();
+        var outTensor = outputs[0].AsTensor<float>();
         var dims = outTensor.Dimensions;
         if (dims.Length != 3 || dims[0] != n || dims[2] < 6)
             throw new InvalidOperationException(
@@ -274,7 +274,7 @@ public sealed class YoloXEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
         var nv12Tensor = new DenseTensor<byte>(wholeFrameNv12, [1, layout.CaptureHeight * 3 / 2, layout.CaptureWidth]);
         using var outputs = _lease.Run([NamedOnnxValue.CreateFromTensor(_inputName, nv12Tensor)]);
 
-        var outTensor = outputs.First().AsTensor<float>();
+        var outTensor = outputs[0].AsTensor<float>();
         var dims = outTensor.Dimensions;
         var n = dims[0];
         if (dims.Length != 3 || n != layout.Slices.Count || dims[2] < 6)

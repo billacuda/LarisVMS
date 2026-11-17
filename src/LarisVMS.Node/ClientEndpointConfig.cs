@@ -38,13 +38,14 @@ public sealed class ClientEndpointConfig
     public static readonly string LocalConfigPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "client-endpoint.json");
 
+    private static readonly JsonSerializerOptions CaseInsensitive = new() { PropertyNameCaseInsensitive = true };
+
     public static ClientEndpointLocalConfig? ReadLocal()
     {
         try
         {
             if (!File.Exists(LocalConfigPath)) return null;
-            return JsonSerializer.Deserialize<ClientEndpointLocalConfig>(File.ReadAllText(LocalConfigPath),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return JsonSerializer.Deserialize<ClientEndpointLocalConfig>(File.ReadAllText(LocalConfigPath), CaseInsensitive);
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {

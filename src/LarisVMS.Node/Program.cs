@@ -509,8 +509,8 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
     // wildcard) allow-origin is safe — it only lets the already-authorized browser read the response.
     var origin = ctx.Request.Headers.Origin.ToString();
     ctx.Response.Headers.AccessControlAllowOrigin = string.IsNullOrEmpty(origin) ? "*" : origin;
-    ctx.Response.Headers["Access-Control-Expose-Headers"] = "X-Fragment-Start-Seconds";
-    if (!string.IsNullOrEmpty(origin)) ctx.Response.Headers["Vary"] = "Origin";
+    ctx.Response.Headers.AccessControlExposeHeaders = "X-Fragment-Start-Seconds";
+    if (!string.IsNullOrEmpty(origin)) ctx.Response.Headers.Vary = "Origin";
 
     var token = ExtractToken(ctx);
     var path = ctx.Request.Query["path"].ToString();
@@ -893,7 +893,7 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
     // Both absent = an older Web tier: fall back to offsetSeconds and skip the eager-crop lookup.
     var offsetMs = long.TryParse(ctx.Request.Query["offsetMs"], out var parsedMs) && parsedMs >= 0
         ? parsedMs : offsetSeconds * 1000L;
-    long.TryParse(ctx.Request.Query["bestFrameTicks"], out var bestFrameTicks);
+    _ = long.TryParse(ctx.Request.Query["bestFrameTicks"], out var bestFrameTicks);
 
     var storageRoot = worker.StorageRoot;
     if (storageRoot is null)

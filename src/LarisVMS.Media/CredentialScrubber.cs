@@ -11,14 +11,14 @@ namespace LarisVMS.Media;
 /// {uri}" line, is routed through <see cref="Scrub"/> first so a camera password never lands in a
 /// log file.
 /// </summary>
-public static class CredentialScrubber
+public static partial class CredentialScrubber
 {
     // scheme:// followed by everything up to the LAST '@' before the next '/' or whitespace. The
     // greedy [^\s/]* deliberately swallows a literal '@' inside a not-yet-percent-encoded password
     // ("admin:p@ss@host" → "admin:p@ss" is redacted whole). No '@' in the authority ⇒ no match, so a
     // credential-free URL and ordinary text are left untouched.
-    private static readonly Regex UrlUserInfo = new(
-        @"([a-zA-Z][a-zA-Z0-9+.\-]*://)[^\s/]*@", RegexOptions.Compiled);
+    [GeneratedRegex(@"([a-zA-Z][a-zA-Z0-9+.\-]*://)[^\s/]*@")]
+    private static partial Regex UrlUserInfo { get; }
 
     /// <summary>Returns <paramref name="text"/> with the userinfo of every URL replaced by
     /// <c>***</c>. Safe on arbitrary text — an ffmpeg stderr line, an exception message, a bare

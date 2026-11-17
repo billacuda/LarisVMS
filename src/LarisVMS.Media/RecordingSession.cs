@@ -77,7 +77,7 @@ public record RecordingSessionOptions(
 /// is known to be unreliable over SMB-backed paths (a real possibility once storage targets land in
 /// M4).
 /// </summary>
-public sealed class RecordingSession(RecordingSessionOptions options, ILogger logger) : ILiveSource
+public sealed partial class RecordingSession(RecordingSessionOptions options, ILogger logger) : ILiveSource
 {
     public StreamRecordingState State { get; private set; } = StreamRecordingState.Idle;
     public DateTime? LastSegmentAt { get; private set; }
@@ -142,9 +142,8 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     // "Stream #0:0: Video: hevc (Main), yuv420p(tv, bt709), 2560x1440, 15 fps, ...". Matches the
     // codec name and the first WxH pair on that line — good enough since ffmpeg's own format for this
     // line hasn't changed across the versions this has been tested against.
-    private static readonly Regex VideoStreamLine = new(
-        @"Stream #\d+:\d+.*?Video:\s*([A-Za-z0-9_]+).*?(\d{2,5})x(\d{2,5})",
-        RegexOptions.Compiled);
+    [GeneratedRegex(@"Stream #\d+:\d+.*?Video:\s*([A-Za-z0-9_]+).*?(\d{2,5})x(\d{2,5})")]
+    private static partial Regex VideoStreamLine { get; }
 
     /// <summary>Pure parsing extracted from DrainStderrAsync so it's unit-testable against real
     /// captured ffmpeg output lines without spawning a process.</summary>
@@ -164,12 +163,12 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     // and channel layout), and a single regex requiring both would then match nothing at all and
     // report no audio whatsoever — the same failure mode ProgressLine's own comment above documents
     // having hit for real when it required a bitrate figure that this pipeline never prints.
-    private static readonly Regex AudioStreamLine = new(
-        @"Stream #\d+:\d+.*?Audio:\s*([A-Za-z0-9_]+)", RegexOptions.Compiled);
+    [GeneratedRegex(@"Stream #\d+:\d+.*?Audio:\s*([A-Za-z0-9_]+)")]
+    private static partial Regex AudioStreamLine { get; }
 
     // Anchored to "Hz" so it can't pick up the bit rate ("64 kb/s") or a channel count.
-    private static readonly Regex AudioSampleRate = new(
-        @"(\d{3,6})\s*Hz", RegexOptions.Compiled);
+    [GeneratedRegex(@"(\d{3,6})\s*Hz")]
+    private static partial Regex AudioSampleRate { get; }
 
     /// <summary>Pure parsing, same reasoning as TryParseVideoStreamLine. Returns null for a line that
     /// isn't an audio stream summary at all; SampleRateHz is null when the line carries no "N Hz"
@@ -198,8 +197,8 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     // (as this regex originally did) meant the *whole line* never matched under this pipeline, which
     // silently starved CurrentFps too. bitrate is therefore Optional in the returned tuple — real
     // bitrate is instead derived from completed segment size/duration, see PollForCompletedSegments.
-    private static readonly Regex ProgressLine = new(
-        @"frame=.*?fps=\s*([\d.]+).*?bitrate=\s*(?:([\d.]+)kbits/s|N/A)", RegexOptions.Compiled);
+    [GeneratedRegex(@"frame=.*?fps=\s*([\d.]+).*?bitrate=\s*(?:([\d.]+)kbits/s|N/A)")]
+    private static partial Regex ProgressLine { get; }
 
     /// <summary>Pure parsing, same reasoning as TryParseVideoStreamLine. Fps is truncated to a whole
     /// number; BitrateKbps is null whenever the line reports "bitrate=N/A" (see ProgressLine's own

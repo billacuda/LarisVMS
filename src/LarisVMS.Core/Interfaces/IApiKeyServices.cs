@@ -20,8 +20,8 @@ public interface IApiKeyService
     /// available in full. Only KeyHash (never reversible) and KeyPrefix (a plaintext fragment, for
     /// telling keys apart in the admin list) are persisted. Non-null limits narrows the key to those
     /// permissions; an empty set is a key that can do nothing.</summary>
-    Task<(ApiKey Key, string RawValue)> GenerateAsync(string name, string roleId, string? createdByUserId, CancellationToken ct = default,
-        DateTime? expiresAtUtc = null, IReadOnlyCollection<(string Resource, string Action)>? limits = null);
+    Task<(ApiKey Key, string RawValue)> GenerateAsync(string name, string roleId, string? createdByUserId,
+        DateTime? expiresAtUtc = null, IReadOnlyCollection<(string Resource, string Action)>? limits = null, CancellationToken ct = default);
 
     /// <summary>Renames a key and replaces its limits. The key's value doesn't change, so anything
     /// using it keeps working.</summary>

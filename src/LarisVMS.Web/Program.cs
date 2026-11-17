@@ -426,17 +426,15 @@ builder.Services.AddSingleton<IConfigureOptions<OpenIdConnectOptions>, EntraOidc
 builder.Services.AddSingleton<IConfigureOptions<OpenIdConnectOptions>, GoogleOidcOptionsConfigurator>();
 
 // ── Authorization / RBAC ──────────────────────────────────────────────────────
-builder.Services.AddAuthorization(options =>
-{
+builder.Services.AddAuthorizationBuilder()
     // Anything without its own policy needs a signed-in user, so a page or endpoint that forgets one
     // is closed rather than public. The few public ones say AllowAnonymous (sign-in, setup, health,
     // the app manifest, the error page, and the node/proxy APIs, which authenticate themselves).
-    options.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build();
+    .SetFallbackPolicy(new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build())
     // "Administrator" renamed to "Super Admin" by the roles/permissions overhaul (see
     // RoleSeedService) — this policy is currently unreferenced anywhere, but kept correct so it
     // doesn't silently break the day something wires it up.
-    options.AddPolicy("AdministratorOnly", policy => policy.RequireRole("Super Admin"));
-});
+    .AddPolicy("AdministratorOnly", policy => policy.RequireRole("Super Admin"));
 builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
 // Resolves any "{Resource}.{Action}" policy name (e.g. "Cameras.Edit") on the fly, instead of
 // requiring every resource × action combination in the RBAC matrix to be individually registered
@@ -1024,8 +1022,8 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
     // ── Failover plan phase 5: rolling-nonce replay check + secret rotation ───────────────────────
     // Runs before any state write below. A replayed heartbeat (a stale echoed nonce) is rejected
     // outright and gets nothing — not a storage-stats update, not an update offer, not a new nonce.
-    var security = await nodeService.ApplyCheckInSecurityAsync(node.Id, request.Nonce, ct,
-        IpAllowListPolicy.ToUrlHost(ctx.Connection.RemoteIpAddress));
+    var security = await nodeService.ApplyCheckInSecurityAsync(node.Id, request.Nonce,
+        IpAllowListPolicy.ToUrlHost(ctx.Connection.RemoteIpAddress), ct);
     if (security.ReplayRejected)
     {
         await auditService.LogAsync("Node.AuthReplay", null, node.Name, ctx.Connection.RemoteIpAddress?.ToString(),
@@ -1041,7 +1039,7 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
         request.ArchiveFreeBytes, request.ArchiveTotalBytes, request.StoragePressureActive,
         request.ClientEndpointReportedPort, request.ClientEndpointCertNotAfterUtc,
         request.ClientEndpointCertIsSelfSigned, request.ClientEndpointLastError, request.PartnerHealthReports,
-        request.HostStats, ct, request.StorageBlockedByEvidenceLocks, request.ClientEndpointCertSha256);
+        request.HostStats, request.StorageBlockedByEvidenceLocks, request.ClientEndpointCertSha256, ct);
     // Camera certificates the node refused under pinning: audit log and Super Admins.
     foreach (var refusal in (request.CameraCertificateRefusals ?? []).Take(50))
         if (!string.IsNullOrWhiteSpace(refusal.Host) && refusal.Host.Length <= 255 && refusal.Presented is { Length: 64 } presented
@@ -1392,7 +1390,7 @@ app.MapMethods("/live/{cameraId:guid}", WebSocketMethods, async (HttpContext ctx
     if (accessible is not null && !accessible.Contains(cameraId))
     {
         ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-        await ctx.Response.WriteAsync(Loc.T("api.youDontHaveAccessTo"));
+        await ctx.Response.WriteAsync(Loc.T("api.youDontHaveAccessTo"), ctx.RequestAborted);
         return;
     }
 
@@ -1402,7 +1400,7 @@ app.MapMethods("/live/{cameraId:guid}", WebSocketMethods, async (HttpContext ctx
     if (camera is null || effNode is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
     {
         ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-        await ctx.Response.WriteAsync(Loc.T("api.nodeNotLiveReadyDetail"));
+        await ctx.Response.WriteAsync(Loc.T("api.nodeNotLiveReadyDetail"), ctx.RequestAborted);
         return;
     }
 
@@ -1441,7 +1439,7 @@ app.MapMethods("/live/{cameraId:guid}", WebSocketMethods, async (HttpContext ctx
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
-        await ctx.Response.WriteAsync(NodeUnreachable(ctx, ex));
+        await ctx.Response.WriteAsync(NodeUnreachable(ctx, ex), ctx.RequestAborted);
         return;
     }
 
@@ -1492,7 +1490,7 @@ app.MapMethods("/talk/{cameraId:guid}", WebSocketMethods, async (HttpContext ctx
     if (accessible is not null && !accessible.Contains(cameraId))
     {
         ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-        await ctx.Response.WriteAsync(Loc.T("api.youDontHavePermissionTo"));
+        await ctx.Response.WriteAsync(Loc.T("api.youDontHavePermissionTo"), ctx.RequestAborted);
         return;
     }
 
@@ -1506,7 +1504,7 @@ app.MapMethods("/talk/{cameraId:guid}", WebSocketMethods, async (HttpContext ctx
     if (effNode is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
     {
         ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-        await ctx.Response.WriteAsync(Loc.T("api.thisCameraNodeIsntReachable"));
+        await ctx.Response.WriteAsync(Loc.T("api.thisCameraNodeIsntReachable"), ctx.RequestAborted);
         return;
     }
 
@@ -1584,7 +1582,7 @@ app.MapMethods("/live/{cameraId:guid}/detections", WebSocketMethods, async (Http
     if (accessible is not null && !accessible.Contains(cameraId))
     {
         ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-        await ctx.Response.WriteAsync(Loc.T("api.youDontHaveAccessTo"));
+        await ctx.Response.WriteAsync(Loc.T("api.youDontHaveAccessTo"), ctx.RequestAborted);
         return;
     }
 
@@ -1593,7 +1591,7 @@ app.MapMethods("/live/{cameraId:guid}/detections", WebSocketMethods, async (Http
     if (camera is null || effNode is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
     {
         ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-        await ctx.Response.WriteAsync(Loc.T("api.thisCameraNodeHasntReported2"));
+        await ctx.Response.WriteAsync(Loc.T("api.thisCameraNodeHasntReported2"), ctx.RequestAborted);
         return;
     }
 
@@ -1610,7 +1608,7 @@ app.MapMethods("/live/{cameraId:guid}/detections", WebSocketMethods, async (Http
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
-        await ctx.Response.WriteAsync(NodeUnreachable(ctx, ex));
+        await ctx.Response.WriteAsync(NodeUnreachable(ctx, ex), ctx.RequestAborted);
         return;
     }
 
@@ -1648,7 +1646,7 @@ app.MapMethods("/live/{cameraId:guid}/motion-zones", WebSocketMethods, async (Ht
     if (accessible is not null && !accessible.Contains(cameraId))
     {
         ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-        await ctx.Response.WriteAsync(Loc.T("api.youDontHaveConfigurationAccess"));
+        await ctx.Response.WriteAsync(Loc.T("api.youDontHaveConfigurationAccess"), ctx.RequestAborted);
         return;
     }
 
@@ -1657,7 +1655,7 @@ app.MapMethods("/live/{cameraId:guid}/motion-zones", WebSocketMethods, async (Ht
     if (camera is null || effNode is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
     {
         ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-        await ctx.Response.WriteAsync(Loc.T("api.thisCameraNodeHasntReported2"));
+        await ctx.Response.WriteAsync(Loc.T("api.thisCameraNodeHasntReported2"), ctx.RequestAborted);
         return;
     }
 
@@ -1674,7 +1672,7 @@ app.MapMethods("/live/{cameraId:guid}/motion-zones", WebSocketMethods, async (Ht
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
-        await ctx.Response.WriteAsync(NodeUnreachable(ctx, ex));
+        await ctx.Response.WriteAsync(NodeUnreachable(ctx, ex), ctx.RequestAborted);
         return;
     }
 
@@ -2329,7 +2327,7 @@ playbackApi.MapGet("/scene-background", async (HttpContext ctx, Guid cameraId, A
 
     var uploaded = await db.CameraSceneImages.AsNoTracking().Where(i => i.CameraId == cameraId)
         .Select(i => new { i.Image, i.ContentType }).FirstOrDefaultAsync(ct);
-    ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    ctx.Response.Headers.XContentTypeOptions = "nosniff";
     // An hour: the page adds the upload's version to the address, so a new upload still shows at once.
     ctx.Response.Headers.CacheControl = "private, max-age=3600";
     if (uploaded is not null) return Results.File(uploaded.Image, uploaded.ContentType);
@@ -2440,7 +2438,7 @@ mapsApi.MapGet("/{id:guid}/image", async (HttpContext ctx, Guid id, IMapService 
     if (await maps.GetAsync(id, accessible, ct) is null) return Results.NotFound();
     var image = await maps.GetImageAsync(id, ct);
     if (image is not { } img) return Results.NotFound();
-    ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    ctx.Response.Headers.XContentTypeOptions = "nosniff";
     ctx.Response.Headers.CacheControl = "private, max-age=3600";
     return Results.File(img.Image, img.ContentType);
 });
@@ -3518,8 +3516,8 @@ apiRoutes.Post("/exports", async (HttpContext ctx, CreateExportRequest request, 
             redactions[cameraId] = System.Text.Json.JsonSerializer.Serialize(valid);
     }
 
-    var job = await exportService.CreateJobAsync(request.CameraIds, request.FromUtc, request.ToUtc, userId, userName, ct,
-        redactions.Count > 0 ? redactions : null, request.IncludePlayer, request.ConvertH265);
+    var job = await exportService.CreateJobAsync(request.CameraIds, request.FromUtc, request.ToUtc, userId, userName,
+        redactions.Count > 0 ? redactions : null, request.IncludePlayer, request.ConvertH265, ct);
     await auditService.LogAsync("Export.Create", userId, userName, ctx.Connection.RemoteIpAddress?.ToString(),
         $"{request.CameraIds.Count} camera(s), {request.FromUtc:u} - {request.ToUtc:u}" +
         (redactions.Count > 0 ? $", with redacted areas on {redactions.Count} camera(s)" : "") +

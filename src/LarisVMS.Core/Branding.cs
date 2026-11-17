@@ -28,12 +28,13 @@ public record BrandingOptions(
 /// codebase's own string, never the user's), and a logo must be a base64 image data URI within a
 /// size cap. Anything failing validation degrades to "unset" rather than throwing — bad branding
 /// should never be able to take the whole site down, since the layout renders on every page.</summary>
-public static class Branding
+public static partial class Branding
 {
     /// <summary>#rgb or #rrggbb. Deliberately not accepting arbitrary CSS color syntax
     /// (rgb()/hsl()/named/var()): the value is interpolated into a style block, and a strict literal
     /// is the cheapest way to guarantee nothing else can ride along with it.</summary>
-    private static readonly Regex HexColor = new(@"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$", RegexOptions.Compiled);
+    [GeneratedRegex(@"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")]
+    private static partial Regex HexColor { get; }
 
     /// <summary>Roughly 512KB of base64 (~384KB of image). Large enough for any sane logo, small
     /// enough that it can't bloat every page render — the data URI is inlined into the layout, so it
@@ -138,8 +139,8 @@ public static class Branding
         }
     }
 
-    private static readonly Regex LogoDataUri =
-        new(@"^data:image/(png|jpeg|jpg|gif|webp);base64,([A-Za-z0-9+/]+={0,2})$", RegexOptions.Compiled);
+    [GeneratedRegex(@"^data:image/(png|jpeg|jpg|gif|webp);base64,([A-Za-z0-9+/]+={0,2})$")]
+    private static partial Regex LogoDataUri { get; }
 
     public static string NormalizeAppName(string? value)
     {

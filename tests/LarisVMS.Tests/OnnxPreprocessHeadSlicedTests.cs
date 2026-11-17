@@ -145,7 +145,7 @@ public class OnnxPreprocessHeadSlicedTests
         var input = new DenseTensor<byte>(nv12, [1, nv12Rows, layout.CaptureWidth]);
 
         using var results = session.Run([NamedOnnxValue.CreateFromTensor("nv12", input)]);
-        var output = results.First().AsTensor<float>();
+        var output = results[0].AsTensor<float>();
         Assert.Equal(layout.Slices.Count, output.Dimensions[0]);
         Assert.Equal(85, output.Dimensions[2]); // 5 + 80 classes
     }

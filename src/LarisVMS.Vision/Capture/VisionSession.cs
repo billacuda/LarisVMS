@@ -31,7 +31,7 @@ namespace LarisVMS.Vision.Capture;
 /// MotionSession's, not aitest's — aitest never needed reconnect/backoff plumbing this exact
 /// shape since it wasn't written against this codebase's own StreamRecordingState-driven sessions.
 /// </summary>
-public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot slot, ILogger logger)
+public sealed partial class VisionSession(VisionSessionOptions options, LatestFrameSlot slot, ILogger logger)
 {
     public StreamRecordingState State { get; private set; } = StreamRecordingState.Idle;
     public DateTime? LastFrameAt { get; private set; }
@@ -54,15 +54,15 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
     // "Stream #0:0: Video: h264 (Main), yuvj420p(pc, bt709), 720x1280, 15 fps, ...". Mirrors
     // RecordingSession.VideoStreamLine (duplicated rather than crossing LarisVMS.Media's internal
     // boundary — same "duplicate the small skeleton" trade-off this file's own class doc describes).
-    private static readonly Regex VideoStreamLine = new(
-        @"Stream #\d+:\d+.*?Video:\s*[A-Za-z0-9_]+.*?(\d{2,5})x(\d{2,5})", RegexOptions.Compiled);
+    [GeneratedRegex(@"Stream #\d+:\d+.*?Video:\s*[A-Za-z0-9_]+.*?(\d{2,5})x(\d{2,5})")]
+    private static partial Regex VideoStreamLine { get; }
 
     // A rotated stream (phone/rotated mount) prints a display-matrix side-data line after the
     // stream summary: "      displaymatrix: rotation of -90.00 degrees". ffmpeg auto-rotates by
     // default (no -noautorotate here), so the frames actually delivered to our -vf chain are in the
     // display orientation — swap W/H when the rotation is a quarter turn.
-    private static readonly Regex RotationLine = new(
-        @"rotation of (-?\d+(?:\.\d+)?) degrees", RegexOptions.Compiled);
+    [GeneratedRegex(@"rotation of (-?\d+(?:\.\d+)?) degrees")]
+    private static partial Regex RotationLine { get; }
 
     // nv12 = Y plane (W*H) + interleaved UV (W*H/2); BGRA = 4 bytes/pixel.
     private readonly int _frameSize = options.Nv12Output

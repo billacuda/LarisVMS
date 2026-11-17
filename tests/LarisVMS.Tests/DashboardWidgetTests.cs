@@ -205,7 +205,7 @@ public class DashboardWidgetTests
         var service = new TimelineService(db, new StubEventColors());
 
         async Task<string[]> Labels(IReadOnlyCollection<string>? kinds, bool motion) =>
-            (await service.GetSnapshotsAsync(null, null, null, 1, 10, default, kinds, null, motion)).Items.Select(i => i.Label).ToArray();
+            (await service.GetSnapshotsAsync(null, null, null, 1, 10, kinds, null, motion)).Items.Select(i => i.Label).ToArray();
 
         Assert.Equal(["Human"], await Labels(null, motion: false));
         Assert.Equal(["Human", "Motion"], await Labels(null, motion: true));

@@ -102,6 +102,6 @@ public class SharedSessionPoolTests
 
         using var outputs = lease.Run([NamedOnnxValue.CreateFromTensor("pixel_values", input)]);
 
-        Assert.Equal(42, outputs.First().AsTensor<float>()[0, 0, 0, 0]);
+        Assert.Equal(42, outputs[0].AsTensor<float>()[0, 0, 0, 0]);
     }
 }

@@ -26,13 +26,14 @@ public sealed class ProxyEndpointConfig
     public static readonly string LocalConfigPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "proxy-endpoint.json");
 
+    private static readonly JsonSerializerOptions CaseInsensitive = new() { PropertyNameCaseInsensitive = true };
+
     public static ProxyEndpointLocalConfig? ReadLocal()
     {
         try
         {
             if (!File.Exists(LocalConfigPath)) return null;
-            return JsonSerializer.Deserialize<ProxyEndpointLocalConfig>(File.ReadAllText(LocalConfigPath),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return JsonSerializer.Deserialize<ProxyEndpointLocalConfig>(File.ReadAllText(LocalConfigPath), CaseInsensitive);
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {

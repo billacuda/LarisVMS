@@ -16,8 +16,8 @@ public class ApiKeyAuthMiddlewareTests
     private sealed class FakeApiKeyService : IApiKeyService
     {
         public Task<List<Core.Entities.ApiKey>> ListAsync(CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<(Core.Entities.ApiKey Key, string RawValue)> GenerateAsync(string name, string roleId, string? createdByUserId, CancellationToken ct = default,
-            DateTime? expiresAtUtc = null, IReadOnlyCollection<(string Resource, string Action)>? limits = null) => throw new NotImplementedException();
+        public Task<(Core.Entities.ApiKey Key, string RawValue)> GenerateAsync(string name, string roleId, string? createdByUserId,
+            DateTime? expiresAtUtc = null, IReadOnlyCollection<(string Resource, string Action)>? limits = null, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<(Core.Entities.ApiKey Key, IReadOnlySet<(string Resource, string Action)>? Limits)?> GetAsync(Guid id, CancellationToken ct = default) => throw new NotImplementedException();
         public Task UpdateAsync(Guid id, string name, IReadOnlyCollection<(string Resource, string Action)>? limits, CancellationToken ct = default) => throw new NotImplementedException();
         public Task RevokeAsync(Guid id, CancellationToken ct = default) => throw new NotImplementedException();

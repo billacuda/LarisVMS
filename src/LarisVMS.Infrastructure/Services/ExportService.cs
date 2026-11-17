@@ -15,8 +15,8 @@ public class ExportService(ApplicationDbContext db, ExportManifestBuilder? manif
     ILogger<ExportService>? logger = null) : IExportService
 {
     public async Task<ExportJob> CreateJobAsync(IReadOnlyList<Guid> cameraIds, DateTime fromUtc, DateTime toUtc,
-        string requestedByUserId, string? requestedByUserName, CancellationToken ct = default,
-        IReadOnlyDictionary<Guid, string>? redactionJsonByCamera = null, bool includePlayer = false, bool convertH265 = true)
+        string requestedByUserId, string? requestedByUserName,
+        IReadOnlyDictionary<Guid, string>? redactionJsonByCamera = null, bool includePlayer = false, bool convertH265 = true, CancellationToken ct = default)
     {
         fromUtc = TimelineService.NormalizeToUtc(fromUtc);
         toUtc = TimelineService.NormalizeToUtc(toUtc);

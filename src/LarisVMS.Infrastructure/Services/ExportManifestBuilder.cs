@@ -167,7 +167,7 @@ public class ExportManifestBuilder(ApplicationDbContext db, ISigningKeyService s
             },
         };
 
-        var payloadText = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+        var payloadText = JsonSerializer.Serialize(payload, Indented);
         var signature = await signing.SignAsync(payloadText, ct);
         return JsonSerializer.Serialize(new
         {
@@ -178,6 +178,8 @@ public class ExportManifestBuilder(ApplicationDbContext db, ISigningKeyService s
             keyId = signature.KeyId,
             algorithm = signature.Algorithm,
             publicKeyPem = signature.PublicKeyPem,
-        }, new JsonSerializerOptions { WriteIndented = true });
+        }, Indented);
     }
+
+    private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
 }

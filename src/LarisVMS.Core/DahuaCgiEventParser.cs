@@ -37,7 +37,7 @@ public readonly record struct DahuaCgiEvent(string Code, string Action, int Inde
 /// more than usual here — this integration exists precisely because the hardware's behavior can't be
 /// assumed from documentation, as the ONVIF spike proved.
 /// </summary>
-public static class DahuaCgiEventParser
+public static partial class DahuaCgiEventParser
 {
     /// <summary>Vendor code → what was actually seen. Dahua's own naming is inconsistent across
     /// firmware generations (SmartMotionHuman on newer AI models, HumanDetect/FaceDetection on
@@ -162,8 +162,8 @@ public static class DahuaCgiEventParser
     // name — so matching the field directly is both simpler and more robust than modelling any
     // particular envelope. The first occurrence wins; where a payload repeats it across Object and
     // Objects[0] (as this fleet's do) they agree.
-    private static readonly System.Text.RegularExpressions.Regex ObjectTypePattern =
-        new("\"ObjectType\"\\s*:\\s*\"([^\"]+)\"", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    [System.Text.RegularExpressions.GeneratedRegex("\"ObjectType\"\\s*:\\s*\"([^\"]+)\"", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex ObjectTypePattern { get; }
 
     public static string? ExtractObjectType(string? payload)
     {

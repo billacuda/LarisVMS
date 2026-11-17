@@ -6,7 +6,7 @@ namespace LarisVMS.Tests;
 /// <summary>Covers FileLoggerProvider against a real temp directory — the actual file write/rollover
 /// behavior is the whole point of this class, so a real filesystem (not a mock) is what's worth
 /// testing here.</summary>
-public class FileLoggerProviderTests : IDisposable
+public sealed class FileLoggerProviderTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "larisvms-logtest-" + Guid.NewGuid());
 

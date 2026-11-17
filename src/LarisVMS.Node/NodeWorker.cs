@@ -757,9 +757,10 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, secretRotated
-                ? "Central rotated this node's bearer secret but node.config could not be written — staying on the current secret (still accepted via central's grace window); the rotation will not be retried until the next one is due."
-                : "Could not persist the new rolling check-in nonce — it will be re-synced on the next successful heartbeat.");
+            if (secretRotated)
+                _logger.LogError(ex, "Central rotated this node's bearer secret but node.config could not be written — staying on the current secret (still accepted via central's grace window); the rotation will not be retried until the next one is due.");
+            else
+                _logger.LogError(ex, "Could not persist the new rolling check-in nonce — it will be re-synced on the next successful heartbeat.");
             return;
         }
 
@@ -1578,11 +1579,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         {
             if (_activeMotion.TryRemove(camera.CameraId, out var stopped))
             {
-                _logger.LogInformation(
-                    camera.ServerMotionEnabled
-                        ? "Camera {CameraId} ({Name}) has nothing to watch in {Mode} mode (with a Sub stream) — stopping motion session."
-                        : "Camera {CameraId} ({Name}) has ServerMotion disabled — stopping motion session.",
-                    camera.CameraId, camera.Name, camera.MotionRegionMode);
+                if (camera.ServerMotionEnabled)
+                    _logger.LogInformation("Camera {CameraId} ({Name}) has nothing to watch in {Mode} mode (with a Sub stream) — stopping motion session.",
+                        camera.CameraId, camera.Name, camera.MotionRegionMode);
+                else
+                    _logger.LogInformation("Camera {CameraId} ({Name}) has ServerMotion disabled — stopping motion session.",
+                        camera.CameraId, camera.Name);
                 stopped.Cts.Cancel();
             }
             return;

@@ -50,7 +50,7 @@ public sealed record DiscoveredModel(
 ///     with a warning naming what's missing.</item>
 /// </list>
 /// </summary>
-public static class ModelDiscovery
+public static partial class ModelDiscovery
 {
     private static readonly JsonSerializerOptions SidecarJsonOptions = new()
     {
@@ -313,9 +313,12 @@ public static class ModelDiscovery
     /// <summary>Extracts the first integer out of Ultralytics' <c>imgsz</c> value, e.g.
     /// <c>"[640, 640]"</c> or a bare <c>"640"</c> — <see cref="ModelDescriptor.InputSize"/> is
     /// square-only, so a non-square <c>[h, w]</c> just takes the first (height) dimension.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"\d+")]
+    private static partial System.Text.RegularExpressions.Regex Digits { get; }
+
     private static int? ParseUltralyticsImgsz(string raw)
     {
-        var match = System.Text.RegularExpressions.Regex.Match(raw, @"\d+");
+        var match = Digits.Match(raw);
         return match.Success ? int.Parse(match.Value) : null;
     }
 

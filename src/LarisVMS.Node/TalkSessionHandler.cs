@@ -142,9 +142,10 @@ public static class TalkSessionHandler
     }
 
     private static Task<ITalkSink> OpenSinkAsync(NodeConfigCameraDto camera, Uri rtspUri, ILogger logger, CancellationToken ct) =>
-        OpenSinkAsync(camera, rtspUri, logger, ct,
+        OpenSinkAsync(camera, rtspUri, logger,
             async (uri, c) => await OnvifBackchannelClient.ConnectAsync(uri, camera.Username, camera.Password, logger, c),
-            async (uri, c) => await DahuaAudioPostClient.ConnectAsync(uri, camera.Username, camera.Password, logger, c));
+            async (uri, c) => await DahuaAudioPostClient.ConnectAsync(uri, camera.Username, camera.Password, logger, c),
+            ct);
 
     /// <summary>Picks how audio reaches the camera's speaker, by the camera's Talk.Method:
     /// <list type="bullet">
@@ -155,8 +156,8 @@ public static class TalkSessionHandler
     /// <item>"CameraApi": the Dahua/Amcrest/Lorex HTTP audio API only — for a camera that accepts the
     /// ONVIF session but plays nothing, which "Auto" can't notice since nothing fails.</item>
     /// </list></summary>
-    internal static async Task<ITalkSink> OpenSinkAsync(NodeConfigCameraDto camera, Uri rtspUri, ILogger logger, CancellationToken ct,
-        Func<Uri, CancellationToken, Task<ITalkSink>> connectOnvif, Func<Uri, CancellationToken, Task<ITalkSink>> connectCameraApi)
+    internal static async Task<ITalkSink> OpenSinkAsync(NodeConfigCameraDto camera, Uri rtspUri, ILogger logger,
+        Func<Uri, CancellationToken, Task<ITalkSink>> connectOnvif, Func<Uri, CancellationToken, Task<ITalkSink>> connectCameraApi, CancellationToken ct)
     {
         if (string.Equals(camera.TalkMethod, "CameraApi", StringComparison.OrdinalIgnoreCase))
         {

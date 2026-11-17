@@ -13,7 +13,7 @@ namespace LarisVMS.Infrastructure;
 /// </summary>
 public static class AppRelease
 {
-    public const string Version = "0.222.0";
+    public const string Version = "0.222.1";
 
     public const string Notes = "Added: view folders and view access, Sign in with Google, Home Assistant (experimental), a live stream for other programs, a standalone export player, and a talk method per camera. Changed: camera access by role only, and webhooks with event details. Fixed: boxes jumping to parked cars, views fitting the window, and export verification.";
 

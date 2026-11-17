@@ -140,7 +140,7 @@ window.larisvmsViewTree = (function () {
         }
     }
 
-    function cssEscape(s) { return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"'); }
+    function cssEscape(s) { return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&'); }
 
     function makeRow(kind, key, label, opts) {
         var row = document.createElement('div');

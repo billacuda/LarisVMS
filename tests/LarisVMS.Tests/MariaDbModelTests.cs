@@ -17,7 +17,7 @@ namespace LarisVMS.Tests;
 /// <summary>MariaDB support without a MariaDB server: InnoDB's limits checked against
 /// the model the provider builds, the migrations kept in step with it, and the provider plumbing
 /// (connection strings, the protected password, mariadb-dump's option file).</summary>
-public class MariaDbModelTests
+public partial class MariaDbModelTests
 {
     private static ApplicationDbContext CreateContext()
     {
@@ -29,7 +29,8 @@ public class MariaDbModelTests
     private static IRelationalModel RelationalModel(ApplicationDbContext db) =>
         db.GetService<IDesignTimeModel>().Model.GetRelationalModel();
 
-    private static readonly Regex Sized = new(@"^(?:var)?(?:char|binary)\((\d+)\)$", RegexOptions.Compiled);
+    [GeneratedRegex(@"^(?:var)?(?:char|binary)\((\d+)\)$")]
+    private static partial Regex Sized { get; }
 
     /// <summary>Bytes a column takes in a key; null for a type InnoDB can't index without a prefix.</summary>
     private static int? KeyBytes(IColumn column)

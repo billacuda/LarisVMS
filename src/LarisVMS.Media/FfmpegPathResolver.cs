@@ -10,7 +10,7 @@ namespace LarisVMS.Media;
 /// always wins; otherwise <see cref="TryDiscover"/> looks on <c>PATH</c> and in the WinGet package
 /// store, and a bare <c>"ffmpeg"</c> (resolved via <c>PATH</c> by the OS) is the last-resort fallback.
 /// </summary>
-public static class FfmpegPathResolver
+public static partial class FfmpegPathResolver
 {
     public static string Resolve(string? configuredPath)
     {
@@ -107,7 +107,8 @@ public static class FfmpegPathResolver
 
     // WinGet lays ffmpeg down under a version-bearing folder, e.g.
     // "...\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-full_build\bin\ffmpeg.exe".
-    private static readonly Regex VersionInPath = new(@"ffmpeg-(\d+(?:\.\d+){1,3})", RegexOptions.IgnoreCase);
+    [GeneratedRegex(@"ffmpeg-(\d+(?:\.\d+){1,3})", RegexOptions.IgnoreCase)]
+    private static partial Regex VersionInPath { get; }
 
     private static Version? ExtractVersion(string path)
     {

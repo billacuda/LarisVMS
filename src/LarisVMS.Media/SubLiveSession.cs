@@ -89,12 +89,12 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
                 var stderrTask = DrainStderrAsync(process, ct);
 
                 LiveInitSegment = null;
-                if (!_initSegmentTcs.Task.IsCompleted) _initSegmentTcs.TrySetCanceled();
+                if (!_initSegmentTcs.Task.IsCompleted) _initSegmentTcs.TrySetCanceled(ct);
                 _initSegmentTcs = NewInitSegmentTcs();
                 lastFragmentAt = DateTime.UtcNow; // grace period before the first fragment lands
 
-                var stdoutTask = DrainStdoutAsync(process, ct, () => lastFragmentAt = DateTime.UtcNow);
-                var watchdogTask = WatchdogAsync(process, ct, () => lastFragmentAt);
+                var stdoutTask = DrainStdoutAsync(process, () => lastFragmentAt = DateTime.UtcNow, ct);
+                var watchdogTask = WatchdogAsync(process, () => lastFragmentAt, ct);
 
                 await Task.WhenAny(stdoutTask, watchdogTask);
                 if (!process.HasExited) TryKill(process);
@@ -129,11 +129,11 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
             catch (OperationCanceledException) { break; }
         }
 
-        if (!_initSegmentTcs.Task.IsCompleted) _initSegmentTcs.TrySetCanceled();
+        if (!_initSegmentTcs.Task.IsCompleted) _initSegmentTcs.TrySetCanceled(ct);
         State = StreamRecordingState.Idle;
     }
 
-    private async Task WatchdogAsync(Process process, CancellationToken ct, Func<DateTime> lastFragmentAt)
+    private async Task WatchdogAsync(Process process, Func<DateTime> lastFragmentAt, CancellationToken ct)
     {
         while (!process.HasExited && !ct.IsCancellationRequested)
         {
@@ -226,7 +226,7 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
     /// recording concerns — this is the whole output, not one leg of it. See that method's own
     /// comment for why PipeReader/AdvanceTo(consumed, examined) is used instead of a hand-rolled
     /// buffer.</summary>
-    private async Task DrainStdoutAsync(Process process, CancellationToken ct, Action onFragment)
+    private async Task DrainStdoutAsync(Process process, Action onFragment, CancellationToken ct)
     {
         const int MaxInitSegmentBytes = 4 * 1024 * 1024;
         const int MaxFragmentBytes = 32 * 1024 * 1024;

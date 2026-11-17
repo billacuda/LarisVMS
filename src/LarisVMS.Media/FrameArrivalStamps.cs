@@ -22,17 +22,17 @@ namespace LarisVMS.Media;
 /// showinfo line has been seen (an ffmpeg that does not print one), it returns null immediately so
 /// a missing stamp never delays frames.
 /// </summary>
-public sealed class FrameArrivalStamps
+public sealed partial class FrameArrivalStamps
 {
     // "[Parsed_showinfo_5 @ 0000...] config in time_base: 1/90000, frame_rate: 25/1"
-    private static readonly Regex TimeBaseLine = new(
-        @"Parsed_showinfo.*config in time_base:\s*(\d+)/(\d+)", RegexOptions.Compiled);
+    [GeneratedRegex(@"Parsed_showinfo.*config in time_base:\s*(\d+)/(\d+)")]
+    private static partial Regex TimeBaseLine { get; }
 
     // "[Parsed_showinfo_5 @ 0000...] n:   0 pts:153041234567890 pts_time:1.70046e+09 ..."
     // pts (an integer in time_base units) rather than pts_time: pts_time is printed with only ~6
     // significant digits, nowhere near enough for an epoch-seconds value.
-    private static readonly Regex FrameLine = new(
-        @"Parsed_showinfo.*\bn:\s*(\d+)\s+pts:\s*(-?\d+)", RegexOptions.Compiled);
+    [GeneratedRegex(@"Parsed_showinfo.*\bn:\s*(\d+)\s+pts:\s*(-?\d+)")]
+    private static partial Regex FrameLine { get; }
 
     private readonly Channel<(long N, DateTime ArrivalUtc)> _channel =
         Channel.CreateUnbounded<(long N, DateTime ArrivalUtc)>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });

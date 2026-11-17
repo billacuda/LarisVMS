@@ -83,7 +83,7 @@ public class OnnxBatchAxisTests
         for (var i = 0; i < batch.Length; i++) batch.Buffer.Span[i] = (i * 37 + 11) % 255;
 
         using var results = session.Run([NamedOnnxValue.CreateFromTensor(inputName, batch)]);
-        var output = results.First().AsTensor<float>();
+        var output = results[0].AsTensor<float>();
         Assert.Equal(2, output.Dimensions[0]);
         Assert.Equal(85, output.Dimensions[2]); // 5 + NumClasses
     }

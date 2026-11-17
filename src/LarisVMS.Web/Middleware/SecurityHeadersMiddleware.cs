@@ -32,8 +32,8 @@ public class SecurityHeadersMiddleware(RequestDelegate next)
         {
             var headers = context.Response.Headers;
 
-            headers["X-Frame-Options"] = "SAMEORIGIN";
-            headers["X-Content-Type-Options"] = "nosniff";
+            headers.XFrameOptions = "SAMEORIGIN";
+            headers.XContentTypeOptions = "nosniff";
             headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
             headers["Permissions-Policy"] = "geolocation=()";
             string Policy(string scriptSrc) =>
@@ -56,12 +56,12 @@ public class SecurityHeadersMiddleware(RequestDelegate next)
             headers["Reporting-Endpoints"] = "csp=\"/api/csp-report\"";
             if (cspCache.StrictScripts)
             {
-                headers["Content-Security-Policy"] = strict;
+                headers.ContentSecurityPolicy = strict;
             }
             else
             {
-                headers["Content-Security-Policy"] = Policy("'self' 'unsafe-inline'");
-                headers["Content-Security-Policy-Report-Only"] = strict;
+                headers.ContentSecurityPolicy = Policy("'self' 'unsafe-inline'");
+                headers.ContentSecurityPolicyReportOnly = strict;
             }
 
             return Task.CompletedTask;

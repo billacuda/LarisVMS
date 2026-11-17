@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.222.1] - 2026-11-16
+
+A maintenance update: code scanning findings fixed and reviewed.
+
+### ⚙️ Changed
+
+- **Code scanning.** The .NET scan no longer reports lines already reviewed in the code or generated
+  files, and the remaining analyzer suggestions are fixed or turned off with a reason.
+
+### 🔒 Security
+
+- **View tree escaping.** The view tree's fallback selector escaping now escapes backslashes too.
+
 ## [0.222.0] - 2026-11-16
 
 View folders, Sign in with Google, Home Assistant (experimental), and a standalone export player for
@@ -1994,7 +2007,8 @@ Only the 10 most recent versions are kept in this file. Older entries are archiv
 - [v0.21.1 – v0.40.0](changelog-archive/v0.21.1-to-v0.40.0.md) (2026-08-09 – 2026-08-11)
 - [v0.1.0 – v0.21.0](changelog-archive/v0.1.0-to-v0.21.0.md) (2026-08-08 – 2026-08-09)
 
-[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.222.0...HEAD
+[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.222.1...HEAD
+[0.222.1]: https://github.com/billacuda/LarisVMS/compare/v0.222.0...v0.222.1
 [0.222.0]: https://github.com/billacuda/LarisVMS/compare/v0.221.4...v0.222.0
 [0.221.4]: https://github.com/billacuda/LarisVMS/compare/v0.221.3...v0.221.4
 [0.221.3]: https://github.com/billacuda/LarisVMS/compare/v0.221.2...v0.221.3

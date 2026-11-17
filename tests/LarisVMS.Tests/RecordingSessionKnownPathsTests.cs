@@ -15,7 +15,7 @@ namespace LarisVMS.Tests;
 /// (pre-seeding reportedPaths from GET /api/nodes/segments/paths, fetched once by NodeWorker before
 /// any session starts) is the fix; this exercises the actual skip behavior against a real directory.
 /// </summary>
-public class RecordingSessionKnownPathsTests : IDisposable
+public sealed class RecordingSessionKnownPathsTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "LarisVMSRecordingSessionKnownPathsTests_" + Guid.NewGuid());
 

@@ -184,7 +184,9 @@ public sealed class QrCode
 
     private void DrawFormatBits(int mask)
     {
+#pragma warning disable S2437 // EccFormatBits is 0 (level M) today; the shift is the spec's layout
         var data = EccFormatBits << 3 | mask;
+#pragma warning restore S2437
         var rem = data;
         for (var i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >> 9) * 0x537);
         var bits = (data << 10 | rem) ^ 0x5412;

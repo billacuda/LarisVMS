@@ -109,7 +109,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         return node;
     }
 
-    public async Task<NodeCheckInSecurity> ApplyCheckInSecurityAsync(Guid nodeId, string? presentedNonce, CancellationToken ct = default, string? remoteIp = null)
+    public async Task<NodeCheckInSecurity> ApplyCheckInSecurityAsync(Guid nodeId, string? presentedNonce, string? remoteIp = null, CancellationToken ct = default)
     {
         var node = await db.Nodes.FirstOrDefaultAsync(n => n.Id == nodeId, ct);
         if (node is null) return new NodeCheckInSecurity(ReplayRejected: false, NextNonce: null, NewSecret: null);
@@ -736,8 +736,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         bool storagePressureActive = false, int? clientEndpointReportedPort = null,
         DateTime? clientEndpointCertNotAfter = null, bool? clientEndpointCertIsSelfSigned = null,
         string? clientEndpointLastError = null, List<NodePartnerHealthReport>? partnerHealthReports = null,
-        NodeHostStats? hostStats = null, CancellationToken ct = default, bool storageBlockedByEvidenceLocks = false,
-        string? clientEndpointCertSha256 = null)
+        NodeHostStats? hostStats = null, bool storageBlockedByEvidenceLocks = false,
+        string? clientEndpointCertSha256 = null, CancellationToken ct = default)
     {
         var skew = ComputeClockSkewSeconds(nodeSentAtUtc, serverReceivedUtc);
         // Only a well-formed SHA-256 is kept: it's what the server pins for encrypted connections.

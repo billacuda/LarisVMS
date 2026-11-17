@@ -48,7 +48,7 @@ internal sealed class ByteKalmanFilter
     }
 
     /// <summary>Creates a track's initial state from its first observed box.</summary>
-    public (float[] Mean, float[,] Covariance) Initiate(ReadOnlySpan<float> measurement)
+    public static (float[] Mean, float[,] Covariance) Initiate(ReadOnlySpan<float> measurement)
     {
         var mean = new float[Dim];
         for (var i = 0; i < MeasurementDim; i++)

@@ -232,7 +232,7 @@ public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
         // (TryBuildGpuNativeSlicedSession) already proved this matches for a synthetic frame, but a
         // real per-frame mismatch here means something is badly wrong and must not be silently
         // decoded as if it were correct.
-        var n = outputs.First().AsTensor<float>().Dimensions[0];
+        var n = outputs[0].AsTensor<float>().Dimensions[0];
         if (n != layout.Slices.Count)
             throw new InvalidOperationException(
                 $"GPU-native batched Slice session produced {n} batch slot(s) but the slice layout has " +

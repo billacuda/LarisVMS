@@ -47,7 +47,7 @@ public sealed class CudaProviderProvisioner(string installDirectory, NodeApiClie
     /// is in place or a download is already running.</summary>
     public async Task EnsureAsync(CancellationToken ct)
     {
-        if (!_gate.Wait(0)) return;
+        if (!_gate.Wait(0, ct)) return;
         try
         {
             EnsureRuntimeLibraries();

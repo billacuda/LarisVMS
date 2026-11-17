@@ -293,7 +293,7 @@ public class UpdateService(NodeConfig config, ILogger log, IHostApplicationLifet
         TryCleanStagedVision();
     }
 
-    private HttpClientHandler CreateDefaultHandler()
+    private static HttpClientHandler CreateDefaultHandler()
     {
         // The same certificate check as the node's other calls to the server.
         if (NodeConfigStore.Trust is { } trust) return trust.CreateHandler();

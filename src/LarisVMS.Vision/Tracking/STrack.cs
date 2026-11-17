@@ -138,7 +138,7 @@ internal sealed class STrack
         Span<float> xyah = stackalloc float[4];
         TlwhToXyah(_initialTlwh, xyah);
 
-        var (mean, covariance) = filter.Initiate(xyah);
+        var (mean, covariance) = ByteKalmanFilter.Initiate(xyah);
         Mean = mean;
         Covariance = covariance;
 

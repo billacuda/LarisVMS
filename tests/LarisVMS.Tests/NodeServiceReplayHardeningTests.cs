@@ -179,7 +179,7 @@ public class NodeServiceReplayHardeningTests
         Assert.NotNull(await service.AuthenticateAsync(nodeId.ToString(), "orig-secret", "10.6.6.6"));
         Assert.Equal("10.0.0.5", (await db.Nodes.FindAsync(nodeId))!.LastIpAddress);
 
-        var checkIn = await service.ApplyCheckInSecurityAsync(nodeId, null, default, "10.0.0.9");
+        var checkIn = await service.ApplyCheckInSecurityAsync(nodeId, null, "10.0.0.9");
         Assert.Equal("10.0.0.5", checkIn.IpChangedFrom);
         Assert.Equal("10.0.0.9", (await db.Nodes.FindAsync(nodeId))!.LastIpAddress);
     }

@@ -16,7 +16,7 @@ namespace LarisVMS.Onvif.Capability;
 /// place, and original GetProfiles order is the final tiebreaker (ONVIF devices conventionally list
 /// the main profile first).
 /// </summary>
-public static class CameraProfileRanker
+public static partial class CameraProfileRanker
 {
     public static IReadOnlyList<OnvifMediaProfile> Rank(IReadOnlyList<OnvifMediaProfile> profiles, int take = 3)
         => profiles
@@ -28,8 +28,8 @@ public static class CameraProfileRanker
             .Select(x => x.Profile)
             .ToList();
 
-    private static readonly System.Text.RegularExpressions.Regex StreamIndexPattern =
-        new(@"(?:sub|stream)\D*(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?:sub|stream)\D*(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex StreamIndexPattern { get; }
 
     private static int NameRank(string? name)
     {

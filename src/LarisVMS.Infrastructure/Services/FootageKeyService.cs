@@ -73,8 +73,10 @@ public class FootageKeyService(ApplicationDbContext db) : IFootageKeyService
 
         return JsonSerializer.Serialize(new BackupFile(BackupFormat, master.Id, DateTime.SpecifyKind(master.CreatedAt, DateTimeKind.Utc),
             "PBKDF2-SHA256", BackupIterations, Convert.ToBase64String(salt), Convert.ToBase64String(nonce),
-            Convert.ToBase64String(cipher), Convert.ToBase64String(tag)), new JsonSerializerOptions { WriteIndented = true });
+            Convert.ToBase64String(cipher), Convert.ToBase64String(tag)), Indented);
     }
+
+    private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
 
     public async Task<FootageKeyRestoreResult> RestoreBackupAsync(string backupJson, string passphrase, CancellationToken ct = default)
     {

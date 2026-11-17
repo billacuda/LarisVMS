@@ -85,11 +85,11 @@ public static class AdAccount
     }
 }
 
-public static class AdDomain
+public static partial class AdDomain
 {
-    private static readonly Regex Fqdn = new(
-        @"^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$",
-        RegexOptions.CultureInvariant);
+    [GeneratedRegex(@"^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex Fqdn { get; }
 
     public static bool IsValid(string? domain) => !string.IsNullOrWhiteSpace(domain) && Fqdn.IsMatch(domain.Trim());
 

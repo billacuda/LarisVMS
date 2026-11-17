@@ -15,7 +15,7 @@ namespace LarisVMS.Infrastructure.Data;
 /// The rest of the app goes through EF and doesn't care. Static instances, since Program.cs needs
 /// them before the container is built — see <see cref="DatabaseConfig.GetOps"/>.
 /// </summary>
-public abstract class DatabaseProviderOps
+public abstract partial class DatabaseProviderOps
 {
     public static DatabaseProviderOps For(DatabaseProvider provider) => provider switch
     {
@@ -67,8 +67,8 @@ public abstract class DatabaseProviderOps
     // Database/login names are meant to be plain identifiers, validated up front against an
     // allow-list (Windows account names additionally need '\' for DOMAIN\user) so a crafted name
     // can't break out of the quoted identifier or string literal contexts they're used in.
-    internal static readonly Regex SqlIdentifierPattern =
-        new(@"^[A-Za-z0-9_][A-Za-z0-9_ \-\.\$\\]*$", RegexOptions.Compiled);
+    [GeneratedRegex(@"^[A-Za-z0-9_][A-Za-z0-9_ \-\.\$\\]*$")]
+    internal static partial Regex SqlIdentifierPattern { get; }
 
     internal static bool IsThisMachine(string host) =>
         host is "." or "(local)" or "(localdb)" or "127.0.0.1" or "::1" or ""
@@ -227,7 +227,7 @@ public sealed class SqlServerOps : DatabaseProviderOps
 
 /// <summary>MariaDB. SQL logins only — the server has no notion of the Windows
 /// account this service runs as, so the wizard always asks for a user and password.</summary>
-public sealed class MariaDbOps : DatabaseProviderOps
+public sealed partial class MariaDbOps : DatabaseProviderOps
 {
     public static readonly MariaDbOps Instance = new();
 
@@ -274,7 +274,8 @@ public sealed class MariaDbOps : DatabaseProviderOps
     public override string QuoteIdentifier(string name) => "`" + name.Replace("`", "``") + "`";
 
     // Stricter than SQL Server: MariaDB maps a database to a folder, so no '.', '\', or spaces.
-    private static readonly Regex DatabaseNamePattern = new(@"^[A-Za-z0-9_$][A-Za-z0-9_$\-]{0,63}$", RegexOptions.Compiled);
+    [GeneratedRegex(@"^[A-Za-z0-9_$][A-Za-z0-9_$\-]{0,63}$")]
+    private static partial Regex DatabaseNamePattern { get; }
 
     public override void ValidateDatabaseName(string name)
     {

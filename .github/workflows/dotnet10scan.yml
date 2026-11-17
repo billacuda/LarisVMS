@@ -33,11 +33,17 @@ jobs:
       - name: Give each project its own category
         # Code scanning takes one run per category, and every project's file is a run from the same
         # tool (the C# compiler), so each gets its own: dotnet10-scs/<project>.
+        # Also left out: results under a "#pragma warning disable" (checked by hand, each with its
+        # reason; the compiler still writes them, marked as suppressed, and code scanning would
+        # open alerts for them) and results in generated code under obj/.
         if: always()
         run: |
           for f in sarif/*.sarif; do
             name=$(basename "$f" .sarif)
-            jq --arg id "dotnet10-scs/$name/" '.runs |= map(.automationDetails = {id: $id})' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+            jq --arg id "dotnet10-scs/$name/" '.runs |= map(.automationDetails = {id: $id}
+              | .results |= map(select(((.suppressions // []) | length) == 0
+                  and ((.locations[0].physicalLocation.artifactLocation.uri // "") | test("/obj/") | not))))' \
+              "$f" > "$f.tmp" && mv "$f.tmp" "$f"
           done
 
       - name: Upload SARIF to GitHub Security

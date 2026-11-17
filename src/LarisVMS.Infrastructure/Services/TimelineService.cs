@@ -567,7 +567,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         }).ToList();
     }
 
-    public async Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null, IReadOnlyCollection<string>? excludedLabels = null, bool includePlainMotion = false, SnapshotObjectFilter? objectFilter = null)
+    public async Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, IReadOnlyCollection<string>? kinds = null, IReadOnlyCollection<string>? excludedLabels = null, bool includePlainMotion = false, SnapshotObjectFilter? objectFilter = null, CancellationToken ct = default)
     {
         pageSize = Math.Clamp(pageSize, 1, MaxSnapshotPageSize);
 

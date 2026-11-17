@@ -93,9 +93,9 @@ public static class SnapshotBorderStyle
     /// (chroma 0) has no meaningful hue and returns 0.</summary>
     private static double Hue(string hex)
     {
-        var r = int.Parse(hex.Substring(1, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0;
-        var g = int.Parse(hex.Substring(3, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0;
-        var b = int.Parse(hex.Substring(5, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0;
+        var r = int.Parse(hex.AsSpan(1, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0;
+        var g = int.Parse(hex.AsSpan(3, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0;
+        var b = int.Parse(hex.AsSpan(5, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0;
 
         var max = Math.Max(r, Math.Max(g, b));
         var min = Math.Min(r, Math.Min(g, b));

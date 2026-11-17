@@ -25,7 +25,7 @@ namespace LarisVMS.Node;
 /// thinks this node still owns (<c>GET /api/nodes/segments/paths</c>) and reports any that are no
 /// longer on disk the same way, catching rows a past eviction's deletion report never confirmed.
 /// </summary>
-public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogger<StorageManager> logger) : BackgroundService
+public partial class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogger<StorageManager> logger) : BackgroundService
 {
     private static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(5);
 
@@ -977,8 +977,8 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
     // Pass 2c: {segment-stem}_span{spanId}.{jpg|webp} — the same naming convention Program.cs's own
     // snapshot-cache writer uses (WebP for new files, .jpg for ones already on disk).
-    private static readonly System.Text.RegularExpressions.Regex SnapshotSpanIdPattern =
-        new(@"_span(\d+)\.(?:jpg|webp)$", System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    [System.Text.RegularExpressions.GeneratedRegex(@"_span(\d+)\.(?:jpg|webp)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex SnapshotSpanIdPattern { get; }
 
     /// <summary>Pass 2c: self-heals cached snapshot-crop files whose owning MotionSpan row was
     /// deleted independently of the segment it was cropped from (MotionSpanRetentionService's own

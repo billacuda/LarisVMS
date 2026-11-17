@@ -196,8 +196,8 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
     var allowOrigin = !string.IsNullOrEmpty(worker.WebOrigin) ? worker.WebOrigin
         : !string.IsNullOrEmpty(origin) ? origin : "*";
     ctx.Response.Headers.AccessControlAllowOrigin = allowOrigin;
-    ctx.Response.Headers["Access-Control-Expose-Headers"] = "X-Fragment-Start-Seconds";
-    ctx.Response.Headers["Vary"] = "Origin";
+    ctx.Response.Headers.AccessControlExposeHeaders = "X-Fragment-Start-Seconds";
+    ctx.Response.Headers.Vary = "Origin";
 
     if (worker.Resolve(cameraId) is not { } target)
     {

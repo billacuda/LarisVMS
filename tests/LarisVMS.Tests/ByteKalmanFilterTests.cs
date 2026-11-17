@@ -22,7 +22,7 @@ public sealed class ByteKalmanFilterTests
     {
         var filter = new ByteKalmanFilter();
 
-        var (mean, covariance) = filter.Initiate(InitialMeasurement);
+        var (mean, covariance) = ByteKalmanFilter.Initiate(InitialMeasurement);
 
         Assert.Equal([125f, 140f, 0.625f, 80f, 0f, 0f, 0f, 0f], mean, new FloatComparer(Tolerance));
 
@@ -34,7 +34,7 @@ public sealed class ByteKalmanFilterTests
     public void Predict_AdvancesStateAndInflatesUncertainty()
     {
         var filter = new ByteKalmanFilter();
-        var (mean, covariance) = filter.Initiate(InitialMeasurement);
+        var (mean, covariance) = ByteKalmanFilter.Initiate(InitialMeasurement);
 
         filter.Predict(mean, covariance);
 
@@ -50,7 +50,7 @@ public sealed class ByteKalmanFilterTests
     public void Update_CorrectsTowardMeasurementAndShrinksUncertainty()
     {
         var filter = new ByteKalmanFilter();
-        var (mean, covariance) = filter.Initiate(InitialMeasurement);
+        var (mean, covariance) = ByteKalmanFilter.Initiate(InitialMeasurement);
         filter.Predict(mean, covariance);
 
         // Box centre moved by (3, 2); size unchanged.
@@ -78,7 +78,7 @@ public sealed class ByteKalmanFilterTests
         // A single update should blend prediction and measurement, not jump straight to the
         // observation -- if it does, the gain computation collapsed to identity.
         var filter = new ByteKalmanFilter();
-        var (mean, covariance) = filter.Initiate(InitialMeasurement);
+        var (mean, covariance) = ByteKalmanFilter.Initiate(InitialMeasurement);
         filter.Predict(mean, covariance);
 
         float[] measurement = [200f, 140f, 0.625f, 80f]; // moved 75px in x

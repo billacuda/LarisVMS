@@ -21,8 +21,8 @@ public class ApiKeyService(ApplicationDbContext db) : IApiKeyService
         return (key, await LoadLimitsAsync(key, ct));
     }
 
-    public async Task<(ApiKey Key, string RawValue)> GenerateAsync(string name, string roleId, string? createdByUserId, CancellationToken ct = default,
-        DateTime? expiresAtUtc = null, IReadOnlyCollection<(string Resource, string Action)>? limits = null)
+    public async Task<(ApiKey Key, string RawValue)> GenerateAsync(string name, string roleId, string? createdByUserId,
+        DateTime? expiresAtUtc = null, IReadOnlyCollection<(string Resource, string Action)>? limits = null, CancellationToken ct = default)
     {
         var raw = Prefix + Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
             .TrimEnd('=').Replace('+', '-').Replace('/', '_');

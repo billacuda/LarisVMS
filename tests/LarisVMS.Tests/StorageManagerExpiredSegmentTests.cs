@@ -6,7 +6,7 @@ namespace LarisVMS.Tests;
 /// StorageManager's side of server-directed retention: which paths it will agree to delete, and the
 /// persisted queue of deletions it hasn't reported yet.
 /// </summary>
-public class StorageManagerExpiredSegmentTests : IDisposable
+public sealed class StorageManagerExpiredSegmentTests : IDisposable
 {
     private static readonly Guid Camera = Guid.Parse("858a905f-17b4-4f94-9296-2cc03ebd9780");
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "LarisVMSExpiredSegmentTests_" + Guid.NewGuid());

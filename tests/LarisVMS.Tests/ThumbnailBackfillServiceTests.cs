@@ -4,7 +4,7 @@ namespace LarisVMS.Tests;
 
 /// <summary>Exercises ThumbnailBackfillService's pure filesystem-facing selection logic against a
 /// real temp directory tree — same pattern as StorageManagerTests, safe to run anywhere.</summary>
-public class ThumbnailBackfillServiceTests : IDisposable
+public sealed class ThumbnailBackfillServiceTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "LarisVMSThumbnailBackfillTests_" + Guid.NewGuid());
     private readonly string _mainDir;

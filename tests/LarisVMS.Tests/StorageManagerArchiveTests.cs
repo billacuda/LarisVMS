@@ -9,7 +9,7 @@ namespace LarisVMS.Tests;
 /// the atomic move itself — all exercised against a real temp directory tree, same as
 /// StorageManagerTests.
 /// </summary>
-public class StorageManagerArchiveTests : IDisposable
+public sealed class StorageManagerArchiveTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "LarisVMSArchiveTests_" + Guid.NewGuid());
 

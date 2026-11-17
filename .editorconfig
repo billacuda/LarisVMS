@@ -1,0 +1,25 @@
+root = true
+
+[*.cs]
+# Analyzer suggestions turned off on purpose (they reach code scanning otherwise).
+
+# Expensive logging arguments: the flagged arguments are small (names, counts, short strings) next
+# to the work being logged, and IsEnabled guards on every call would cost readability for nothing.
+dotnet_diagnostic.CA1873.severity = none
+
+# Constant arrays as arguments: one-off calls (startup, config, tests), not hot paths.
+dotnet_diagnostic.CA1861.severity = none
+
+# Concrete return types: the interfaces are what callers are meant to depend on.
+dotnet_diagnostic.CA1859.severity = none
+
+# LibraryImport instead of DllImport: needs AllowUnsafeBlocks, for a few rarely called P/Invokes.
+dotnet_diagnostic.SYSLIB1054.severity = none
+
+[installer/**.cs]
+# Custom actions target .NET Framework 4.7.2: no GeneratedRegex, AsSpan, or char overloads there.
+# (Util.cs is also compiled into the .NET 10 tests, where these would fire.)
+dotnet_diagnostic.CA1846.severity = none
+dotnet_diagnostic.CA1847.severity = none
+dotnet_diagnostic.CA1865.severity = none
+dotnet_diagnostic.SYSLIB1045.severity = none

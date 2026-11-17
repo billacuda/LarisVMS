@@ -7,8 +7,14 @@ namespace LarisVMS.Tests;
 
 /// <summary>Drop-in UI languages: file parsing, the lookup and plural fallbacks, placeholders, the
 /// pseudo-locale, and that every key the UI asks for exists in the built-in English.</summary>
-public sealed class LocalizationTests : IDisposable
+public sealed partial class LocalizationTests : IDisposable
 {
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?:\bL\[|\bL\.(?:Plural|Html|Markup|PluralHtml|PluralMarkup)\(|\bLoc\.(?:T|Plural)\()\s*""([a-z][A-Za-z0-9_.]*)""")]
+    private static partial System.Text.RegularExpressions.Regex ServerKeyReference();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?<![\w$])(?:larisvmsI18n\.)?(?:t|plural)\(\s*'(js\.[A-Za-z0-9_.]*)'")]
+    private static partial System.Text.RegularExpressions.Regex ScriptKeyReference();
+
     private readonly string _root = Path.Combine(Path.GetTempPath(), "larisvms-locale-tests-" + Guid.NewGuid().ToString("N"));
     private readonly string _dropIn;
     private readonly string _shipped;
@@ -350,9 +356,9 @@ public sealed class LocalizationTests : IDisposable
         var baseKeys = english.Keys.Select(LocaleFile.BaseKey).ToHashSet(StringComparer.Ordinal);
         var src = Path.GetDirectoryName(FindWebProjectDirectory())!;
         // L["key"], L["key", args], L.Plural/Html/Markup/PluralHtml/PluralMarkup("key", …), Loc.T/Plural("key", …).
-        var serverKey = new Regex(@"(?:\bL\[|\bL\.(?:Plural|Html|Markup|PluralHtml|PluralMarkup)\(|\bLoc\.(?:T|Plural)\()\s*""([a-z][A-Za-z0-9_.]*)""");
+        var serverKey = ServerKeyReference();
         // larisvmsI18n.t('js.key') / .plural('js.key', n), or the same through a local t()/plural().
-        var scriptKey = new Regex(@"(?<![\w$])(?:larisvmsI18n\.)?(?:t|plural)\(\s*'(js\.[A-Za-z0-9_.]*)'");
+        var scriptKey = ScriptKeyReference();
 
         var missing = new List<string>();
         var referenced = 0;

@@ -87,8 +87,8 @@ public static class FootageCrypto
 
     /// <summary>Encrypts <paramref name="input"/> (read to its end; its length must be known) into
     /// <paramref name="output"/>.</summary>
-    public static async Task EncryptAsync(Stream input, Stream output, Guid keyId, byte[] key, CancellationToken ct = default,
-        int chunkSize = DefaultChunkSize)
+    public static async Task EncryptAsync(Stream input, Stream output, Guid keyId, byte[] key, int chunkSize = DefaultChunkSize,
+        CancellationToken ct = default)
     {
         if (key.Length != KeySize) throw new ArgumentException("Footage keys are 32 bytes.", nameof(key));
         var length = input.Length - input.Position;

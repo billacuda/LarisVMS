@@ -89,7 +89,7 @@ public class EditModel(ApplicationDbContext db, IApiKeyService apiKeyService, IA
 
         DateTime? expires = ExpiryChoices.Contains(ExpiresInDays) && ExpiresInDays > 0
             ? DateTime.UtcNow.AddDays(ExpiresInDays) : null;
-        var (key, rawValue) = await apiKeyService.GenerateAsync(Name, roleId, userId, ct, expires, limits);
+        var (key, rawValue) = await apiKeyService.GenerateAsync(Name, roleId, userId, expires, limits, ct);
         await auditService.LogAsync("ApiKey.Create", userId, User.Identity?.Name, ip,
             (expires is { } e ? $"{key.Name} (expires {e:yyyy-MM-dd} UTC)" : key.Name) + limitNote, ct);
 

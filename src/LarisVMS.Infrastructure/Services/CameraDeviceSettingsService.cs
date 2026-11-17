@@ -269,7 +269,7 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
 
     // ── Apply one part to one camera (no DbContext use — safe to run in parallel) ──────────────
 
-    private async Task ApplyVideoAsync(OnvifSoapClient soap, Target target, IReadOnlyList<OnvifMediaProfile> profiles,
+    private static async Task ApplyVideoAsync(OnvifSoapClient soap, Target target, IReadOnlyList<OnvifMediaProfile> profiles,
         string role, VideoEncoderValues change, CancellationToken ct)
     {
         if (!Enum.TryParse<CameraStreamRole>(role, ignoreCase: true, out var streamRole) || !Enum.IsDefined(streamRole))
@@ -525,7 +525,7 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
            ?? target.Streams.Select(s => FindProfile(profiles, s.ProfileToken)?.VideoSourceToken).FirstOrDefault(t => t is not null)
            ?? profiles.Select(p => p.VideoSourceToken).FirstOrDefault(t => t is not null);
 
-    private async Task<EncoderState> ReadEncoderAsync(OnvifSoapClient soap, Target target, string configToken, string profileToken, CancellationToken ct)
+    private static async Task<EncoderState> ReadEncoderAsync(OnvifSoapClient soap, Target target, string configToken, string profileToken, CancellationToken ct)
     {
         if (target.Media2 is { } media2Uri)
         {

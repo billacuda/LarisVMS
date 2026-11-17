@@ -2,8 +2,11 @@ using LarisVMS.Installer;
 
 namespace LarisVMS.Tests;
 
-public sealed class InstallerUtilTests
+public sealed partial class InstallerUtilTests
 {
+    [System.Text.RegularExpressions.GeneratedRegex(@"Text\(session, ""(\w+)""|LARIS_TEXT_(\w+)|Util\.Format\([^,]+, ""(\w+)""")]
+    private static partial System.Text.RegularExpressions.Regex TextIdReference();
+
     [Theory]
     [InlineData("8554", "8554")]
     [InlineData("", "\"\"")]
@@ -147,7 +150,7 @@ public sealed class InstallerUtilTests
         var common = File.ReadAllText(Path.Combine(installer, "Common", "Common.wxs"));
         var english = File.ReadAllText(Path.Combine(installer, "Common", "Strings.en-US.wxl"));
 
-        var ids = System.Text.RegularExpressions.Regex.Matches(code, @"Text\(session, ""(\w+)""|LARIS_TEXT_(\w+)|Util\.Format\([^,]+, ""(\w+)""")
+        var ids = TextIdReference().Matches(code)
             .Select(m => m.Groups.Cast<System.Text.RegularExpressions.Group>().Skip(1).First(g => g.Success).Value)
             .Distinct().ToList();
         Assert.NotEmpty(ids);

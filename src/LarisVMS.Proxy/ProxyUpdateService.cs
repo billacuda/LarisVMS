@@ -160,7 +160,7 @@ public class ProxyUpdateService(ProxyConfig config, ILogger log, IHostApplicatio
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* replaced by the next download */ }
     }
 
-    private HttpClientHandler CreateDefaultHandler()
+    private static HttpClientHandler CreateDefaultHandler()
     {
         // The same certificate check as the proxy's other calls to the server.
         if (ProxyConfigStore.Trust is { } trust) return trust.CreateHandler();

@@ -135,7 +135,7 @@ public interface ITimelineService
     /// most 2000 — Playback's timeline markers and on-video speed badge.</summary>
     Task<List<SpeedMarkerDto>> GetSpeedMarkersAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default);
 
-    Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null, IReadOnlyCollection<string>? excludedLabels = null, bool includePlainMotion = false, SnapshotObjectFilter? objectFilter = null);
+    Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, IReadOnlyCollection<string>? kinds = null, IReadOnlyCollection<string>? excludedLabels = null, bool includePlainMotion = false, SnapshotObjectFilter? objectFilter = null, CancellationToken ct = default);
 
     /// <summary>Object detection plan decision 5: every currently-known DetectedObjectCategory,
     /// ordered by name — what the Snapshots page's filter checkboxes are built from. Fetched live

@@ -45,7 +45,7 @@ public class TalkRouteTests
         }
 
         public Task<ITalkSink> Open(NodeConfigCameraDto camera) =>
-            TalkSessionHandler.OpenSinkAsync(camera, Rtsp, NullLogger.Instance, CancellationToken.None, Onvif, Api);
+            TalkSessionHandler.OpenSinkAsync(camera, Rtsp, NullLogger.Instance, Onvif, Api, CancellationToken.None);
     }
 
     [Fact]

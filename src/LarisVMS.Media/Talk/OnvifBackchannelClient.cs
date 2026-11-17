@@ -125,9 +125,9 @@ public sealed class OnvifBackchannelClient : ITalkSink
         var play = await RequestAsync("PLAY", _sessionUri, ct, ("Range", "npt=0.000-"), ("Require", BackchannelRequire));
         EnsureOk(play, "PLAY");
 
-        _readLoop = Task.Run(() => DrainAsync(_cts.Token));
+        _readLoop = Task.Run(() => DrainAsync(_cts.Token), _cts.Token);
         var interval = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds / 2, 5, 25));
-        _keepAlive = Task.Run(() => KeepAliveAsync(interval, _cts.Token));
+        _keepAlive = Task.Run(() => KeepAliveAsync(interval, _cts.Token), _cts.Token);
         _logger.LogInformation("Audio backchannel open to {Host}: {Codec}, interleaved channel {Channel}.",
             new Uri(_sessionUri).Host, Codec, _channel);
     }

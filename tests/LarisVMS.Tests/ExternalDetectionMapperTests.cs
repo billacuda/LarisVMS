@@ -13,6 +13,8 @@ namespace LarisVMS.Tests;
 /// </summary>
 public class ExternalDetectionMapperTests
 {
+    private static readonly JsonSerializerOptions CaseInsensitive = new() { PropertyNameCaseInsensitive = true };
+
     private static ExternalDetectionResult Box(double x1, double y1, double x2, double y2, int cls = 0,
         string name = "person", double conf = 0.9) =>
         new(new ExternalDetectionBox(x1, y1, x2, y2), cls, name, conf);
@@ -165,7 +167,7 @@ public class ExternalDetectionMapperTests
         """;
 
         var results = JsonSerializer.Deserialize<List<ExternalDetectionResult>>(
-            json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            json, CaseInsensitive);
 
         var r = Assert.Single(results!);
         Assert.Equal(100.5, r.Box.X1);

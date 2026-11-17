@@ -186,7 +186,7 @@ public sealed class FootageStore(NodeApiClient api, int livePort, ILogger<Footag
             await using (var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, useAsync: true))
             await using (var output = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true))
             {
-                await FootageCrypto.EncryptAsync(input, output, key.Value.KeyId, key.Value.Key, ct);
+                await FootageCrypto.EncryptAsync(input, output, key.Value.KeyId, key.Value.Key, ct: ct);
                 await output.FlushAsync(ct);
                 output.Flush(flushToDisk: true);
             }

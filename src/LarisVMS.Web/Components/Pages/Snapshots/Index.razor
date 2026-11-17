@@ -421,7 +421,7 @@
         var toUtc = LocalDateFilter.EndOfDayUtc(To);
 
         SpeedUnit = await Settings.GetAsync(SpeedUnits.SettingKey, SpeedUnits.Default);
-        Results = await TimelineService.GetSnapshotsAsync(cameraIds, fromUtc, toUtc, PageNumber < 1 ? 1 : PageNumber, PageSize, default, Kinds, ExcludedLabels,
+        Results = await TimelineService.GetSnapshotsAsync(cameraIds, fromUtc, toUtc, PageNumber < 1 ? 1 : PageNumber, PageSize, Kinds, ExcludedLabels,
             objectFilter: new SnapshotObjectFilter(KnownColors(Colors), KnownColors(Shirts), KnownColors(Pants),
                 MinSpeed is { } minSpeed ? SpeedUnits.ToKph(minSpeed, SpeedUnit) : null));
     }

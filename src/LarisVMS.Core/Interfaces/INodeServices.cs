@@ -113,8 +113,8 @@ public interface INodeService
         bool storagePressureActive = false, int? clientEndpointReportedPort = null,
         DateTime? clientEndpointCertNotAfter = null, bool? clientEndpointCertIsSelfSigned = null,
         string? clientEndpointLastError = null, List<NodePartnerHealthReport>? partnerHealthReports = null,
-        NodeHostStats? hostStats = null, CancellationToken ct = default, bool storageBlockedByEvidenceLocks = false,
-        string? clientEndpointCertSha256 = null);
+        NodeHostStats? hostStats = null, bool storageBlockedByEvidenceLocks = false,
+        string? clientEndpointCertSha256 = null, CancellationToken ct = default);
 
     /// <summary>Stores the node's reported AI detection backend. Returns true when it has just become
     /// degraded (or degraded for a different reason) — the moment to tell an admin. Null leaves the
@@ -162,7 +162,7 @@ public interface INodeService
     /// is old enough, or <see cref="Node.PendingSecretRotation"/> is set — mints and stores a new
     /// secret (old hash preserved in PreviousApiKeyHash for the grace window). Only ever called for an
     /// already-authenticated node.</summary>
-    Task<NodeCheckInSecurity> ApplyCheckInSecurityAsync(Guid nodeId, string? presentedNonce, CancellationToken ct = default, string? remoteIp = null);
+    Task<NodeCheckInSecurity> ApplyCheckInSecurityAsync(Guid nodeId, string? presentedNonce, string? remoteIp = null, CancellationToken ct = default);
 
     /// <summary>Lets a node that registered (and waits as Pending) record and report.</summary>
     Task<bool> ApproveAsync(Guid nodeId, CancellationToken ct = default);

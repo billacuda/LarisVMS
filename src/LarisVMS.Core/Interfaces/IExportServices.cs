@@ -14,8 +14,8 @@ public interface IExportService
     /// <summary>redactionJsonByCamera: per camera, the areas to black out (ExportJobItem.RedactionJson).
     /// includePlayer/convertH265: see ExportJob.IncludePlayer and ConvertH265.</summary>
     Task<ExportJob> CreateJobAsync(IReadOnlyList<Guid> cameraIds, DateTime fromUtc, DateTime toUtc,
-        string requestedByUserId, string? requestedByUserName, CancellationToken ct = default,
-        IReadOnlyDictionary<Guid, string>? redactionJsonByCamera = null, bool includePlayer = false, bool convertH265 = true);
+        string requestedByUserId, string? requestedByUserName,
+        IReadOnlyDictionary<Guid, string>? redactionJsonByCamera = null, bool includePlayer = false, bool convertH265 = true, CancellationToken ct = default);
 
     /// <summary>Newest first, with each job's Items eager-loaded — the Exports page's whole feed in
     /// one call.</summary>

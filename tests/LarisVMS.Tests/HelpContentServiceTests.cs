@@ -3,8 +3,14 @@ using LarisVMS.Web.Services;
 
 namespace LarisVMS.Tests;
 
-public class HelpContentServiceTests
+public partial class HelpContentServiceTests
 {
+    [System.Text.RegularExpressions.GeneratedRegex(@"/Help/(?<slug>[a-z0-9-]+)(#(?<anchor>[a-z0-9-]+))?")]
+    private static partial System.Text.RegularExpressions.Regex HelpLink();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"/Help/(?<slug>[a-z0-9-]+)(#(?<anchor>[a-z0-9\p{L}-]+))?")]
+    private static partial System.Text.RegularExpressions.Regex HelpLinkLocalized();
+
     private readonly HelpContentService _help = new();
 
     [Fact]
@@ -122,7 +128,7 @@ public class HelpContentServiceTests
             // checked against the English pages only.
             .Where(f => !IsTranslatedHelpPage(webRoot, f));
 
-        var link = new Regex(@"/Help/(?<slug>[a-z0-9-]+)(#(?<anchor>[a-z0-9-]+))?");
+        var link = HelpLink();
         var broken = new List<string>();
         var checkedCount = 0;
         foreach (var file in files)
@@ -147,7 +153,7 @@ public class HelpContentServiceTests
     [Fact]
     public void EveryHelpLink_InTranslations_ResolvesInThatLanguage()
     {
-        var link = new Regex(@"/Help/(?<slug>[a-z0-9-]+)(#(?<anchor>[a-z0-9\p{L}-]+))?");
+        var link = HelpLinkLocalized();
         var broken = new List<string>();
         foreach (var culture in _help.GetEmbeddedTranslations())
         {

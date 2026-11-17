@@ -335,8 +335,8 @@ public class DashboardWidgetService(ApplicationDbContext db, ICameraService came
     {
         if (accessible is { Count: 0 } || kinds is { Count: 0 }) return new SnapshotPageDto([], 1, 1);
         var includeMotion = kinds?.Contains(DashboardWidgetCatalog.MotionKindToken, StringComparer.OrdinalIgnoreCase) ?? false;
-        return await timeline.GetSnapshotsAsync(accessible?.ToList(), null, null, page, pageSize, ct,
-            kinds: kinds, includePlainMotion: includeMotion);
+        return await timeline.GetSnapshotsAsync(accessible?.ToList(), null, null, page, pageSize,
+            kinds: kinds, includePlainMotion: includeMotion, ct: ct);
     }
 
     private static DashboardWidgetRow DetectionRow(SnapshotDto s, DateTime now)

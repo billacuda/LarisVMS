@@ -8,7 +8,7 @@ namespace LarisVMS.Tests;
 /// filesystem-facing pieces (age filtering, oldest-first quota selection, bottom-up empty-directory
 /// pruning) work against a real filesystem rather than a mocked one.
 /// </summary>
-public class StorageManagerTests : IDisposable
+public sealed class StorageManagerTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "LarisVMSStorageManagerTests_" + Guid.NewGuid());
 
