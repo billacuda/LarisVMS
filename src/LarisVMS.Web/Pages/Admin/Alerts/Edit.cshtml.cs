@@ -26,7 +26,8 @@ namespace LarisVMS.Web.Pages.Admin.Alerts;
 /// </summary>
 [Authorize("Alerts.Edit")]
 public class EditModel(ApplicationDbContext db, ICameraService cameraService, INodeService nodeService, IAuditService auditService,
-    ITimelineService timelineService, ISettingsResolver settings, DetectionAlertService detectionAlerts) : PageModel
+    ITimelineService timelineService, ISettingsResolver settings, DetectionAlertService detectionAlerts,
+    ICameraAccessService cameraAccess) : PageModel
 {
     [BindProperty] public Guid? Id { get; set; }
     [BindProperty] public string Name { get; set; } = string.Empty;
@@ -132,7 +133,7 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
     {
         var input = new AlertRuleInput(Name ?? "", IsEnabled, ConditionType, CameraId, NodeId, ThresholdPercent, CooldownMinutes,
             CategoryFilter, LabelFilter, ColorFilter, ZoneId, SpeedThreshold, ScheduleDays, ScheduleStart, ScheduleEnd, TimeZoneId);
-        var error = await AlertRuleEditing.ValidateAsync(db, input, ct);
+        var error = await AlertRuleEditing.ValidateAsync(db, input, ct) ?? await CameraOutOfScopeAsync(ct);
         if (error is not null)
         {
             ErrorMessage = error;
@@ -303,9 +304,32 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
         string.IsNullOrWhiteSpace(json) ? null : JsonSerializer.Deserialize<T>(json);
 
 
+    /// <summary>A shared rule sends what a camera sees (names, detections, snapshots) to its delivery
+    /// targets, so it can only be set on, or moved off, a camera the admin can view.</summary>
+    private async Task<string?> CameraOutOfScopeAsync(CancellationToken ct)
+    {
+        var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(User, CameraAccessActions.View, ct);
+        if (accessible is null) return null;
+        // With no camera, a detection, speed, or evidence-lock rule watches every camera.
+        var nodeRule = ConditionType is AlertConditionType.NodeOffline or AlertConditionType.NodeStorageLow
+            or AlertConditionType.NodeFailoverActivated;
+        if (CameraId is null && !nodeRule) return Loc.T("admin.alerts.edit.chooseCameraInScope");
+        var existingCamera = Id is { } id
+            ? await db.AlertRules.Where(r => r.Id == id).Select(r => r.CameraId).FirstOrDefaultAsync(ct)
+            : null;
+        var zoneCamera = ZoneId is { } zoneId
+            ? await db.Zones.Where(z => z.Id == zoneId).Select(z => (Guid?)z.CameraId).FirstOrDefaultAsync(ct)
+            : null;
+        return new[] { CameraId, existingCamera, zoneCamera }.Any(c => c is { } cam && !accessible.Contains(cam))
+            ? Loc.T("api.youDontHaveAccessTo")
+            : null;
+    }
+
     private async Task LoadPickersAsync(CancellationToken ct)
     {
-        Cameras = (await cameraService.ListAsync(ct)).OrderBy(c => c.Name).ToList();
+        var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(User, CameraAccessActions.View, ct);
+        Cameras = (await cameraService.ListAsync(ct)).Where(c => accessible is null || accessible.Contains(c.Id))
+            .OrderBy(c => c.Name).ToList();
         Nodes = (await nodeService.ListAsync(ct)).OrderBy(n => n.Name).ToList();
         Categories = await timelineService.GetDetectedObjectCategoriesAsync(ct);
         Labels = await timelineService.GetDetectedObjectLabelsAsync(ct);

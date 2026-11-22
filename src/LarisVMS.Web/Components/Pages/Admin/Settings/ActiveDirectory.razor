@@ -281,6 +281,16 @@
             return;
         }
 
+        // Testing makes the server sign in to whatever directory is on screen, as the service account
+        // or as this machine. Pointing that at another host would hand it a password or the
+        // machine's sign-in, so only a Super Admin can test a directory other than the saved one —
+        // the same rule as saving it.
+        if (!SameDirectory(Current) && !(await AdminScope.ForAsync(Db, PermissionService, User)).IsSuperAdmin)
+        {
+            TestResult = Loc.T("settings.activeDirectory.superAdminOnly");
+            return;
+        }
+
         var probe = BuildSettingsFromForm(Current);
         try
         {
@@ -558,6 +568,16 @@
         UseLdaps = UseLdaps,
         UseServiceAccount = LookupAccount == "ServiceAccount",
         ServiceAccountUsername = ServiceAccountUsername?.Trim(),
-        ServiceAccountPassword = string.IsNullOrWhiteSpace(ServiceAccountPassword) ? stored?.ServiceAccountPassword : ServiceAccountPassword
+        // The saved password is only reused for the saved account on the saved directory, so it
+        // can't be sent somewhere else.
+        ServiceAccountPassword = !string.IsNullOrWhiteSpace(ServiceAccountPassword) ? ServiceAccountPassword
+            : SameDirectory(stored) && string.Equals(stored?.ServiceAccountUsername ?? "", ServiceAccountUsername?.Trim() ?? "", StringComparison.OrdinalIgnoreCase)
+                ? stored?.ServiceAccountPassword : null
     };
+
+    /// <summary>Whether the domain and LDAPS choice on screen are the saved ones.</summary>
+    private bool SameDirectory(ActiveDirectorySettings? stored) =>
+        stored is not null
+        && string.Equals(stored.Domain ?? "", Domain?.Trim() ?? "", StringComparison.OrdinalIgnoreCase)
+        && stored.UseLdaps == UseLdaps;
 }

@@ -37,8 +37,8 @@ public static class OutboundGuard
         GuardedHandler(a => !IsHostOrLinkLocal(a, allowLoopback: true), "is a link-local address");
 
     /// <summary>For cameras (ONVIF): anything on the network, link-local too, since a camera with no
-    /// DHCP lease falls back to 169.254.x.x. Only cloud metadata services, and addresses no camera
-    /// can have, are refused. Accepts the self-signed certificate every HTTPS camera has, unless
+    /// DHCP lease falls back to 169.254.x.x. Only cloud metadata services, this machine, and
+    /// addresses no camera can have, are refused. Accepts the self-signed certificate every HTTPS camera has, unless
     /// camera certificate pinning is on (CameraCertificatePins), when a camera's certificate must
     /// match the one first seen at its address.</summary>
     public static SocketsHttpHandler CameraHandler()
@@ -57,6 +57,9 @@ public static class OutboundGuard
     {
         address = Unwrap(address);
         if (address.Equals(CloudMetadataV4) || address.Equals(Ec2MetadataV6)) return false;
+        // A camera is never this machine; allowing it would let anyone who can add a camera probe
+        // the server's own local-only services.
+        if (IPAddress.IsLoopback(address)) return false;
         if (address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any)
             || address.Equals(IPAddress.Broadcast) || address.Equals(IPAddress.IPv6None))
             return false;

@@ -14,7 +14,7 @@ Quien tiene una cuenta local cambia su propia contraseña seleccionando su nombr
 
 Cuando creás una cuenta o restablecés una contraseña en **Configuración → Usuarios**, podés marcar **Debe cambiarla en el próximo inicio de sesión**. La persona tiene que elegir su propia contraseña antes de poder hacer cualquier otra cosa. Con **Configuración → Seguridad → Contraseñas temporales puestas por un administrador** activado, empieza marcado.
 
-Después de 5 contraseñas incorrectas para una cuenta desde una misma dirección en 15 minutos, esa dirección tiene que esperar esos 15 minutos; la persona puede seguir iniciando sesión desde cualquier otro lado. Una cuenta se bloquea 15 minutos solo después de 20 intentos incorrectos desde cualquier lado, y los Super Admins nunca se bloquean por contraseñas incorrectas al iniciar sesión. Los Super Admins reciben aviso de los fallos repetidos y los bloqueos, y de los intentos repartidos entre muchas redes: una cuenta que falla 10 veces desde 3 o más redes, o 50 fallos desde 10 o más redes en todo el servidor, en 15 minutos.
+Después de 5 contraseñas incorrectas para una cuenta desde una misma dirección en 15 minutos, esa dirección tiene que esperar esos 15 minutos; la persona puede seguir iniciando sesión desde cualquier otro lado. Una cuenta se bloquea 15 minutos solo después de 20 intentos incorrectos desde cualquier lado. Los Super Admins nunca quedan bloqueados para siempre: si tienen el inicio de sesión en dos pasos activado, las contraseñas incorrectas no los bloquean, y si no, después de cada contraseña incorrecta a partir de la quinta tienen que esperar antes de volver a intentar, un poco más cada vez (1, 5, 15 y después 60 minutos). Los Super Admins reciben aviso de los fallos repetidos y los bloqueos, y de los intentos repartidos entre muchas redes: una cuenta que falla 10 veces desde 3 o más redes, o 50 fallos desde 10 o más redes en todo el servidor, en 15 minutos.
 
 ## Inicio de sesión en dos pasos
 
@@ -40,7 +40,7 @@ Un rol es un conjunto de permisos con nombre, gestionado en **Configuración →
 
 - un **nivel de alcance**;
 - un **vencimiento** para acceso por tiempo limitado (por ejemplo, 480 minutos para un turno de 8 horas);
-- una **duración de sesión**: horas después de iniciar sesión antes de tener que iniciar sesión de nuevo, por más activo que esté (como máximo 30 días, o 0 para que no venza nunca);
+- una **duración de sesión**: horas después de iniciar sesión antes de tener que iniciar sesión de nuevo, por más activo que esté (como máximo 30 días, o 0 para un año);
 - un **tiempo de inactividad**: minutos sin abrir una página antes de que se cierre la sesión (0 lo desactiva). Una pantalla que solo muestra video en vivo cuenta como inactiva, así que dejalo desactivado para los roles que miran un videowall;
 - una **prioridad PTZ**, que decide quién gana cuando dos usuarios mueven la misma cámara.
 
@@ -95,7 +95,7 @@ UPDATE `ActiveDirectorySettings` SET `LocalLoginsEnabled` = 1;
 
 Todo lo que hacen los usuarios se registra en **Registros → Registros de auditoría**: cambios (con valores viejos y nuevos; los secretos se registran solo como «cambiado»), ver cámaras, iniciar reproducción y exportar.
 
-**A prueba de modificaciones.** Cada entrada se sella junto con la anterior, con una clave que no está solo en la base de datos. Cada 6 horas (y cuando seleccionás **Verificar ahora** en la página del registro de auditoría) se verifica todo el registro. Si una entrada se modificó, se eliminó o se agregó directamente en la base de datos, la página indica cuál y se avisa a los Super Admins. Las entradas que elimina la retención son esperables y no cuentan, y cada eliminación queda registrada (**AuditLog.Pruned**). Las entradas de antes de esta actualización no quedan cubiertas.
+**A prueba de modificaciones.** Cada entrada se sella junto con la anterior, con una clave que no está solo en la base de datos. Cada 6 horas (y cuando seleccionás **Verificar ahora** en la página del registro de auditoría) se verifica todo el registro. Si una entrada se modificó, se eliminó o se agregó directamente en la base de datos, la página indica cuál y se avisa a los Super Admins. Las entradas que elimina la retención son esperables y no cuentan, y cada eliminación queda registrada (**AuditLog.Pruned**). Las entradas de antes de esta actualización no quedan cubiertas. Solo un Super Admin puede acortar cuánto tiempo se guarda el registro de auditoría (**Configuración → Registros**), así nadie más puede borrar su propio historial.
 
 El servidor también guarda un pequeño registro fuera de la base de datos, en `%ProgramData%\LarisVMS\audit-chain.dat`, con la clave del sello y dónde empezó el registro, así no se puede volver a sellar con otra clave ni borrar y empezar de nuevo sin que se note. Si a propósito empezás de nuevo con una base de datos nueva y vacía en el mismo servidor, borrá ese archivo una vez; se crea uno nuevo con la próxima entrada.
 

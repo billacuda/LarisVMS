@@ -14,7 +14,7 @@ Anyone with a local account changes their own password by selecting their name a
 
 When you create an account or reset a password under **Settings → Users**, you can check **Must change it at next sign-in**. The person then has to choose their own password before they can do anything else. With **Settings → Security → Temporary admin-set passwords** on, it starts checked.
 
-After 5 wrong passwords for one account from one address within 15 minutes, that address has to wait out the 15 minutes; the person can still sign in from anywhere else. An account is locked for 15 minutes only after 20 wrong tries from anywhere, and Super Admins are never locked by wrong passwords at sign-in. Super Admins hear about repeated failures and lockouts, and about guessing spread over many networks: one account failing 10 times from 3 or more networks, or 50 failures from 10 or more networks across the server, within 15 minutes.
+After 5 wrong passwords for one account from one address within 15 minutes, that address has to wait out the 15 minutes; the person can still sign in from anywhere else. An account is locked for 15 minutes only after 20 wrong tries from anywhere. Super Admins are never locked out for good: one with two-factor sign-in on isn't locked by wrong passwords at all, and one without it waits before trying again after each wrong password past the fifth, a little longer each time (1, 5, 15, then 60 minutes). Super Admins hear about repeated failures and lockouts, and about guessing spread over many networks: one account failing 10 times from 3 or more networks, or 50 failures from 10 or more networks across the server, within 15 minutes.
 
 ## Two-factor sign-in
 
@@ -40,7 +40,7 @@ A role is a named set of permissions, managed under **Settings → Roles**. Each
 
 - a **scope tier**;
 - an **expiry** for time-limited access (for example, 480 minutes for an 8-hour shift);
-- a **session lifetime**: hours after signing in before the user has to sign in again, however active they are (at most 30 days, or 0 to never expire);
+- a **session lifetime**: hours after signing in before the user has to sign in again, however active they are (at most 30 days, or 0 for a year);
 - an **idle timeout**: minutes without opening a page before the user is signed out (0 is off). A screen left showing live video counts as idle, so leave it off for roles that watch a video wall;
 - a **PTZ priority**, which decides who wins when two users move the same camera.
 
@@ -95,7 +95,7 @@ UPDATE `ActiveDirectorySettings` SET `LocalLoginsEnabled` = 1;
 
 Everything users do is recorded under **Logs → Audit logs**: changes (with old and new values; secrets are recorded only as “changed”), viewing cameras, starting playback, and exporting.
 
-**Tamper-evident.** Each entry is sealed together with the one before it, using a key the database alone doesn't hold. Every 6 hours (and when you select **Check now** on the audit log page) the whole log is checked. If an entry was changed, removed, or added directly in the database, the page says which one and Super Admins are notified. Entries removed by retention are expected and don't count, and each removal is itself recorded (**AuditLog.Pruned**). Entries from before this update aren't covered.
+**Tamper-evident.** Each entry is sealed together with the one before it, using a key the database alone doesn't hold. Every 6 hours (and when you select **Check now** on the audit log page) the whole log is checked. If an entry was changed, removed, or added directly in the database, the page says which one and Super Admins are notified. Entries removed by retention are expected and don't count, and each removal is itself recorded (**AuditLog.Pruned**). Entries from before this update aren't covered. Only a Super Admin can shorten how long the audit log is kept (**Settings → Logs**), so no one else can clear their own history.
 
 The server also keeps a small record outside the database, in `%ProgramData%\LarisVMS\audit-chain.dat`, of the seal's key and where the log started, so the log can't be resealed with another key or wiped and restarted without that showing. If you deliberately start over with a new, empty database on the same server, delete that file once; a new one is made with the next entry.
 

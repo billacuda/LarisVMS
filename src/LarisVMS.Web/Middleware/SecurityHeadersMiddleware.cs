@@ -35,7 +35,10 @@ public class SecurityHeadersMiddleware(RequestDelegate next)
             headers.XFrameOptions = "SAMEORIGIN";
             headers.XContentTypeOptions = "nosniff";
             headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
-            headers["Permissions-Policy"] = "geolocation=()";
+            // Talk uses the microphone; nothing here uses the camera, location, or payments.
+            headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=(), payment=(), usb=()";
+            // Keeps other sites' windows from holding a reference to these pages.
+            headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups";
             string Policy(string scriptSrc) =>
                 "default-src 'self'; " +
                 $"script-src {scriptSrc}; " +

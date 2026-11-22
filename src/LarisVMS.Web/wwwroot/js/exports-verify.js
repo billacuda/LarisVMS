@@ -49,6 +49,7 @@
         runBtn.disabled = true;
         var lines = [];
         var verdictOk = true;
+        var otherKey = false;
         try {
             var signed = core.readSigned(await manifestInput.files[0].text());
             var manifest = signed.manifest, payload = signed.payload;
@@ -59,7 +60,7 @@
             var ours = keys.some(function (k) { return core.pemBody(k.publicKeyPem) === core.pemBody(manifest.publicKeyPem); });
             if (!valid) { verdictOk = false; lines.push(core.line('bad', larisvmsI18n.t('js.exportsVerify.manifestInvalid'), larisvmsI18n.t('js.exportsVerify.manifestInvalidDetail'))); }
             else if (ours) lines.push(core.line('ok', larisvmsI18n.t('js.exportsVerify.manifestOurs'), larisvmsI18n.t('js.exportsVerify.signedWithKey', { key: manifest.keyId })));
-            else { lines.push(core.line('warn', larisvmsI18n.t('js.exportsVerify.manifestOtherKey'), larisvmsI18n.t('js.exportsVerify.manifestOtherKeyDetail', { key: manifest.keyId }))); }
+            else { otherKey = true; lines.push(core.line('warn', larisvmsI18n.t('js.exportsVerify.manifestOtherKey'), larisvmsI18n.t('js.exportsVerify.manifestOtherKeyDetail', { key: manifest.keyId }))); }
 
             // 2. File
             var file = videoInput.files[0];
@@ -80,8 +81,12 @@
             var range = new Date(payload.requested.fromUtc).toLocaleString(larisvmsI18n.locale) + ' – ' + new Date(payload.requested.toUtc).toLocaleString(larisvmsI18n.locale);
             // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
             resultEl.innerHTML =
-                '<div class="alert ' + (verdictOk ? 'alert-success' : 'alert-danger') + '"><strong>' +
-                (verdictOk ? larisvmsI18n.html('js.exportsVerify.verified') : larisvmsI18n.html('js.exportsVerify.notVerified')) + '</strong> ' + escapeHtml(payload.camera.name) + ', ' + escapeHtml(range) +
+                // Intact but signed by a key that isn't this server's: anyone can sign a package they
+                // changed with a key of their own, so that isn't shown as verified.
+                '<div class="alert ' + (!verdictOk ? 'alert-danger' : otherKey ? 'alert-warning' : 'alert-success') + '"><strong>' +
+                (!verdictOk ? larisvmsI18n.html('js.exportsVerify.notVerified')
+                    : otherKey ? larisvmsI18n.html('js.exportsVerify.manifestOtherKey') + '.'
+                    : larisvmsI18n.html('js.exportsVerify.verified')) + '</strong> ' + escapeHtml(payload.camera.name) + ', ' + escapeHtml(range) +
                 (payload.redacted ? ' ' + larisvmsI18n.html('js.exportsVerify.redactedNote') : '') + '.</div>' +
                 '<ul class="list-group">' + lines.map(lineHtml).join('') + '</ul>';
         } catch (e) {

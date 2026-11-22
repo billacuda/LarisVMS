@@ -14,7 +14,7 @@ Toute personne ayant un compte local change son propre mot de passe en sélectio
 
 Lorsque vous créez un compte ou réinitialisez un mot de passe sous **Paramètres → Utilisateurs**, vous pouvez cocher **Doit le modifier à la prochaine connexion**. La personne doit alors choisir son propre mot de passe avant de pouvoir faire quoi que ce soit d’autre. Avec **Paramètres → Sécurité → Mots de passe temporaires définis par un administrateur** activé, la case est cochée au départ.
 
-Après 5 mots de passe erronés pour un compte depuis une même adresse en 15 minutes, cette adresse doit attendre la fin des 15 minutes ; la personne peut toujours se connecter depuis n’importe où ailleurs. Un compte n’est verrouillé pendant 15 minutes qu’après 20 essais erronés depuis n’importe où, et les super administrateurs ne sont jamais verrouillés par de mauvais mots de passe à la connexion. Les super administrateurs sont informés des échecs répétés et des verrouillages, ainsi que des tentatives réparties sur de nombreux réseaux : un compte échouant 10 fois depuis 3 réseaux ou plus, ou 50 échecs depuis 10 réseaux ou plus sur l’ensemble du serveur, en 15 minutes.
+Après 5 mots de passe erronés pour un compte depuis une même adresse en 15 minutes, cette adresse doit attendre la fin des 15 minutes ; la personne peut toujours se connecter depuis n’importe où ailleurs. Un compte n’est verrouillé pendant 15 minutes qu’après 20 essais erronés depuis n’importe où. Les super administrateurs ne sont jamais verrouillés définitivement : avec la connexion en deux étapes activée, les mauvais mots de passe ne les verrouillent pas du tout ; sans elle, après chaque mauvais mot de passe à partir du cinquième, ils doivent attendre avant de réessayer, un peu plus longtemps à chaque fois (1, 5, 15, puis 60 minutes). Les super administrateurs sont informés des échecs répétés et des verrouillages, ainsi que des tentatives réparties sur de nombreux réseaux : un compte échouant 10 fois depuis 3 réseaux ou plus, ou 50 échecs depuis 10 réseaux ou plus sur l’ensemble du serveur, en 15 minutes.
 
 ## Connexion en deux étapes
 
@@ -40,7 +40,7 @@ Un rôle est un ensemble nommé d’autorisations, géré sous **Paramètres →
 
 - un **niveau de portée** ;
 - une **expiration** pour un accès limité dans le temps (par exemple, 480 minutes pour un poste de 8 heures) ;
-- une **durée de session** : heures après la connexion avant que l’utilisateur doive se reconnecter, quelle que soit son activité (30 jours au maximum, ou 0 pour ne jamais expirer) ;
+- une **durée de session** : heures après la connexion avant que l’utilisateur doive se reconnecter, quelle que soit son activité (30 jours au maximum, ou 0 pour un an) ;
 - un **délai d’inactivité** : minutes sans ouvrir de page avant que l’utilisateur soit déconnecté (0 désactive). Un écran qui affiche de la vidéo en direct compte comme inactif ; laissez-le donc désactivé pour les rôles qui surveillent un mur vidéo ;
 - une **priorité PTZ**, qui décide qui l’emporte quand deux utilisateurs déplacent la même caméra.
 
@@ -95,7 +95,7 @@ UPDATE `ActiveDirectorySettings` SET `LocalLoginsEnabled` = 1;
 
 Tout ce que font les utilisateurs est consigné sous **Journaux → Journaux d’audit** : modifications (avec anciennes et nouvelles valeurs ; les secrets ne sont consignés que comme « modifié »), consultation des caméras, démarrage de la lecture et exports.
 
-**Inviolable.** Chaque entrée est scellée avec la précédente, à l’aide d’une clé que la base de données seule ne détient pas. Toutes les 6 heures (et lorsque vous sélectionnez **Vérifier maintenant** sur la page du journal d’audit), l’ensemble du journal est vérifié. Si une entrée a été modifiée, supprimée ou ajoutée directement dans la base de données, la page indique laquelle et les super administrateurs sont notifiés. Les entrées supprimées par la conservation sont attendues et ne comptent pas, et chaque suppression est elle-même consignée (**AuditLog.Pruned**). Les entrées antérieures à cette mise à jour ne sont pas couvertes.
+**Inviolable.** Chaque entrée est scellée avec la précédente, à l’aide d’une clé que la base de données seule ne détient pas. Toutes les 6 heures (et lorsque vous sélectionnez **Vérifier maintenant** sur la page du journal d’audit), l’ensemble du journal est vérifié. Si une entrée a été modifiée, supprimée ou ajoutée directement dans la base de données, la page indique laquelle et les super administrateurs sont notifiés. Les entrées supprimées par la conservation sont attendues et ne comptent pas, et chaque suppression est elle-même consignée (**AuditLog.Pruned**). Les entrées antérieures à cette mise à jour ne sont pas couvertes. Seul un super administrateur peut réduire la durée de conservation du journal d’audit (**Paramètres → Journaux**), afin que personne d’autre ne puisse effacer son propre historique.
 
 Le serveur conserve aussi un petit enregistrement en dehors de la base de données, dans `%ProgramData%\LarisVMS\audit-chain.dat`, de la clé de scellement et du point de départ du journal, de sorte que le journal ne puisse pas être rescellé avec une autre clé ni effacé et redémarré sans que cela se voie. Si vous repartez volontairement d’une base de données neuve et vide sur le même serveur, supprimez ce fichier une fois ; un nouveau est créé avec l’entrée suivante.
 

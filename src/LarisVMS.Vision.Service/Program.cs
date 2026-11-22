@@ -25,8 +25,14 @@ builder.Services.AddHttpClient(nameof(CameraDetectionPipeline))
 // nothing to do with it. PooledConnectionLifetime keeps connections cycling (a long-lived detect
 // connection shouldn't outlive a DNS change on the far side); the default idle timeout is fine at
 // this request rate.
+// The address is an admin's setting, so it may be on the LAN or this machine (an inference server
+// next to the node), but never link-local, where cloud metadata services answer.
 builder.Services.AddHttpClient(CameraPipelineManager.ExternalInferenceHttpClientName)
-    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) });
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+        ConnectCallback = ExternalInferenceGuard.ConnectAsync,
+    });
 builder.Services.AddSingleton<CameraPipelineManager>();
 builder.Services.AddHostedService<InferenceWatchdog>();
 

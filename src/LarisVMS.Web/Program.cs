@@ -160,6 +160,11 @@ if (OperatingSystem.IsWindows())
 #pragma warning restore CA1416
 }
 
+// A year rather than the 30-day default, so a browser that has seen the site over HTTPS keeps
+// refusing plain HTTP for it. Subdomains aren't included: other things on the same domain may not
+// have certificates.
+builder.Services.AddHsts(o => o.MaxAge = TimeSpan.FromDays(365));
+
 // ── Rate limits ───────────────────────────────────────────────────────────────
 // Sign-in and registration attempts per client address; test notifications and new exports per
 // person. Anything over gets 429.
@@ -173,6 +178,10 @@ builder.Services.AddRateLimiter(o =>
         : System.Threading.RateLimiting.RateLimitPartition.GetNoLimiter(""));
     o.AddPolicy("register", ctx =>
         System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(LarisVMS.Web.Services.SignInThrottle.AddressKey(ctx.Connection.RemoteIpAddress), _ => PerMinute(10)));
+    // CSP reports get their own budget: browsers behind one address (an office NAT) sending reports
+    // shouldn't use up the one node and proxy registration shares.
+    o.AddPolicy("csp-report", ctx =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(LarisVMS.Web.Services.SignInThrottle.AddressKey(ctx.Connection.RemoteIpAddress), _ => PerMinute(30)));
     o.AddPolicy("per-user", ctx =>
         System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
             ctx.User.ActorId() ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "",
@@ -220,10 +229,9 @@ builder.Services.ConfigureApplicationCookie(options =>
     options.AccessDeniedPath = "/Identity/Account/AccessDenied";
     // The real per-user session cutoff is now the per-role setting enforced in OnValidatePrincipal
     // below, not this value — this is only the outer ceiling the cookie itself will never exceed
-    // regardless of what any role is configured for, generous enough that "0 = never expire" on
-    // every one of a user's roles behaves as advertised rather than silently capping out here.
+    // regardless of what any role is configured for: a year, the same as a role set to 0.
     // SlidingExpiration still renews it on activity, same as before.
-    options.ExpireTimeSpan = TimeSpan.FromDays(397); // just past a year — common browser cookie norms
+    options.ExpireTimeSpan = TimeSpan.FromDays(SessionLifetimePolicy.LongestDays);
     options.SlidingExpiration = true;
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
 
@@ -2034,7 +2042,7 @@ app.MapPost("/api/device-settings/bulk", async (HttpContext ctx, BulkDeviceSetti
 // ── Zones (M8) ────────────────────────────────────────────────────────────────
 // Cameras.Edit throughout — drawing/editing zones is camera configuration, same gate as the
 // snapshot endpoint above that feeds the editor's background image.
-var zonesApi = app.MapGroup("/api/cameras/{cameraId:guid}/zones").RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
+var zonesApi = app.MapGroup("/api/cameras/{cameraId:guid}/zones").RequireAuthorization("Cameras.Edit").RequireCameraConfigure().AuditChanges("Camera.ConfigChanged");
 
 // Per-camera privacy-mask options (zones page, Privacy masks view). BlocksDetections: whether a mask also
 // stops detections inside it — off by default, stored as a camera override of Privacy.BlocksDetections
@@ -2067,7 +2075,7 @@ zonesApi.MapPost("", async (Guid cameraId, SaveZoneRequest request, IZoneService
 // Not nested under {cameraId} — an update/delete only needs the zone's own id, and nesting it would
 // just be one more value the client has to keep in sync with no actual authorization benefit (the
 // zone's real owning camera is read from the row itself, not trusted from the URL).
-var zoneApi = app.MapGroup("/api/zones/{id:guid}").RequireAuthorization("Cameras.Edit").RequireCameraConfigure(LarisVMS.Web.Services.CameraConfigureFilter.ZoneOwner);
+var zoneApi = app.MapGroup("/api/zones/{id:guid}").RequireAuthorization("Cameras.Edit").RequireCameraConfigure(LarisVMS.Web.Services.CameraConfigureFilter.ZoneOwner).AuditChanges("Camera.ConfigChanged");
 
 zoneApi.MapPut("", async (Guid id, SaveZoneRequest request, IZoneService zones, CancellationToken ct) =>
 {
@@ -2143,7 +2151,7 @@ static ZoneDto ToZoneDto(Zone z) => new(z.Id, z.CameraId, z.Name, z.Kind.ToStrin
 // Cameras.Edit throughout, same gate as Zones/snapshot above — switching the active masking method
 // or editing the grid mask is camera configuration. Read by both the Zones and MotionGrid editors
 // (each needs to know whether it's the currently active method, to show its own "not active" banner).
-var motionRegionApi = app.MapGroup("/api/cameras/{cameraId:guid}/motion-region").RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
+var motionRegionApi = app.MapGroup("/api/cameras/{cameraId:guid}/motion-region").RequireAuthorization("Cameras.Edit").RequireCameraConfigure().AuditChanges("Camera.ConfigChanged");
 
 motionRegionApi.MapGet("", async (Guid cameraId, ICameraService cameraService, CancellationToken ct) =>
 {
@@ -2172,7 +2180,7 @@ motionRegionApi.MapPut("/grid", async (Guid cameraId, SaveMotionGridRequest requ
 // Same shape as Zones above: nested-under-camera for list/create (needs the camera to attach to and
 // to scope observed-topics), flat by-id for update/delete. Cameras.Edit throughout — configuring
 // which ONVIF topics drive recording/tagging is camera configuration, same as drawing a zone.
-var eventTagRulesApi = app.MapGroup("/api/cameras/{cameraId:guid}/event-tag-rules").RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
+var eventTagRulesApi = app.MapGroup("/api/cameras/{cameraId:guid}/event-tag-rules").RequireAuthorization("Cameras.Edit").RequireCameraConfigure().AuditChanges("Camera.ConfigChanged");
 
 eventTagRulesApi.MapGet("", async (Guid cameraId, IEventTagRuleService rules, CancellationToken ct) =>
     Results.Json((await rules.ListAsync(cameraId, ct)).Select(r => new EventTagRuleDto(
@@ -2191,7 +2199,7 @@ eventTagRulesApi.MapGet("/observed-topics", async (Guid cameraId, IEventTagRuleS
 
 // Not nested under {cameraId} — same reasoning as the flat /api/zones/{id} group: an update/delete
 // only needs the rule's own id, its owning camera is read from the row itself.
-var eventTagRuleApi = app.MapGroup("/api/event-tag-rules/{id:guid}").RequireAuthorization("Cameras.Edit").RequireCameraConfigure(LarisVMS.Web.Services.CameraConfigureFilter.EventTagRuleOwner);
+var eventTagRuleApi = app.MapGroup("/api/event-tag-rules/{id:guid}").RequireAuthorization("Cameras.Edit").RequireCameraConfigure(LarisVMS.Web.Services.CameraConfigureFilter.EventTagRuleOwner).AuditChanges("Camera.ConfigChanged");
 
 eventTagRuleApi.MapPut("", async (Guid id, SaveEventTagRuleRequest request, IEventTagRuleService rules, CancellationToken ct) =>
 {
@@ -2209,7 +2217,7 @@ eventTagRuleApi.MapDelete("", async (Guid id, IEventTagRuleService rules, Cancel
 // ── Schedule windows (M8 Schedule mode) ──────────────────────────────────────
 // Same shape as Zones/Event tag rules above: nested-under-camera for list/create, flat by-id for
 // update/delete. Cameras.Edit throughout — same reasoning as those two.
-var scheduleWindowsApi = app.MapGroup("/api/cameras/{cameraId:guid}/schedule-windows").RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
+var scheduleWindowsApi = app.MapGroup("/api/cameras/{cameraId:guid}/schedule-windows").RequireAuthorization("Cameras.Edit").RequireCameraConfigure().AuditChanges("Camera.ConfigChanged");
 
 scheduleWindowsApi.MapGet("", async (Guid cameraId, IScheduleWindowService windows, CancellationToken ct) =>
     Results.Json(await windows.ListAsync(cameraId, ct)));
@@ -2222,7 +2230,7 @@ scheduleWindowsApi.MapPost("", async (Guid cameraId, SaveScheduleWindowRequest r
 });
 
 // Not nested under {cameraId} — same reasoning as the flat /api/zones/{id} group.
-var scheduleWindowApi = app.MapGroup("/api/schedule-windows/{id:guid}").RequireAuthorization("Cameras.Edit").RequireCameraConfigure(LarisVMS.Web.Services.CameraConfigureFilter.ScheduleWindowOwner);
+var scheduleWindowApi = app.MapGroup("/api/schedule-windows/{id:guid}").RequireAuthorization("Cameras.Edit").RequireCameraConfigure(LarisVMS.Web.Services.CameraConfigureFilter.ScheduleWindowOwner).AuditChanges("Camera.ConfigChanged");
 
 scheduleWindowApi.MapPut("", async (Guid id, SaveScheduleWindowRequest request, IScheduleWindowService windows, CancellationToken ct) =>
 {
@@ -2984,7 +2992,7 @@ app.MapPost("/api/csp-report", async (HttpContext ctx, LarisVMS.Web.Security.Csp
     }
     catch (System.Text.Json.JsonException) { /* not a report */ }
     return Results.NoContent();
-}).AllowAnonymous().RequireRateLimiting("register").WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(64 * 1024));
+}).AllowAnonymous().RequireRateLimiting("csp-report").WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(64 * 1024));
 
 // ── Session heartbeat ────────────────────────────────────────────────────────
 // Live view polls this so a disabled user's direct-to-node streams stop: those sockets go straight to
@@ -3634,7 +3642,8 @@ apiRoutes.Get("/exports", async (HttpContext ctx, IExportService exportService, 
 // ExportJobDeletionInfo's own doc comment for why.
 apiRoutes.Delete("/exports/{jobId:guid}", async (
     HttpContext ctx, Guid jobId, IExportService exportService, IHttpClientFactory httpFactory,
-    ICameraAccessService cameraAccess, IPermissionService permissions, ApplicationDbContext db, CancellationToken ct) =>
+    ICameraAccessService cameraAccess, IPermissionService permissions, ApplicationDbContext db, IAuditService auditService,
+    CancellationToken ct) =>
 {
     var job = await LarisVMS.Web.Services.ExportAccess.JobAsync(db, jobId, ct);
     if (job is null) return Results.NotFound();
@@ -3664,10 +3673,14 @@ apiRoutes.Delete("/exports/{jobId:guid}", async (
         {
             // Best-effort — the node's own 7-day export-retention sweep cleans this up either way,
             // so an unreachable node here shouldn't block removing the (already-finished) job.
+            app.Logger.LogWarning(ex, "Export {JobId}: couldn't delete the file on node {NodeIp}; the node's export sweep will remove it.",
+                jobId, file.NodeIp);
         }
     }
 
     await exportService.DeleteJobAsync(jobId, ct);
+    await auditService.LogAsync("Export.Delete", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+        ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), $"Export {jobId} deleted", ct);
     return Results.Ok();
 }).RequireAuthorization("Exports.View");
 

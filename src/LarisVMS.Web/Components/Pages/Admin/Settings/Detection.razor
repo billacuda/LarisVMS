@@ -676,6 +676,13 @@
         var apiKeyChanged = !string.IsNullOrWhiteSpace(ExternalApiKey);
         if (apiKeyChanged)
             await Settings.SetGlobalAsync("Detection.ExternalInferenceApiKey", ExternalApiKey!.Trim(), by);
+        // A saved key only goes to the service it was saved for: pointing the URL at another server
+        // drops it, so the saved key isn't sent there with every frame.
+        else if (hadStoredApiKey && !SameService(oldExternalUrl, ExternalUrl))
+        {
+            await Settings.SetGlobalAsync("Detection.ExternalInferenceApiKey", "", by);
+            apiKeyChanged = true;
+        }
 
         var details = AuditDiff.Build(
             AuditDiff.Of("Detection.Confidence", oldConfidence.ToString("0.####"), Confidence.ToString("0.####")),
@@ -783,7 +790,8 @@
         ExternalUrl = editedUrl;
         ExternalModel = editedModel;
         var url = editedUrl;
-        var apiKey = editedApiKey ?? await Settings.GetAsync("Detection.ExternalInferenceApiKey", "");
+        var savedUrl = await Settings.GetAsync("Detection.ExternalInferenceUrl", "");
+        var apiKey = editedApiKey ?? (SameService(savedUrl, url) ? await Settings.GetAsync("Detection.ExternalInferenceApiKey", "") : "");
 
         if (string.IsNullOrEmpty(url))
         {
@@ -821,6 +829,11 @@
     /// <summary>Trim, drop a trailing slash, and require an absolute http(s) URL — the same shape
     /// LiveView's PublicOrigin validation uses. Returns "" for blank or invalid input; the caller
     /// decides whether that is an error in context.</summary>
+    /// <summary>Whether two service addresses reach the same server: same scheme, host, and port.</summary>
+    private static bool SameService(string? a, string? b) =>
+        Uri.TryCreate(a, UriKind.Absolute, out var ua) && Uri.TryCreate(b, UriKind.Absolute, out var ub)
+        && Uri.Compare(ua, ub, UriComponents.SchemeAndServer, UriFormat.Unescaped, StringComparison.OrdinalIgnoreCase) == 0;
+
     private static string NormalizeExternalUrl(string? raw)
     {
         var trimmed = raw?.Trim().TrimEnd('/');

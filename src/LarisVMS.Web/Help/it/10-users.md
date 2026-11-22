@@ -14,7 +14,7 @@ Chiunque abbia un account locale cambia la propria password selezionando il prop
 
 Quando crea un account o reimposta una password in **Impostazioni → Utenti**, può selezionare **Deve cambiarla al prossimo accesso**. La persona deve allora scegliere la propria password prima di poter fare qualsiasi altra cosa. Con **Impostazioni → Sicurezza → Password temporanee impostate dall’amministratore** attivo, parte selezionato.
 
-Dopo 5 password errate per un account da un indirizzo entro 15 minuti, quell’indirizzo deve attendere lo scadere dei 15 minuti; la persona può comunque accedere da qualsiasi altro luogo. Un account è bloccato per 15 minuti solo dopo 20 tentativi errati da qualsiasi luogo, e i Super Admin non vengono mai bloccati da password errate all’accesso. I Super Admin vengono informati di ripetuti errori e blocchi, e di tentativi distribuiti su molte reti: un account che fallisce 10 volte da 3 o più reti, o 50 errori da 10 o più reti sull’intero server, entro 15 minuti.
+Dopo 5 password errate per un account da un indirizzo entro 15 minuti, quell’indirizzo deve attendere lo scadere dei 15 minuti; la persona può comunque accedere da qualsiasi altro luogo. Un account è bloccato per 15 minuti solo dopo 20 tentativi errati da qualsiasi luogo. I Super Admin non vengono mai bloccati per sempre: con l’accesso a due fattori attivato, le password errate non li bloccano affatto; senza, dopo ogni password errata a partire dalla quinta devono attendere prima di riprovare, un po’ di più ogni volta (1, 5, 15, poi 60 minuti). I Super Admin vengono informati di ripetuti errori e blocchi, e di tentativi distribuiti su molte reti: un account che fallisce 10 volte da 3 o più reti, o 50 errori da 10 o più reti sull’intero server, entro 15 minuti.
 
 ## Accesso a due fattori
 
@@ -40,7 +40,7 @@ Un ruolo è un insieme di autorizzazioni con un nome, gestito in **Impostazioni 
 
 - un **livello di ambito**;
 - una **scadenza** per l’accesso a tempo (ad esempio 480 minuti per un turno di 8 ore);
-- una **durata della sessione**: ore dopo l’accesso prima che l’utente debba accedere di nuovo, per quanto sia attivo (al massimo 30 giorni, o 0 per non scadere mai);
+- una **durata della sessione**: ore dopo l’accesso prima che l’utente debba accedere di nuovo, per quanto sia attivo (al massimo 30 giorni, o 0 per un anno);
 - un **timeout di inattività**: minuti senza aprire una pagina prima che l’utente venga disconnesso (0 è disattivato). Uno schermo che mostra video dal vivo conta come inattivo, quindi lo lasci disattivato per i ruoli che guardano un muro video;
 - una **priorità PTZ**, che decide chi vince quando due utenti muovono la stessa telecamera.
 
@@ -95,7 +95,7 @@ UPDATE `ActiveDirectorySettings` SET `LocalLoginsEnabled` = 1;
 
 Tutto ciò che fanno gli utenti è registrato in **Registri → Registri di audit**: modifiche (con valori vecchi e nuovi; i segreti sono registrati solo come «modificato»), visualizzazione delle telecamere, avvio della riproduzione ed esportazioni.
 
-**A prova di manomissione.** Ogni voce è sigillata insieme a quella precedente, usando una chiave che il solo database non possiede. Ogni 6 ore (e quando seleziona **Controlla ora** nella pagina del registro di audit) viene controllato l’intero registro. Se una voce è stata modificata, rimossa o aggiunta direttamente nel database, la pagina dice quale e i Super Admin vengono avvisati. Le voci rimosse dalla conservazione sono attese e non contano, e ogni rimozione è a sua volta registrata (**AuditLog.Pruned**). Le voci precedenti a questo aggiornamento non sono coperte.
+**A prova di manomissione.** Ogni voce è sigillata insieme a quella precedente, usando una chiave che il solo database non possiede. Ogni 6 ore (e quando seleziona **Controlla ora** nella pagina del registro di audit) viene controllato l’intero registro. Se una voce è stata modificata, rimossa o aggiunta direttamente nel database, la pagina dice quale e i Super Admin vengono avvisati. Le voci rimosse dalla conservazione sono attese e non contano, e ogni rimozione è a sua volta registrata (**AuditLog.Pruned**). Le voci precedenti a questo aggiornamento non sono coperte. Solo un Super Admin può ridurre per quanto tempo viene conservato il registro di audit (**Impostazioni → Registri**), così nessun altro può cancellare la propria cronologia.
 
 Il server conserva anche un piccolo record fuori dal database, in `%ProgramData%\LarisVMS\audit-chain.dat`, della chiave del sigillo e di dove è iniziato il registro, così il registro non può essere risigillato con un’altra chiave né cancellato e fatto ripartire senza che si noti. Se ricomincia deliberatamente con un database nuovo e vuoto sullo stesso server, elimini quel file una volta; ne viene creato uno nuovo con la voce successiva.
 

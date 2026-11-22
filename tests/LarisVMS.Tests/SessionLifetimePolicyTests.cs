@@ -24,9 +24,9 @@ public class SessionLifetimePolicyTests
     }
 
     [Fact]
-    public void ASingleRoleSetToZeroNeverExpires()
+    public void ASingleRoleSetToZeroLastsAYear()
     {
-        Assert.Null(SessionLifetimePolicy.EffectiveWindow([0]));
+        Assert.Equal(TimeSpan.FromDays(SessionLifetimePolicy.LongestDays), SessionLifetimePolicy.EffectiveWindow([0]));
     }
 
     [Fact]
@@ -61,9 +61,9 @@ public class SessionLifetimePolicyTests
     }
 
     [Fact]
-    public void EveryRoleBeingZeroNeverExpires()
+    public void EveryRoleBeingZeroLastsAYear()
     {
-        Assert.Null(SessionLifetimePolicy.EffectiveWindow([0, 0, 0]));
+        Assert.Equal(TimeSpan.FromDays(SessionLifetimePolicy.LongestDays), SessionLifetimePolicy.EffectiveWindow([0, 0, 0]));
     }
 
     [Fact]

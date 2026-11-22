@@ -83,7 +83,9 @@ public class ConfirmModel(
 
         if (!ok)
         {
-            await userManager.AccessFailedAsync(user);
+            // Same rule as a failed sign-in (AdminLockout): a Super Admin isn't locked out for good,
+            // so someone holding their open session can't lock them out of their own system.
+            await LarisVMS.Web.Security.AdminLockout.RecordFailureAsync(userManager, db, user);
             await audit.LogAsync("User.ConfirmFailed", user.Id, User.Identity?.Name, Ip, "Wrong password or code", HttpContext.RequestAborted);
             if (await userManager.IsLockedOutAsync(user))
             {

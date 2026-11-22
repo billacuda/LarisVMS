@@ -106,6 +106,19 @@ public sealed class StartupDatabaseTasks(
             if (renamed > 0) logger.LogInformation("Startup: {Count} views or folders renamed so names are unique in each view tree.", renamed);
             return true;
         });
+        // Two-factor secrets saved before they were encrypted: rewrite them once so they're stored
+        // encrypted (reading passes old plain values through; saving encrypts).
+        await Timed("two-factor secret encryption", async () =>
+        {
+            var resolver = services.GetRequiredService<ISettingsResolver>();
+            if (await resolver.GetAsync("Security.UserTokensEncrypted", false, ct: cancellationToken)) return true;
+            var tokens = await db.UserTokens.ToListAsync(cancellationToken);
+            foreach (var token in tokens) db.Entry(token).Property(t => t.Value).IsModified = true;
+            await db.SaveChangesAsync(cancellationToken);
+            await resolver.SetGlobalAsync("Security.UserTokensEncrypted", "true", "system", cancellationToken);
+            if (tokens.Count > 0) logger.LogInformation("Startup: {Count} two-factor secrets encrypted.", tokens.Count);
+            return true;
+        });
         await Timed("camera group seed", async () => { await services.GetRequiredService<ICameraGroupSeedService>().SeedAsync(cancellationToken); return true; });
         // Notes the server certificate in use, so a changed self-signed one (which pinned nodes refuse)
         // is audited and shown on the Nodes page.

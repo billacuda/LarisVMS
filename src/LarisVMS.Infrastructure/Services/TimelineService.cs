@@ -184,43 +184,79 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
            // EventPalette.ColorForAiCategory.
            ?? (aiCategoryName is not null ? palette.ColorForAiCategory(aiCategoryName, aiCategoryColorHex) : null);
 
+    /// <summary>Most buckets one timeline request can ask for. The canvas asks for at most one per
+    /// pixel, capped at 2000 (timeline.js); anything bigger only burns server CPU and memory.</summary>
+    public const int MaxBucketCount = 2000;
+
     private static List<TimelineBucketDto> Bucket(
         IEnumerable<(DateTime StartUtc, DateTime EndUtc)> segments,
         IEnumerable<(DateTime StartUtc, DateTime EndUtc, string? ColorHex)> motionSpans,
         DateTime fromUtc, DateTime toUtc, int bucketCount)
     {
-        if (bucketCount < 1) bucketCount = 1;
+        bucketCount = Math.Clamp(bucketCount, 1, MaxBucketCount);
         if (toUtc <= fromUtc) return [];
-
-        var segmentList = segments as ICollection<(DateTime StartUtc, DateTime EndUtc)> ?? segments.ToList();
-        var motionList = motionSpans as ICollection<(DateTime StartUtc, DateTime EndUtc, string? ColorHex)> ?? motionSpans.ToList();
 
         var totalTicks = (toUtc - fromUtc).Ticks;
         var bucketTicks = totalTicks / bucketCount;
-        var buckets = new List<TimelineBucketDto>(bucketCount);
+        // A range shorter than one tick per bucket: use fewer buckets rather than empty ones.
+        if (bucketTicks == 0)
+        {
+            bucketCount = (int)totalTicks;
+            bucketTicks = 1;
+        }
 
+        DateTime StartOf(int i) => fromUtc.AddTicks(bucketTicks * i);
+        // Last bucket absorbs any remainder from integer-dividing totalTicks, so buckets
+        // always cover the full [fromUtc, toUtc) range with no gap at the end.
+        DateTime EndOf(int i) => i == bucketCount - 1 ? toUtc : fromUtc.AddTicks(bucketTicks * (i + 1));
+
+        // The buckets a span overlaps (StartUtc < bucketEnd && EndUtc > bucketStart), worked out
+        // directly instead of testing every span against every bucket, so the cost is the number of
+        // spans plus the buckets they cover rather than spans × buckets.
+        bool Range(DateTime spanStart, DateTime spanEnd, out int first, out int last)
+        {
+            first = last = 0;
+            if (spanStart >= toUtc || spanEnd <= fromUtc || spanEnd <= spanStart) return false;
+            var startOffset = Math.Max(0, (spanStart - fromUtc).Ticks);
+            var endOffset = (spanEnd - fromUtc).Ticks;
+            first = (int)Math.Min(bucketCount - 1, startOffset / bucketTicks);
+            last = (int)Math.Min(bucketCount - 1, (endOffset + bucketTicks - 1) / bucketTicks - 1);
+            return first <= last;
+        }
+
+        var hasRecording = new bool[bucketCount];
+        var hasMotion = new bool[bucketCount];
+        var colors = new List<string>?[bucketCount];
+
+        foreach (var s in segments)
+        {
+            if (!Range(s.StartUtc, s.EndUtc, out var first, out var last)) continue;
+            for (var i = first; i <= last; i++) hasRecording[i] = true;
+        }
+
+        // Every distinct colour overlapping a bucket, not just one: object classes genuinely
+        // co-occur (a person and a vehicle in the same instant), and picking a winner would hide
+        // the rest. Ordered by start time, ties broken by the colour text so the banding is
+        // stable frame to frame rather than reshuffling on each reload. The renderer draws one
+        // horizontal band per colour; a single colour draws exactly as it always did.
+        foreach (var m in motionSpans.OrderBy(m => m.StartUtc).ThenBy(m => m.ColorHex, StringComparer.Ordinal))
+        {
+            if (!Range(m.StartUtc, m.EndUtc, out var first, out var last)) continue;
+            for (var i = first; i <= last; i++)
+            {
+                hasMotion[i] = true;
+                if (m.ColorHex is null) continue;
+                var list = colors[i] ??= [];
+                if (!list.Contains(m.ColorHex)) list.Add(m.ColorHex);
+            }
+        }
+
+        var buckets = new List<TimelineBucketDto>(bucketCount);
         for (var i = 0; i < bucketCount; i++)
         {
-            var bucketStart = fromUtc.AddTicks(bucketTicks * i);
-            // Last bucket absorbs any remainder from integer-dividing totalTicks, so buckets
-            // always cover the full [fromUtc, toUtc) range with no gap at the end.
-            var bucketEnd = i == bucketCount - 1 ? toUtc : fromUtc.AddTicks(bucketTicks * (i + 1));
-            var hasRecording = segmentList.Any(s => s.StartUtc < bucketEnd && s.EndUtc > bucketStart);
-            var hasMotion = motionList.Any(m => m.StartUtc < bucketEnd && m.EndUtc > bucketStart);
-            // Every distinct colour overlapping this bucket, not just one: object classes genuinely
-            // co-occur (a person and a vehicle in the same instant), and picking a winner would hide
-            // the rest. Ordered by start time, ties broken by the colour text so the banding is
-            // stable frame to frame rather than reshuffling on each reload. The renderer draws one
-            // horizontal band per colour; a single colour draws exactly as it always did.
-            var tagColorHexes = motionList
-                .Where(m => m.ColorHex is not null && m.StartUtc < bucketEnd && m.EndUtc > bucketStart)
-                .OrderBy(m => m.StartUtc).ThenBy(m => m.ColorHex, StringComparer.Ordinal)
-                .Select(m => m.ColorHex!)
-                .Distinct()
-                .ToList();
-            buckets.Add(new TimelineBucketDto(bucketStart, bucketEnd, hasRecording, hasMotion,
-                tagColorHexes.FirstOrDefault(),
-                tagColorHexes.Count > 0 ? tagColorHexes : null));
+            var c = colors[i];
+            buckets.Add(new TimelineBucketDto(StartOf(i), EndOf(i), hasRecording[i], hasMotion[i],
+                c?.FirstOrDefault(), c is { Count: > 0 } ? c : null));
         }
 
         return buckets;

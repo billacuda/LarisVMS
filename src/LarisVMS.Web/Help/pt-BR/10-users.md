@@ -14,7 +14,7 @@ Quem tem uma conta local altera a própria senha selecionando o próprio nome no
 
 Ao criar uma conta ou redefinir uma senha em **Configurações → Usuários**, você pode marcar **Precisa alterá-la no próximo login**. A pessoa então tem que escolher a própria senha antes de poder fazer qualquer outra coisa. Com **Configurações → Segurança → Senhas temporárias definidas pelo administrador** ativado, ela já vem marcada.
 
-Após 5 senhas erradas para uma conta vindas de um endereço em 15 minutos, esse endereço precisa esperar os 15 minutos passarem; a pessoa ainda pode entrar de qualquer outro lugar. Uma conta só é bloqueada por 15 minutos depois de 20 tentativas erradas vindas de qualquer lugar, e os Super Admins nunca são bloqueados por senhas erradas no login. Os Super Admins são avisados de falhas repetidas e bloqueios, e de tentativas espalhadas por muitas redes: uma conta falhando 10 vezes a partir de 3 ou mais redes, ou 50 falhas a partir de 10 ou mais redes no servidor todo, em 15 minutos.
+Após 5 senhas erradas para uma conta vindas de um endereço em 15 minutos, esse endereço precisa esperar os 15 minutos passarem; a pessoa ainda pode entrar de qualquer outro lugar. Uma conta só é bloqueada por 15 minutos depois de 20 tentativas erradas vindas de qualquer lugar. Os Super Admins nunca ficam bloqueados de vez: com o login em duas etapas ativado, senhas erradas não os bloqueiam; sem ele, depois de cada senha errada a partir da quinta, precisam esperar antes de tentar de novo, um pouco mais a cada vez (1, 5, 15 e depois 60 minutos). Os Super Admins são avisados de falhas repetidas e bloqueios, e de tentativas espalhadas por muitas redes: uma conta falhando 10 vezes a partir de 3 ou mais redes, ou 50 falhas a partir de 10 ou mais redes no servidor todo, em 15 minutos.
 
 ## Login em duas etapas
 
@@ -40,7 +40,7 @@ Uma função é um conjunto nomeado de permissões, gerenciado em **Configuraç�
 
 - um **nível de escopo**;
 - uma **expiração** para acesso por tempo limitado (por exemplo, 480 minutos para um turno de 8 horas);
-- uma **duração de sessão**: horas depois do login antes de o usuário ter que entrar de novo, por mais ativo que esteja (no máximo 30 dias, ou 0 para nunca expirar);
+- uma **duração de sessão**: horas depois do login antes de o usuário ter que entrar de novo, por mais ativo que esteja (no máximo 30 dias, ou 0 para um ano);
 - um **tempo limite de inatividade**: minutos sem abrir uma página antes de o usuário ser desconectado (0 desativa). Uma tela mostrando vídeo ao vivo conta como inativa, então deixe desativado para funções que assistem a um painel de vídeo;
 - uma **prioridade PTZ**, que decide quem vence quando dois usuários movem a mesma câmera.
 
@@ -95,7 +95,7 @@ UPDATE `ActiveDirectorySettings` SET `LocalLoginsEnabled` = 1;
 
 Tudo o que os usuários fazem é registrado em **Logs → Logs de auditoria**: alterações (com valores antigos e novos; segredos são registrados só como "alterado"), visualização de câmeras, início de reprodução e exportações.
 
-**À prova de adulteração.** Cada entrada é selada junto com a anterior, usando uma chave que o banco de dados sozinho não possui. A cada 6 horas (e quando você seleciona **Verificar agora** na página do log de auditoria) o log inteiro é verificado. Se uma entrada foi alterada, removida ou adicionada diretamente no banco de dados, a página diz qual e os Super Admins são avisados. As entradas removidas pela retenção são esperadas e não contam, e cada remoção é, ela mesma, registrada (**AuditLog.Pruned**). As entradas anteriores a esta atualização não são cobertas.
+**À prova de adulteração.** Cada entrada é selada junto com a anterior, usando uma chave que o banco de dados sozinho não possui. A cada 6 horas (e quando você seleciona **Verificar agora** na página do log de auditoria) o log inteiro é verificado. Se uma entrada foi alterada, removida ou adicionada diretamente no banco de dados, a página diz qual e os Super Admins são avisados. As entradas removidas pela retenção são esperadas e não contam, e cada remoção é, ela mesma, registrada (**AuditLog.Pruned**). As entradas anteriores a esta atualização não são cobertas. Somente um Super Admin pode encurtar por quanto tempo o log de auditoria é mantido (**Configurações → Logs**), para que ninguém mais possa apagar o próprio histórico.
 
 O servidor também guarda um pequeno registro fora do banco de dados, em `%ProgramData%\LarisVMS\audit-chain.dat`, da chave do selo e de onde o log começou, para que o log não possa ser selado de novo com outra chave nem apagado e reiniciado sem que isso apareça. Se você recomeçar de propósito com um banco de dados novo e vazio no mesmo servidor, exclua esse arquivo uma vez; um novo é criado com a próxima entrada.
 

@@ -224,11 +224,19 @@
         UseTls = UseTls,
         AllowUntrustedCertificate = AllowUntrusted,
         Username = string.IsNullOrWhiteSpace(Username) ? null : Username.Trim(),
-        Password = string.IsNullOrEmpty(Password) ? existing?.Password : Password,
+        // The saved password only goes back to the saved broker and user; a new broker has to be
+        // given its password again, so the saved one can't be sent somewhere else.
+        Password = !string.IsNullOrEmpty(Password) ? Password : SameBroker(existing) ? existing?.Password : null,
         RoleId = string.IsNullOrEmpty(RoleId) ? null : RoleId,
         TopicPrefix = HaTopics.Clean(TopicPrefix, HomeAssistantSettings.DefaultTopicPrefix),
         DiscoveryPrefix = HaTopics.Clean(DiscoveryPrefix, HomeAssistantSettings.DefaultDiscoveryPrefix),
     };
+
+    private bool SameBroker(HomeAssistantSettings? existing) =>
+        existing is not null
+        && string.Equals(existing.BrokerHost ?? "", BrokerHost?.Trim() ?? "", StringComparison.OrdinalIgnoreCase)
+        && existing.BrokerPort == BrokerPort
+        && string.Equals(existing.Username ?? "", Username?.Trim() ?? "", StringComparison.Ordinal);
 
     private async Task HandleSubmitAsync()
     {
@@ -270,6 +278,14 @@
 
         var user = AuthenticationStateTask is not null ? (await AuthenticationStateTask).User : new ClaimsPrincipal(new ClaimsIdentity());
         var by = user.Identity?.Name;
+        // The bridge acts with its role's access, so only someone who could assign that role can
+        // set it up or point it at a broker — otherwise it could hand them every camera.
+        var roleToCheck = form.RoleId ?? existing?.RoleId;
+        if (roleToCheck is not null && !(await AdminScope.ForAsync(Db, Permissions, user)).CanBindRole(roleToCheck))
+        {
+            ErrorMessage = Loc.T("settings.activeDirectory.youCantAssignThatRole");
+            return;
+        }
         string? RoleName(string? id) => id is null ? null : Roles.FirstOrDefault(r => r.Id == id).Name;
 
         var details = AuditDiff.Build(

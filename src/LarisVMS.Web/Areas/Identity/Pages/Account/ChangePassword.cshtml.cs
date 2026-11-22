@@ -68,7 +68,9 @@ public class ChangePasswordModel(
         // used to guess it from a session someone left open.
         if (!await userManager.CheckPasswordAsync(user, Input.CurrentPassword))
         {
-            await userManager.AccessFailedAsync(user);
+            // Same rule as a failed sign-in (AdminLockout): a Super Admin isn't locked out for good,
+            // so someone holding their open session can't lock them out of their own system.
+            await LarisVMS.Web.Security.AdminLockout.RecordFailureAsync(userManager, db, user);
             await audit.LogAsync("User.PasswordChangeFailed", user.Id, User.Identity?.Name, Ip, "Wrong current password", HttpContext.RequestAborted);
             if (await userManager.IsLockedOutAsync(user))
             {

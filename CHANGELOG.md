@@ -5,7 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/2.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.222.2] - 2026-11-21
+
+A security update: fixes from a review against the OWASP Top 10 (2025).
+
+### ⚙️ Changed
+
+- **Sign-in lifetime.** A role's session lifetime of 0 now means a year rather than never, and the
+  sign-in cookie lasts at most a year.
+- **Super Admin lockout.** A Super Admin without two-factor sign-in now waits after each wrong
+  password past the fifth, a little longer each time (1, 5, 15, then 60 minutes), instead of never
+  being slowed down. With two-factor on, nothing changes. The same applies on the confirm-password
+  and change-password pages.
+- **Audit log retention.** Only a Super Admin can shorten how long the audit log is kept.
+- **Code scanning.** Workflow actions are pinned to commits and kept current by Dependabot, and
+  Semgrep runs from its maintained container.
+
+### 🔒 Security
+
+- **Timeline requests.** The timeline caps the number of bars it works out, so one request can't tie
+  up the server.
+- **Saved passwords stay with their server.** Testing or saving Active Directory, SMTP, Home
+  Assistant, or external AI detection settings with a different server no longer sends the saved
+  password or key to it; enter it again. Testing a different Active Directory domain needs a
+  Super Admin, as saving one already did.
+- **Home Assistant role.** Only someone who could assign the bridge's role can set up Home Assistant.
+- **Role expiry.** Extending a temporary role follows the same rules as assigning it: not your own,
+  and not for an account with more access than yours.
+- **Camera addresses.** A camera can't be added at this server's own address (127.0.0.1 or ::1).
+  If you ran a camera emulator on the server itself, use the server's network address instead.
+- **ONVIF addresses.** PTZ, settings, and event requests go to the camera's own address, as its
+  streams already did, even if the camera reports another one.
+- **Alert email.** Text in alert emails is encoded, so a camera name or evidence-lock reason can't
+  add links or images.
+- **Dashboard report CSV.** Cells that start with = + - or @ are saved as text, so Excel doesn't run
+  them as formulas.
+- **Two-factor secrets.** Authenticator keys and recovery codes are now encrypted in the database,
+  like other stored secrets. Existing ones are encrypted at the first start after updating.
+- **Evidence locks.** A node reporting locked footage as deleted no longer removes its records.
+- **Backup folder.** A folder with `..` in it is refused when backups are limited to certain folders.
+- **Node export paths.** A node checks an export's segment paths before looking for the files, so a
+  path to a network share is refused without contacting it.
+- **Export verification.** A package signed with a key that isn't this server's is shown as a
+  warning, not as verified.
+- **AI detection updates.** The Vision Service update download goes only to the configured server.
+- **External AI detection.** Frames and the API key can't be sent to link-local addresses.
+- **Alert rules.** An admin who can see only some cameras can make alert rules only for those
+  cameras, and must choose one.
+- **Camera groups.** Deleting a group needs configuration access to every camera in it.
+- **Gmail connection.** Connecting Gmail must be finished by the same admin who started it.
+- **Sign out everywhere.** Also forgets browsers remembered for two-factor sign-in.
+- **Error messages.** Database and framework errors on pages show a general message instead of
+  their own text.
+- **Audit log.** Changes to zones (privacy masks included), motion regions, event tags, and
+  recording schedules, and deleting an export, are now recorded.
+- **Log files.** Line breaks inside a log message are indented, so text from a camera can't forge a
+  log entry.
+- **MariaDB backups.** A connection setting containing a line break is refused rather than written
+  into the backup tool's options.
+- **Security headers.** HSTS lasts a year; the browser is told the site doesn't use the camera,
+  location, or payments; and other sites' windows can't hold a reference to these pages.
+- **CSP reports.** Browsers sending CSP reports no longer share a rate limit with node and proxy
+  registration.
 
 ## [0.222.1] - 2026-11-16
 

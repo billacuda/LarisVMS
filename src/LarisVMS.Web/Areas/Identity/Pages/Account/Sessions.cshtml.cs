@@ -14,6 +14,7 @@ namespace LarisVMS.Web.Areas.Identity.Pages.Account;
 [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("per-user")]
 public class SessionsModel(
     UserManager<ApplicationUser> userManager,
+    SignInManager<ApplicationUser> signInManager,
     UserSessionService sessions,
     IAuditService audit) : PageModel
 {
@@ -48,6 +49,15 @@ public class SessionsModel(
         var userId = userManager.GetUserId(User);
         if (userId is null) return Challenge();
         var ended = await sessions.EndAllAsync(userId, keep: UserSessionService.Current(HttpContext));
+        // A new security stamp also forgets other browsers remembered for two-factor; this one is
+        // signed in again (and kept remembered, if it was) so it carries on.
+        if (await userManager.GetUserAsync(User) is { } user)
+        {
+            var remembered = await signInManager.IsTwoFactorClientRememberedAsync(user);
+            await userManager.UpdateSecurityStampAsync(user);
+            await signInManager.RefreshSignInAsync(user);
+            if (remembered) await signInManager.RememberTwoFactorClientAsync(user);
+        }
         await audit.LogAsync("User.SessionEnded", userId, User.Identity?.Name, Ip, $"All other sessions ({ended})", HttpContext.RequestAborted);
         Message = Loc.T("account.sessions.endedOthers");
         await LoadAsync(userId);

@@ -468,7 +468,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 retentionDays, c.QuotaBytes,
                 zonesLookup[c.Id].Select(z => new NodeConfigZoneDto(z.Id, z.Kind.ToString(), z.PolygonJson, z.Sensitivity)).ToList(),
                 recordingMode, motionPreRollSeconds, motionPostRollSeconds,
-                ResolveEventsServiceUri(c.Capabilities),
+                ResolveEventsServiceUri(c.Capabilities, c.Host),
                 eventTagRulesLookup[c.Id].Select(r => new NodeConfigEventTagRuleDto(r.Id, r.StartTopic, r.StopTopic, r.DrivesRecording)).ToList(),
                 scheduleWindowsLookup[c.Id].Select(w => new NodeConfigScheduleWindowDto(w.Id, w.Days.ToString(), w.StartTime, w.EndTime)).ToList(),
                 // Only sent when a provider is actually registered for the stored key, so a key left
@@ -602,26 +602,25 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
     private static string? ResolveDeviceBaseUri(Camera camera) =>
         Uri.TryCreate(camera.DeviceServiceUri, UriKind.Absolute, out var deviceUri) ? $"{deviceUri.Scheme}://{deviceUri.Authority}" : null;
 
-    private static string? ResolveEventsServiceUri(CameraCapabilities? capabilities)
-    {
-        if (capabilities is not { HasEvents: true, RawProbeJson: { } json }) return null;
-        try
-        {
-            var rawXAddrs = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-            return rawXAddrs?.GetValueOrDefault("Events");
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            return null; // corrupted or pre-M8 RawProbeJson shape — treat as unresolvable, not fatal
-        }
-    }
+    /// <summary>The camera's ONVIF events address, moved onto the camera's own host (see
+    /// OnvifServiceAddresses.Get): the node subscribes there with the camera's password.</summary>
+    private static string? ResolveEventsServiceUri(CameraCapabilities? capabilities, string? cameraHost) =>
+        capabilities is { HasEvents: true, RawProbeJson: { } json }
+            ? OnvifServiceAddresses.Get(json, "Events", cameraHost)?.ToString()
+            : null;
 
     public async Task DeleteSegmentsAsync(Guid nodeId, IReadOnlyList<string> filePaths, CancellationToken ct = default)
     {
         if (filePaths.Count == 0) return;
-        await db.Segments
-            .Where(s => s.NodeId == nodeId && filePaths.Contains(s.FilePath))
-            .ExecuteDeleteAsync(ct);
+        var now = DateTime.UtcNow;
+        var reported = db.Segments.Where(s => s.NodeId == nodeId && filePaths.Contains(s.FilePath));
+        // Footage under an evidence lock keeps its record even if a node reports it gone: the node
+        // shouldn't delete it, and if the file really is missing, the record shows what was lost
+        // rather than the lock quietly covering nothing.
+        var total = await reported.CountAsync(ct);
+        var deleted = await reported.NotLocked(db, now).ExecuteDeleteAsync(ct);
+        if (total > deleted)
+            logger?.LogWarning("Node {NodeId} reported {Count} evidence-locked segment(s) as deleted; their records were kept.", nodeId, total - deleted);
     }
 
     public async Task RelocateSegmentsAsync(Guid nodeId, IReadOnlyList<SegmentRelocateItem> items, CancellationToken ct = default)

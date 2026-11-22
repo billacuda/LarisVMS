@@ -30,6 +30,44 @@ public class TimelineServiceTests
         public Task SaveAsync(EventPalette p, string? modifiedBy, CancellationToken ct = default) => Task.CompletedTask;
     }
 
+    [Fact]
+    public async Task AHugeBucketCountIsClampedRatherThanAllocated()
+    {
+        using var db = NewDb();
+        var cameraId = Guid.NewGuid();
+        var from = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        var service = new TimelineService(db, DefaultPalette);
+        var buckets = await service.GetBucketsAsync(cameraId, from, from.AddYears(100), int.MaxValue);
+        var global = await service.GetGlobalBucketsAsync(from, from.AddYears(100), int.MaxValue);
+
+        Assert.Equal(TimelineService.MaxBucketCount, buckets.Count);
+        Assert.Equal(TimelineService.MaxBucketCount, global.Count);
+    }
+
+    [Fact]
+    public async Task SpansMarkExactlyTheBucketsTheyOverlap()
+    {
+        using var db = NewDb();
+        var cameraId = Guid.NewGuid();
+        var from = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        // Ten one-minute buckets. Segment covers 1:30–3:00 → buckets 1 and 2 (ends on 3's start).
+        db.Segments.Add(new Segment { CameraId = cameraId, StartUtc = from.AddSeconds(90), EndUtc = from.AddMinutes(3), FilePath = "a" });
+        // Motion starts before the range and ends inside bucket 0.
+        db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, StartUtc = from.AddMinutes(-5), EndUtc = from.AddSeconds(10), Source = MotionSource.CameraEvent });
+        // Motion inside the last bucket and running past the range.
+        db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, StartUtc = from.AddSeconds(570), EndUtc = from.AddMinutes(20), Source = MotionSource.CameraEvent });
+        // Entirely outside the range.
+        db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, StartUtc = from.AddMinutes(30), EndUtc = from.AddMinutes(31), Source = MotionSource.CameraEvent });
+        await db.SaveChangesAsync();
+
+        var buckets = await new TimelineService(db, DefaultPalette).GetBucketsAsync(cameraId, from, from.AddMinutes(10), 10);
+
+        Assert.Equal([1, 2], buckets.Select((b, i) => (b, i)).Where(x => x.b.HasRecording).Select(x => x.i));
+        Assert.Equal([0, 9], buckets.Select((b, i) => (b, i)).Where(x => x.b.HasMotion).Select(x => x.i));
+        Assert.Equal(from.AddMinutes(10), buckets[^1].EndUtc);
+    }
+
     /// <summary>A deliberately minimal ISettingsResolver stub for GetSnapshotsAsync's type-filter and
     /// pre-roll tests — the real SettingsResolver's cache is a process-wide static
     /// ConcurrentDictionary keyed only by "{cameraId}|{nodeId}|{key}" with no per-DbContext

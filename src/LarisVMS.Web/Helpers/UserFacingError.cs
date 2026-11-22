@@ -15,10 +15,16 @@ public static class UserFacingError
 
     public static string Message(Exception ex)
     {
-        if (ex is ArgumentException or InvalidOperationException or FormatException
-            && ex.GetType().Namespace?.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.Ordinal) != true)
+        // Only refusals LarisVMS itself threw: EF Core and the framework throw these same types (an
+        // InvalidOperationException's type is always in System), with messages about internals.
+        if (ex is ArgumentException or InvalidOperationException or FormatException && ThrownByLarisVms(ex))
             return ex.Message;
         Logger?.LogError(ex, "Unexpected error on a page.");
         return Loc.T("common.unexpectedError");
     }
+
+    /// <summary>Whether the method that threw is LarisVMS code (async methods included: their state
+    /// machine is nested in the LarisVMS type).</summary>
+    internal static bool ThrownByLarisVms(Exception ex) =>
+        ex.TargetSite?.DeclaringType?.Namespace?.StartsWith("LarisVMS", StringComparison.Ordinal) == true;
 }

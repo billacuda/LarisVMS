@@ -42,7 +42,9 @@ public class OAuthCallbackModel(ApplicationDbContext db, IDataProtectionProvider
             return Fail(Loc.T("admin.oAuthCallback.oauthAuthorizationFailedInvalidOr"));
         }
 
-        if (payload is null || DateTime.UtcNow - payload.IssuedAtUtc > TimeSpan.FromMinutes(10))
+        if (payload is null || DateTime.UtcNow - payload.IssuedAtUtc > TimeSpan.FromMinutes(10)
+            || payload.UserId is null
+            || payload.UserId != User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value)
             return Fail(Loc.T("admin.oAuthCallback.oauthAuthorizationFailedTheRequest"));
 
         var settings = await db.EmailSettings.FirstOrDefaultAsync(ct);

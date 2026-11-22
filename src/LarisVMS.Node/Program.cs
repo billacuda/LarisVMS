@@ -1174,8 +1174,8 @@ app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Ex
         foreach (var p in request.SegmentFilePaths)
         {
             // Control characters (a line break, above all) would add lines to ffmpeg's concat list;
-            // a real segment path never has one, and it must be a file that's there.
-            if (p.Any(char.IsControl) || !File.Exists(p))
+            // a real segment path never has one.
+            if (p.Any(char.IsControl))
             {
                 ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await ctx.Response.WriteAsync("invalid segment path");
@@ -1183,10 +1183,18 @@ app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Ex
             }
             var fullPath = Path.GetFullPath(p);
             // A range that spans an archived segment carries the archive path — allowed the same way.
+            // Checked before File.Exists: looking for a file on a share would make this machine sign
+            // in to whatever server the path names.
             if (!MediaPathResolver.IsAllowed(fullPath, cameraId, storageRoot, worker.ArchiveRoot))
             {
                 ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await ctx.Response.WriteAsync("segment path outside this camera's recording directory");
+                return;
+            }
+            if (!File.Exists(fullPath))
+            {
+                ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await ctx.Response.WriteAsync("invalid segment path");
                 return;
             }
             validatedPaths.Add(fullPath);

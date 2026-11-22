@@ -262,6 +262,19 @@
         var remoteIp = HttpContext?.Connection.RemoteIpAddress?.ToString();
 
         var settings = await GetOrCreateAsync();
+
+        // A saved SMTP password is only used with the server and user it was saved for. Without
+        // this, changing the server would send the saved password to it, test email and all.
+        var smtpTargetChanged = !string.Equals(settings.SmtpHost ?? "", (SmtpHost ?? "").Trim(), StringComparison.OrdinalIgnoreCase)
+            || settings.SmtpPort != SmtpPort
+            || !string.Equals(settings.SmtpUsername ?? "", SmtpUsername?.Trim() ?? "", StringComparison.Ordinal);
+        var dropSmtpPassword = smtpTargetChanged && string.IsNullOrWhiteSpace(SmtpPassword) && !string.IsNullOrEmpty(settings.SmtpPassword);
+        if (dropSmtpPassword && Provider == EmailProviderType.Smtp && !string.IsNullOrWhiteSpace(SmtpUsername))
+        {
+            ErrorMessage = Loc.T("settings.email.reenterSmtpPassword");
+            return false;
+        }
+
         var fields = new List<AuditDiff.Field>
         {
             AuditDiff.Of("Enabled", settings.IsEnabled.ToString(), IsEnabled.ToString()),
@@ -295,6 +308,11 @@
 
         // Blank means "unchanged" — the form never re-displays a stored secret, so a blank
         // submission only happens when the admin genuinely left it alone.
+        if (dropSmtpPassword)
+        {
+            fields.Add(AuditDiff.SecretChanged("SmtpPassword", true));
+            settings.SmtpPassword = null;
+        }
         if (!string.IsNullOrWhiteSpace(SmtpPassword))
         {
             fields.Add(AuditDiff.SecretChanged("SmtpPassword", true));
@@ -374,7 +392,8 @@
         // No Razor Pages IUrlHelper here — NavigationManager.BaseUri already carries the correct
         // scheme/host for this Blazor Web App request.
         var redirectUri = $"{NavigationManager.BaseUri}Admin/OAuthCallback";
-        var state = Protector.Protect(JsonSerializer.Serialize(new EmailOAuthState(EmailProviderType.Gmail, DateTime.UtcNow)));
+        var state = Protector.Protect(JsonSerializer.Serialize(new EmailOAuthState(EmailProviderType.Gmail, DateTime.UtcNow,
+            (await CurrentUserAsync()).FindFirst(ClaimTypes.NameIdentifier)?.Value)));
         var authorizationUrl = OAuthFactory.Get(EmailProviderType.Gmail).BuildAuthorizationUrl(settings.GmailClientId, redirectUri, state);
 
         // forceLoad: true — a genuine cross-origin redirect to Google's consent screen, not an

@@ -231,7 +231,11 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
 
     internal static string MariaDbOptionFile(MySqlConnector.MySqlConnectionStringBuilder b)
     {
-        static string Quote(string value) => "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+        // A line break in a value would start a new option line (plugin-dir, for one, loads a DLL
+        // into the dump tool), so control characters are refused rather than quoted.
+        static string Quote(string value) => value.Any(char.IsControl)
+            ? throw new InvalidOperationException("A database connection value contains a control character.")
+            : "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
         var lines = new List<string>
         {
             "[client]",
@@ -320,8 +324,13 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
     public static bool IsUnderAny(string directory, IReadOnlyList<string> roots)
     {
         static string Norm(string p) => p.Trim().Replace('/', '\\').TrimEnd('\\') + "\\";
+        // "..": D:\Backups\..\Windows starts with D:\Backups\ as text but isn't inside it.
+        if (HasParentSegment(directory)) return false;
         return roots.Any(root => Norm(directory).StartsWith(Norm(root), StringComparison.OrdinalIgnoreCase));
     }
+
+    private static bool HasParentSegment(string path) =>
+        path.Split('\\', '/').Any(segment => segment.Trim() == "..");
 
     /// <summary>True when the SQL Server in the connection string runs on this machine — the only
     /// case where the app can see the .bak files it asks SQL Server to write.</summary>

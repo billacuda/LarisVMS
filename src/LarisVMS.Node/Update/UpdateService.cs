@@ -143,7 +143,10 @@ public class UpdateService(NodeConfig config, ILogger log, IHostApplicationLifet
             var visionStaged = false;
             if (update is { VisionDownloadUrl: { } visionUrl, VisionSha256: { } visionSha, VisionSizeBytes: not null })
             {
-                visionStaged = await TryStageVisionAsync(http, visionUrl, visionSha, update.Version, ct);
+                // Same host rule as the node download above: this client carries the node's secret,
+                // so it only ever goes to the configured server.
+                visionStaged = await TryStageVisionAsync(http,
+                    LarisVMS.Core.Security.UpdateDownload.Resolve(config.ServerUrl, visionUrl).AbsoluteUri, visionSha, update.Version, ct);
             }
 
             log.LogInformation("Applying update to {Version}...", update.Version);

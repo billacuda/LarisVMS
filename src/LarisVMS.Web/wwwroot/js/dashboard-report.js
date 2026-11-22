@@ -224,6 +224,9 @@ window.larisvmsDashboardReport = (function () {
 
     function csvCell(v) {
         var s = String(v == null ? '' : v);
+        // A text cell starting with = + - @ (or tab/CR) would run as a formula in Excel; a ' in
+        // front shows it as text. Same rule as the server's audit export.
+        if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
         return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     }
 

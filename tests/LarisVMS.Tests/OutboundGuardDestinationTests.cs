@@ -26,6 +26,16 @@ public class OutboundGuardDestinationTests
         Assert.False(OutboundGuard.IsCameraAddress(IPAddress.Parse("64:ff9b::a9fe:a9fe")));
 
     [Theory]
+    [InlineData("127.0.0.1", false)]
+    [InlineData("127.10.0.1", false)]
+    [InlineData("::1", false)]
+    [InlineData("64:ff9b::7f00:1", false)]       // NAT64 of 127.0.0.1
+    [InlineData("192.168.1.64", true)]
+    [InlineData("169.254.10.20", true)]          // a camera with no DHCP lease
+    public void ThisMachineIsntACameraAddress(string address, bool allowed) =>
+        Assert.Equal(allowed, OutboundGuard.IsCameraAddress(IPAddress.Parse(address)));
+
+    [Theory]
     [InlineData("169.254.169.254", false)]
     [InlineData("[::1]", false)]
     [InlineData("8.8.8.8", true)]

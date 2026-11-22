@@ -84,7 +84,10 @@ internal sealed class FileLogger(FileLoggerProvider provider, string categoryNam
     {
         if (!IsEnabled(logLevel)) return;
 
-        var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{LevelTag(logLevel)}] {categoryName}: {formatter(state, exception)}";
+        // Messages can carry text from outside (camera names, ONVIF topics, paths a node reports):
+        // any line break in one is indented, so it can't start a line that looks like its own entry.
+        var message = formatter(state, exception).Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", "\n    ");
+        var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{LevelTag(logLevel)}] {categoryName}: {message}";
         if (exception is not null) line += Environment.NewLine + exception;
         provider.Write(line);
     }

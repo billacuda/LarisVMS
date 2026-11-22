@@ -8,10 +8,10 @@ namespace LarisVMS.Web.Services;
 ///
 /// A role with no configured value defaults to <see cref="DefaultHours"/> (24h, per the original
 /// ask — sessions were expiring too fast at the previous fixed 60-minute cookie timeout). A limit is
-/// at most <see cref="MaxHours"/> (30 days); 0 means never expire, for a home install where signing
-/// in again is only a chore. A user holding several roles is bound by whichever is <b>most
-/// restrictive</b>: the shortest limit among their roles applies, and "never" only when every role
-/// says so.
+/// at most <see cref="MaxHours"/> (30 days); 0 means as long as allowed — <see cref="LongestDays"/>
+/// (a year) — for a home install where signing in again is only a chore. A user holding several
+/// roles is bound by whichever is <b>most restrictive</b>: the shortest limit among their roles
+/// applies, and the year only when every role says 0.
 /// </summary>
 public static class SessionLifetimePolicy
 {
@@ -20,6 +20,10 @@ public static class SessionLifetimePolicy
 
     /// <summary>The longest any session lasts before signing in again (ASVS 7.3.2).</summary>
     public const int MaxHours = 720;
+
+    /// <summary>What a role set to 0 gets: a year, then sign in again. Also the sign-in cookie's own
+    /// ceiling.</summary>
+    public const int LongestDays = 365;
 
     /// <summary>What a role's setting is stored and shown as: 0 (never) or 1 to <see cref="MaxHours"/>.</summary>
     public static int Clamp(int hours) => hours <= 0 ? 0 : Math.Min(hours, MaxHours);
@@ -31,14 +35,14 @@ public static class SessionLifetimePolicy
     public static string SettingKey(string roleId) => SettingKeyPrefix + roleId;
 
     /// <summary>The effective session lifetime for a user holding roles with these configured hour
-    /// values: the shortest limit, each clamped to <see cref="MaxHours"/>. Null (never expires) only
-    /// when every role is 0; a user with no roles gets the ceiling.</summary>
+    /// values: the shortest limit, each clamped to <see cref="MaxHours"/>; a year when every role is
+    /// 0; a user with no roles gets the ceiling.</summary>
     public static TimeSpan? EffectiveWindow(IEnumerable<int> perRoleHours)
     {
         var all = perRoleHours.Select(Clamp).ToList();
         if (all.Count == 0) return TimeSpan.FromHours(MaxHours);
         var limits = all.Where(h => h > 0).ToList();
-        return limits.Count == 0 ? null : TimeSpan.FromHours(limits.Min());
+        return limits.Count == 0 ? TimeSpan.FromDays(LongestDays) : TimeSpan.FromHours(limits.Min());
     }
 
     /// <summary>Whether a ticket issued at <paramref name="issuedUtc"/> has aged past

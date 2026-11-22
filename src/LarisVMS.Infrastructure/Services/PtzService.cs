@@ -58,6 +58,7 @@ public class PtzService(ApplicationDbContext db, Func<HttpClient> httpClientFact
             {
                 c.Username,
                 c.Password,
+                c.Host,
                 HasPtz = c.Capabilities != null && c.Capabilities.HasPtz,
                 RawProbeJson = c.Capabilities != null ? c.Capabilities.RawProbeJson : null,
                 MainProfileToken = c.Streams.Where(s => s.Role == CameraStreamRole.Main).Select(s => s.ProfileToken).FirstOrDefault()
@@ -67,7 +68,7 @@ public class PtzService(ApplicationDbContext db, Func<HttpClient> httpClientFact
         if (row is null || !row.HasPtz || row.RawProbeJson is null || string.IsNullOrEmpty(row.MainProfileToken)) return null;
 
         // Corrupted or pre-PTZ RawProbeJson shape resolves to null — unresolvable, not fatal.
-        var ptzXAddr = OnvifServiceAddresses.Get(row.RawProbeJson, "PTZ");
+        var ptzXAddr = OnvifServiceAddresses.Get(row.RawProbeJson, "PTZ", row.Host);
         if (ptzXAddr is null) return null;
 
         return new PtzTarget(ptzXAddr, row.MainProfileToken, OnvifServiceAddresses.Credentials(row.Username, row.Password));

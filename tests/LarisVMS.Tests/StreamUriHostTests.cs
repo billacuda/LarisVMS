@@ -18,4 +18,14 @@ public class StreamUriHostTests
     [InlineData("rtsp://10.0.0.5/live", "", "rtsp://10.0.0.5/live")]
     public void TheStreamGoesToTheCamerasOwnHost(string reported, string cameraHost, string expected) =>
         Assert.Equal(expected, StreamUris.OnCameraHost(new Uri(reported), cameraHost).ToString());
+
+    [Theory]
+    [InlineData("PTZ", "http://10.0.0.66/onvif/ptz_service", "http://192.168.1.10/onvif/ptz_service")]
+    [InlineData("Events", "http://192.168.1.10:8000/onvif/events", "http://192.168.1.10:8000/onvif/events")]
+    [InlineData("Media", "https://203.0.113.9:443/onvif/media", "https://192.168.1.10/onvif/media")]
+    public void OnvifServicesGoToTheCamerasOwnHost(string key, string reported, string expected)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string> { [key] = reported });
+        Assert.Equal(expected, LarisVMS.Infrastructure.Services.OnvifServiceAddresses.Get(json, key, "192.168.1.10")?.ToString());
+    }
 }

@@ -276,6 +276,14 @@
     private async Task HandleDeleteAsync()
     {
         Id = Guid.TryParse(HttpContext?.Request.Form["Id"].ToString(), out var id) ? id : Guid.Empty;
+        // Deleting a group takes its cameras out of it, which changes group-scoped access — so, as
+        // when moving cameras in or out, it needs configuration access to every camera in it.
+        var configurable = await CameraAccess.GetAccessibleCameraIdsAsync(HttpContextUser, CameraAccessActions.Configure);
+        if (configurable is not null && (await GroupService.GetCameraIdsInSubtreeAsync(Id)).Any(c => !configurable.Contains(c)))
+        {
+            NavigateBare(Loc.T("api.youDontHaveConfigurationAccess"), isError: true);
+            return;
+        }
         try
         {
             await GroupService.DeleteAsync(Id);

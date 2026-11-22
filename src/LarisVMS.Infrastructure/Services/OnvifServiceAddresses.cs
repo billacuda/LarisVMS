@@ -10,14 +10,18 @@ internal static class OnvifServiceAddresses
 {
     /// <summary>Null when the JSON is missing or corrupt, or has no valid absolute URI under
     /// <paramref name="key"/>. A pre-existing or corrupt RawProbeJson is treated as "not resolvable",
-    /// never as an error.</summary>
-    public static Uri? Get(string? rawProbeJson, string key)
+    /// never as an error. The address is moved onto <paramref name="cameraHost"/> (the camera's own
+    /// address, keeping the reported port and path), the same as its RTSP addresses: requests to it
+    /// carry the camera's password, so a camera can't send them to another machine.</summary>
+    public static Uri? Get(string? rawProbeJson, string key, string? cameraHost)
     {
         if (string.IsNullOrEmpty(rawProbeJson)) return null;
         try
         {
             var map = JsonSerializer.Deserialize<Dictionary<string, string>>(rawProbeJson);
-            return map?.GetValueOrDefault(key) is { } text && Uri.TryCreate(text, UriKind.Absolute, out var uri) ? uri : null;
+            return map?.GetValueOrDefault(key) is { } text && Uri.TryCreate(text, UriKind.Absolute, out var uri)
+                ? LarisVMS.Core.Security.StreamUris.OnCameraHost(uri, cameraHost)
+                : null;
         }
         catch (JsonException)
         {

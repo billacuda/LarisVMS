@@ -14,7 +14,7 @@ Jeder mit einem lokalen Konto ändert sein eigenes Passwort, indem er oben auf d
 
 Wenn Sie unter **Einstellungen → Benutzer** ein Konto erstellen oder ein Passwort zurücksetzen, können Sie **Muss es bei der nächsten Anmeldung ändern** ankreuzen. Die Person muss dann ein eigenes Passwort wählen, bevor sie etwas anderes tun kann. Bei aktivierter Option **Einstellungen → Sicherheit → Vorläufige, vom Administrator gesetzte Passwörter** ist es zunächst angekreuzt.
 
-Nach 5 falschen Passwörtern für ein Konto von einer Adresse innerhalb von 15 Minuten muss diese Adresse die 15 Minuten abwarten; die Person kann sich weiterhin von überall sonst anmelden. Ein Konto wird erst nach 20 Fehlversuchen von beliebiger Stelle für 15 Minuten gesperrt, und Super-Admins werden bei der Anmeldung nie durch falsche Passwörter gesperrt. Super-Admins erfahren von wiederholten Fehlschlägen und Sperrungen sowie von Raten, das über viele Netzwerke verteilt ist: ein Konto, das 10-mal aus 3 oder mehr Netzwerken scheitert, oder 50 Fehlschläge aus 10 oder mehr Netzwerken serverweit, innerhalb von 15 Minuten.
+Nach 5 falschen Passwörtern für ein Konto von einer Adresse innerhalb von 15 Minuten muss diese Adresse die 15 Minuten abwarten; die Person kann sich weiterhin von überall sonst anmelden. Ein Konto wird erst nach 20 Fehlversuchen von beliebiger Stelle für 15 Minuten gesperrt. Super-Admins werden nie dauerhaft gesperrt: Mit aktivierter Zwei-Faktor-Anmeldung sperren falsche Passwörter sie überhaupt nicht, ohne sie müssen sie nach jedem falschen Passwort ab dem fünften vor dem nächsten Versuch warten, jedes Mal etwas länger (1, 5, 15, dann 60 Minuten). Super-Admins erfahren von wiederholten Fehlschlägen und Sperrungen sowie von Raten, das über viele Netzwerke verteilt ist: ein Konto, das 10-mal aus 3 oder mehr Netzwerken scheitert, oder 50 Fehlschläge aus 10 oder mehr Netzwerken serverweit, innerhalb von 15 Minuten.
 
 ## Zwei-Faktor-Anmeldung
 
@@ -40,7 +40,7 @@ Eine Rolle ist ein benannter Satz von Berechtigungen, verwaltet unter **Einstell
 
 - eine **Bereichsstufe**;
 - einen **Ablauf** für zeitlich begrenzten Zugriff (zum Beispiel 480 Minuten für eine 8-Stunden-Schicht);
-- eine **Sitzungsdauer**: Stunden nach der Anmeldung, bis sich der Benutzer erneut anmelden muss, egal wie aktiv er ist (höchstens 30 Tage, oder 0 für kein Ablaufen);
+- eine **Sitzungsdauer**: Stunden nach der Anmeldung, bis sich der Benutzer erneut anmelden muss, egal wie aktiv er ist (höchstens 30 Tage, oder 0 für ein Jahr);
 - ein **Inaktivitäts-Timeout**: Minuten ohne Öffnen einer Seite, bevor der Benutzer abgemeldet wird (0 ist aus). Ein Bildschirm, der Live-Video zeigt, gilt als inaktiv, lassen Sie es also bei Rollen aus, die eine Videowand betrachten;
 - eine **PTZ-Priorität**, die entscheidet, wer gewinnt, wenn zwei Benutzer dieselbe Kamera bewegen.
 
@@ -95,7 +95,7 @@ UPDATE `ActiveDirectorySettings` SET `LocalLoginsEnabled` = 1;
 
 Alles, was Benutzer tun, wird unter **Protokolle → Audit-Protokolle** aufgezeichnet: Änderungen (mit alten und neuen Werten; Geheimnisse werden nur als „geändert“ erfasst), das Ansehen von Kameras, das Starten der Wiedergabe und Exporte.
 
-**Manipulationssicher.** Jeder Eintrag wird zusammen mit dem vorherigen versiegelt, mit einem Schlüssel, den die Datenbank allein nicht besitzt. Alle 6 Stunden (und wenn Sie auf der Seite des Audit-Protokolls **Jetzt prüfen** wählen) wird das gesamte Protokoll geprüft. Wurde ein Eintrag direkt in der Datenbank geändert, entfernt oder hinzugefügt, nennt die Seite, welcher, und Super-Admins werden benachrichtigt. Durch die Aufbewahrung entfernte Einträge sind erwartet und zählen nicht, und jede Entfernung wird selbst aufgezeichnet (**AuditLog.Pruned**). Einträge aus der Zeit vor diesem Update sind nicht abgedeckt.
+**Manipulationssicher.** Jeder Eintrag wird zusammen mit dem vorherigen versiegelt, mit einem Schlüssel, den die Datenbank allein nicht besitzt. Alle 6 Stunden (und wenn Sie auf der Seite des Audit-Protokolls **Jetzt prüfen** wählen) wird das gesamte Protokoll geprüft. Wurde ein Eintrag direkt in der Datenbank geändert, entfernt oder hinzugefügt, nennt die Seite, welcher, und Super-Admins werden benachrichtigt. Durch die Aufbewahrung entfernte Einträge sind erwartet und zählen nicht, und jede Entfernung wird selbst aufgezeichnet (**AuditLog.Pruned**). Einträge aus der Zeit vor diesem Update sind nicht abgedeckt. Nur ein Super-Admin kann verkürzen, wie lange das Audit-Protokoll aufbewahrt wird (**Einstellungen → Protokolle**), damit niemand sonst seinen eigenen Verlauf löschen kann.
 
 Der Server führt außerdem außerhalb der Datenbank, in `%ProgramData%\LarisVMS\audit-chain.dat`, einen kleinen Nachweis über den Schlüssel des Siegels und den Beginn des Protokolls, sodass das Protokoll nicht mit einem anderen Schlüssel neu versiegelt oder gelöscht und neu begonnen werden kann, ohne dass dies auffällt. Wenn Sie bewusst mit einer neuen, leeren Datenbank auf demselben Server neu beginnen, löschen Sie diese Datei einmal; mit dem nächsten Eintrag wird eine neue erstellt.
 

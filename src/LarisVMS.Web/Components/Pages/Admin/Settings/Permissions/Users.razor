@@ -596,13 +596,27 @@
             return;
         }
 
+        // Same rules as assigning the role: not your own (or a temporary admin could keep extending
+        // themselves), not an account that can do more than you, and only a role you could assign.
+        var target = await UserManagerService.FindByIdAsync(expiry.UserId);
+        var denied = target is null ? Loc.T("settings.permissions.users.youDontHavePermissionTo")
+            : await CannotActOnAsync(target, allowSelf: false);
+        if (denied is null && !(await LarisVMS.Web.Services.AdminScope.ForAsync(Db, PermissionService, User)).CanBindRole(expiry.RoleId))
+            denied = Loc.T("settings.activeDirectory.youCantAssignThatRole");
+        if (denied is not null)
+        {
+            ErrorMessage = denied;
+            await LoadAsync();
+            return;
+        }
+
         var defaultMinutes = await Db.RoleProfiles.Where(p => p.RoleId == expiry.RoleId)
             .Select(p => p.DefaultExpiryMinutes).FirstOrDefaultAsync();
         expiry.ExpiresAtUtc = DateTime.UtcNow.AddMinutes(defaultMinutes ?? 0);
         await Db.SaveChangesAsync();
 
         await AuditService.LogAsync("Role.ExpiryExtended", CurrentUserId, CurrentUserName, RemoteIp,
-            $"Extended to {expiry.ExpiresAtUtc:yyyy-MM-dd HH:mm} UTC");
+            $"{target!.UserName}: role {await Db.Roles.Where(r => r.Id == expiry.RoleId).Select(r => r.Name).FirstOrDefaultAsync()} extended to {expiry.ExpiresAtUtc:yyyy-MM-dd HH:mm} UTC");
         SavedMessage = Loc.T("settings.permissions.users.expiryExtended");
         await LoadAsync();
     }
@@ -741,6 +755,9 @@
         }
 
         var ended = await Sessions.EndAllAsync(user.Id);
+        // A new security stamp also forgets every browser remembered for two-factor, so signing
+        // back in on one of them asks for a code again.
+        await UserManagerService.UpdateSecurityStampAsync(user);
         await AuditService.LogAsync("User.SignedOutEverywhere", CurrentUserId, CurrentUserName, RemoteIp, $"{user.Email ?? user.UserName}: {ended} sessions");
         SavedMessage = Loc.T("settings.permissions.users.signedOutEverywhere", new { email = user.Email ?? user.UserName });
         await LoadAsync();

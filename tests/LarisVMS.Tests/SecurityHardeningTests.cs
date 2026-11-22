@@ -445,6 +445,8 @@ public class SecurityHardeningTests
     [InlineData(@"D:\Backups\LarisVMS\daily", true)]
     [InlineData(@"\\attacker\share", false)]
     [InlineData(@"D:\BackupsElsewhere", false)]
+    [InlineData(@"D:\Backups\LarisVMS\..\..\Windows\Temp", false)]
+    [InlineData(@"\\nas\backups\..\..\attacker\share", false)]
     public void BackupsStayInsideTheAllowedRoots(string directory, bool allowed) =>
         Assert.Equal(allowed, LarisVMS.Infrastructure.Services.BackupService.IsUnderAny(directory, [@"\\nas\backups", @"D:\Backups\LarisVMS"]));
 
@@ -603,5 +605,30 @@ public class SecurityHardeningTests
         var recent = reports.Recent();
         Assert.Equal(50, recent.Count);
         Assert.Equal("inline 59", recent[0].Blocked);
+    }
+
+    // ── Error messages ───────────────────────────────────────────────────
+
+    // ── Super Admin lockout ──────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(1, null)]
+    [InlineData(4, null)]
+    [InlineData(5, 1)]
+    [InlineData(10, 5)]
+    [InlineData(15, 15)]
+    [InlineData(20, 60)]
+    [InlineData(500, 60)]
+    public void ASuperAdminWithoutTwoFactorWaitsLongerEachTimeButIsNeverLockedForGood(int failures, int? minutes) =>
+        Assert.Equal(minutes is { } m ? TimeSpan.FromMinutes(m) : null, LarisVMS.Web.Security.AdminLockout.DelayAfter(failures));
+
+    [Fact]
+    public void OnlyLarisVmsOwnRefusalsAreShownToPeople()
+    {
+        var ours = Assert.Throws<InvalidOperationException>(new Action(() => throw new InvalidOperationException("A refusal written for people.")));
+        var framework = Assert.Throws<InvalidOperationException>(() => new List<int>().First());
+
+        Assert.Equal("A refusal written for people.", LarisVMS.Web.Helpers.UserFacingError.Message(ours));
+        Assert.NotEqual(framework.Message, LarisVMS.Web.Helpers.UserFacingError.Message(framework));
     }
 }

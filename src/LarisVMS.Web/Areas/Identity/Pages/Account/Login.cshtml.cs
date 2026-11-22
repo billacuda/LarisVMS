@@ -123,8 +123,9 @@ public class LoginModel(
         // the answer takes doesn't say which accounts exist.
         if (target is null)
             userManager.PasswordHasher.VerifyHashedPassword(TimingDummy.User, TimingDummy.Hash(userManager), Input.Password);
-        var lockoutOnFailure = target is null || !await IsSuperAdminAsync(target);
-        var result = await signInManager.PasswordSignInAsync(Input.Username.Trim(), Input.Password, Input.RememberMe, lockoutOnFailure);
+        // A Super Admin isn't put through Identity's lockout; AdminLockout handles them below.
+        var isSuperAdmin = target is not null && await LarisVMS.Web.Security.AdminLockout.IsSuperAdminAsync(db, target);
+        var result = await signInManager.PasswordSignInAsync(Input.Username.Trim(), Input.Password, Input.RememberMe, lockoutOnFailure: !isSuperAdmin);
         if (result.Succeeded) return null;
         if (result.RequiresTwoFactor)
         {
@@ -140,6 +141,8 @@ public class LoginModel(
         }
         throttle.RecordFailure(Input.Username, HttpContext.Connection.RemoteIpAddress);
         await AuditFailureAsync("Login.Failure", "Local account");
+        if (isSuperAdmin && await LarisVMS.Web.Security.AdminLockout.RecordFailureAsync(userManager, db, target!) is { } wait)
+            await AuditFailureAsync("Login.LockedOut", $"Super Admin without two-factor: next try in {wait.TotalMinutes:0} min");
         return Loc.T("account.login.invalidEmailOrPassword");
     }
 
@@ -227,7 +230,8 @@ public class LoginModel(
         catch (AdInvalidCredentialsException)
         {
             throttle.RecordFailure(Input.Username, HttpContext.Connection.RemoteIpAddress);
-            if (linked is not null && !await IsSuperAdminAsync(linked)) await userManager.AccessFailedAsync(linked);
+            if (linked is not null && await LarisVMS.Web.Security.AdminLockout.RecordFailureAsync(userManager, db, linked) is { } wait)
+                await AuditFailureAsync("Login.LockedOut", $"Super Admin without two-factor: next try in {wait.TotalMinutes:0} min");
             await AuditFailureAsync("Login.Failure", "Active Directory: wrong username or password");
             return Loc.T("account.login.invalidUsernameOrPasswordOr");
         }
@@ -252,12 +256,6 @@ public class LoginModel(
         var result = await signInManager.SignInCheckingTwoFactorAsync(user, Input.RememberMe);
         _needsCode = result.RequiresTwoFactor;
         return null;
-    }
-
-    private async Task<bool> IsSuperAdminAsync(ApplicationUser user)
-    {
-        var roleIds = await db.UserRoles.Where(ur => ur.UserId == user.Id).Select(ur => ur.RoleId).ToListAsync();
-        return roleIds.Count > 0 && await db.RoleProfiles.AnyAsync(p => roleIds.Contains(p.RoleId) && p.Tag == LarisVMS.Core.Auth.RoleTags.SuperAdmin);
     }
 
     private async Task<ApplicationUser?> FindLinkedUserByNameAsync(string username)

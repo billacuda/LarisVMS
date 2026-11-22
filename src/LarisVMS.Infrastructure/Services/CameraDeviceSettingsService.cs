@@ -497,7 +497,7 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
         if (string.IsNullOrWhiteSpace(camera.DeviceServiceUri))
             throw new DeviceSettingsUnavailableException(Loc.T("server.cameraDeviceSettings.thisCameraHasNoOnvif"));
         var raw = camera.Capabilities?.RawProbeJson;
-        var media = OnvifServiceAddresses.Get(raw, "Media")
+        var media = OnvifServiceAddresses.Get(raw, "Media", camera.Host)
             ?? throw new DeviceSettingsUnavailableException(Loc.T("server.cameraDeviceSettings.thisCameraHasntBeenProbed"));
 
         var streams = camera.Streams
@@ -509,8 +509,8 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
         return new Target(
             camera.Id, camera.Name, OnvifServiceAddresses.Credentials(camera.Username, camera.Password),
             media,
-            camera.Capabilities?.HasMedia2 == true ? OnvifServiceAddresses.Get(raw, "Media2") : null,
-            camera.Capabilities?.HasImaging == true ? OnvifServiceAddresses.Get(raw, "Imaging") : null,
+            camera.Capabilities?.HasMedia2 == true ? OnvifServiceAddresses.Get(raw, "Media2", camera.Host) : null,
+            camera.Capabilities?.HasImaging == true ? OnvifServiceAddresses.Get(raw, "Imaging", camera.Host) : null,
             camera.VideoSourceToken,
             streams);
     }

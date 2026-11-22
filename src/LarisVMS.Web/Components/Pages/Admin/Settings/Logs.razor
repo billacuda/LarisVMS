@@ -168,6 +168,14 @@
 
         var newLogRetention = Math.Max(0, LogRetentionDays);
         var newAuditRetention = Math.Max(0, AuditLogRetentionDays);
+        // Keeping the audit log for less time deletes history, so only a Super Admin can shorten it:
+        // otherwise anyone with Settings.Edit could set it to a day and erase their own trail.
+        var auditShortened = newAuditRetention > 0 && (oldAuditRetention == 0 || newAuditRetention < oldAuditRetention);
+        if (auditShortened && !(await AdminScope.ForAsync(Db, PermissionService, user)).IsSuperAdmin)
+        {
+            ErrorMessage = Loc.T("settings.logs.auditRetentionSuperAdminOnly");
+            return;
+        }
         var newLogLevel = LogLevel is not null && LogLevels.Selectable.Contains(LogLevel, StringComparer.OrdinalIgnoreCase) ? LogLevel : "Information";
         await Settings.SetGlobalAsync(LogsRetentionService.RetentionDaysKey, newLogRetention.ToString(), by);
         await Settings.SetGlobalAsync(AuditLogRetentionService.RetentionDaysKey, newAuditRetention.ToString(), by);

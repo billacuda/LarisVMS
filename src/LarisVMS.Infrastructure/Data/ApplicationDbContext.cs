@@ -120,6 +120,11 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     {
         base.OnModelCreating(builder);
 
+        // Identity tokens hold the two-factor authenticator key and recovery codes; they're encrypted
+        // like every other stored secret, so a copy of the database or a backup can't get past 2FA.
+        builder.Entity<Microsoft.AspNetCore.Identity.IdentityUserToken<string>>(e =>
+            e.Property(x => x.Value).HasConversion(new EncryptedNullableStringConverter()));
+
         // ── Setting ──────────────────────────────────────────────────────────
         builder.Entity<Setting>(e =>
         {
