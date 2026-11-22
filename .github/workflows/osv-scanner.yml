@@ -26,6 +26,8 @@ permissions:
   security-events: write
   # Read commit contents
   contents: read
+  # Required by OSV-Scanner 2 to upload SARIF (github/codeql-action#2117)
+  actions: read
 
 jobs:
   scan-scheduled:
