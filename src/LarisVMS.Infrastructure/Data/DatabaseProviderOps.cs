@@ -74,6 +74,14 @@ public abstract partial class DatabaseProviderOps
         host is "." or "(local)" or "(localdb)" or "127.0.0.1" or "::1" or ""
         || host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
         || host.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+
+    protected static void AddParameter(DbCommand command, string name, object value)
+    {
+        var p = command.CreateParameter();
+        p.ParameterName = name;
+        p.Value = value;
+        command.Parameters.Add(p);
+    }
 }
 
 public sealed class SqlServerOps : DatabaseProviderOps
@@ -138,7 +146,8 @@ public sealed class SqlServerOps : DatabaseProviderOps
     public override async Task<bool> DatabaseExistsAsync(DbConnection server, string database, CancellationToken ct)
     {
         await using var command = server.CreateCommand();
-        command.CommandText = $"SELECT COUNT(*) FROM sys.databases WHERE name = N'{EscapeLiteral(database)}'";
+        command.CommandText = "SELECT COUNT(*) FROM sys.databases WHERE name = @name";
+        AddParameter(command, "@name", database);
         return ((int?)await command.ExecuteScalarAsync(ct) ?? 0) > 0;
     }
 
@@ -326,12 +335,4 @@ public sealed partial class MariaDbOps : DatabaseProviderOps
 
     public override string WithPassword(string connectionString, string password) =>
         new MySqlConnectionStringBuilder(connectionString) { Password = password }.ConnectionString;
-
-    private static void AddParameter(DbCommand command, string name, object value)
-    {
-        var p = command.CreateParameter();
-        p.ParameterName = name;
-        p.Value = value;
-        command.Parameters.Add(p);
-    }
 }

@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Semgrep.** The scan runs with Semgrep's default rules again instead of stopping for want of a
   semgrep.dev account token, and its container is pinned to a release.
 
+### 🔒 Security
+
+- **Semgrep findings.** The SQL Server "database exists" check uses a query parameter, Dependabot
+  waits a week after a release before proposing it, and a live view log line no longer builds its
+  format string from a variable. The other findings were reviewed and dismissed.
+
 ## [0.222.2] - 2026-11-21
 
 A security update: fixes from a review against the OWASP Top 10 (2025).

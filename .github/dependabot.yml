@@ -6,6 +6,9 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    # Wait a week after a release before proposing it, so a hijacked release is likely caught first.
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]

@@ -566,7 +566,7 @@
             function jumpToLiveEdge(reason) {
                 var lastRange = sourceBuffer.buffered.length - 1;
                 var target = sourceBuffer.buffered.start(lastRange);
-                console.log('[live-view] ' + reason + ', currentTime=', videoEl.currentTime, '-> ', target,
+                console.log('[live-view] %s, currentTime=', reason, videoEl.currentTime, '-> ', target,
                     'buffered=', target, '-', sourceBuffer.buffered.end(lastRange));
                 videoEl.currentTime = target;
                 mediaEndpoint.reportStreamEvent(cameraId, role || 'main', streamMode, 'gap_jump', null, reason);
