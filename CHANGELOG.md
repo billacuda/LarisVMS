@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **OSV-Scanner.** The scan no longer passes `--skip-git`, which OSV-Scanner 2 removed, so it runs
   again after the Dependabot update to version 2.
+- **Semgrep.** The scan runs with Semgrep's default rules again instead of stopping for want of a
+  semgrep.dev account token, and its container is pinned to a release.
 
 ## [0.222.2] - 2026-11-21
 
