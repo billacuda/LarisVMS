@@ -71,8 +71,7 @@ public partial class StorageManager(NodeApiClient api, string fallbackStorageRoo
     // _pendingDeletionReports, persisted: a node restarted between deleting files and reporting them
     // used to leave those rows behind for good (the files were gone, so nothing rediscovered them
     // until the hourly reconcile, which can't see paths outside the current roots).
-    internal string PendingDeletionsPath { get; init; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "pending-segment-deletions.json");
+    internal string PendingDeletionsPath { get; init; } = Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "pending-segment-deletions.json");
 
     // GET /api/nodes/segments/expired page size — the server re-lists anything not yet confirmed, so
     // a large backlog simply drains over successive sweeps.
@@ -136,7 +135,7 @@ public partial class StorageManager(NodeApiClient api, string fallbackStorageRoo
             var expiredDeletes = new List<string>();
             try
             {
-                var relocatingNow = _pendingRelocationReports.Select(r => r.Item.OldFilePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var relocatingNow = _pendingRelocationReports.Select(r => r.Item.OldFilePath).ToHashSet(LarisVMS.Core.PathComparer.Local);
                 await DeleteServerExpiredSegmentsAsync(relocatingNow, expiredDeletes, ct);
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
@@ -254,7 +253,7 @@ public partial class StorageManager(NodeApiClient api, string fallbackStorageRoo
         {
             var relocatingNow = relocations.Select(r => r.Item.OldFilePath)
                 .Concat(_pendingRelocationReports.Select(r => r.Item.OldFilePath))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                .ToHashSet(LarisVMS.Core.PathComparer.Local);
             await DeleteServerExpiredSegmentsAsync(relocatingNow, deletedPaths, ct);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
@@ -279,7 +278,7 @@ public partial class StorageManager(NodeApiClient api, string fallbackStorageRoo
             // inference so a mid-flight relocation is never read as a deletion.
             var relocatingOldPaths = relocations.Select(r => r.Item.OldFilePath)
                 .Concat(_pendingRelocationReports.Select(r => r.Item.OldFilePath))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                .ToHashSet(LarisVMS.Core.PathComparer.Local);
             // Only stamped on success — a failed fetch (network blip, web tier restarting) should
             // retry on the next 5-minute sweep, not wait a full extra hour for the next scheduled one.
             if (await ReconcileAsync(config, storageRoot, archiveRoot, relocatingOldPaths, deletedPaths, ct)) _lastReconciledAtUtc = now;
@@ -345,7 +344,7 @@ public partial class StorageManager(NodeApiClient api, string fallbackStorageRoo
                     // A tier-flip reconcile (ReconcileArchiveTierAsync) reports OldFilePath ==
                     // NewFilePath — the file is already on the archive volume and there is nothing to
                     // move. Only a real move has a distinct primary source + caches to relocate.
-                    if (string.Equals(r.Item.OldFilePath, r.Item.NewFilePath, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (string.Equals(r.Item.OldFilePath, r.Item.NewFilePath, LarisVMS.Core.PathComparer.LocalComparison)) continue;
                     TryDelete(r.Item.OldFilePath); // the primary .mp4 — already copied to the archive by TryArchiveFile
                     // Move the segment's cached hover thumbnails and AI-detection snapshot crops onto
                     // the archive volume too, so archived footage keeps its fast previews and they
@@ -598,7 +597,7 @@ public partial class StorageManager(NodeApiClient api, string fallbackStorageRoo
         // A segment this sweep's retention/quota pass already archived (source still on disk, waiting
         // for its relocation report) or deleted must not be handled a second time here — and its
         // bytes, still occupied right now, must not be counted as space this pass can free.
-        var alreadyHandled = new HashSet<string>(deletedPaths, StringComparer.OrdinalIgnoreCase);
+        var alreadyHandled = new HashSet<string>(deletedPaths, LarisVMS.Core.PathComparer.Local);
         foreach (var r in relocations) alreadyHandled.Add(r.Item.OldFilePath);
 
         // Leftover footage from cameras no longer assigned here goes first, oldest-first: nobody is
@@ -768,7 +767,7 @@ public partial class StorageManager(NodeApiClient api, string fallbackStorageRoo
     private async Task ImportOrphanedSegmentsAsync(NodeConfigResponse config, string storageRoot, string? archiveRoot,
         List<string> knownPaths, CancellationToken ct)
     {
-        var known = new HashSet<string>(knownPaths, StringComparer.OrdinalIgnoreCase);
+        var known = new HashSet<string>(knownPaths, LarisVMS.Core.PathComparer.Local);
         var now = DateTime.UtcNow;
         var toImport = new List<SegmentReportItem>();
 
@@ -835,13 +834,13 @@ public partial class StorageManager(NodeApiClient api, string fallbackStorageRoo
             return false;
         }
         if (primaryPaths.Count == 0) return true;
-        var primary = new HashSet<string>(primaryPaths, StringComparer.OrdinalIgnoreCase);
+        var primary = new HashSet<string>(primaryPaths, LarisVMS.Core.PathComparer.Local);
 
         var archiveMainDirs = config.Cameras
             .Select(c => Path.Combine(archiveRoot, $"cam-{c.CameraId}", "main"))
             .Concat(FindOrphanedCameraMainDirs(archiveRoot, config.Cameras.Select(c => c.CameraId)).Select(x => x.MainDir))
             .Where(Directory.Exists)
-            .Distinct(StringComparer.OrdinalIgnoreCase);
+            .Distinct(LarisVMS.Core.PathComparer.Local);
 
         var found = 0;
         foreach (var mainDir in archiveMainDirs)
@@ -1211,9 +1210,9 @@ public partial class StorageManager(NodeApiClient api, string fallbackStorageRoo
         if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(root)) return false;
         var c = candidate.TrimEnd('/', '\\');
         var r = root.TrimEnd('/', '\\');
-        return c.Equals(r, StringComparison.OrdinalIgnoreCase)
-            || c.StartsWith(r + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-            || c.StartsWith(r + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        return c.Equals(r, LarisVMS.Core.PathComparer.LocalComparison)
+            || c.StartsWith(r + Path.DirectorySeparatorChar, LarisVMS.Core.PathComparer.LocalComparison)
+            || c.StartsWith(r + Path.AltDirectorySeparatorChar, LarisVMS.Core.PathComparer.LocalComparison);
     }
 
     /// <summary>Splits a set of file paths into (under storageRoot, under archiveRoot, neither) so
@@ -1384,7 +1383,7 @@ public partial class StorageManager(NodeApiClient api, string fallbackStorageRoo
 
     private void SweepLogsDirectory(DateTime now)
     {
-        var logsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs");
+        var logsDir = LarisVMS.Core.LarisPaths.LogRoot;
         if (!Directory.Exists(logsDir)) return;
 
         foreach (var pattern in LogFilePatterns)
@@ -1448,8 +1447,8 @@ public partial class StorageManager(NodeApiClient api, string fallbackStorageRoo
         var expired = await api.GetExpiredSegmentsAsync(ExpiredSegmentBatchSize, ct);
         if (expired.Count == 0) return;
 
-        var already = new HashSet<string>(deletedPaths, StringComparer.OrdinalIgnoreCase);
-        var dirsToPrune = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var already = new HashSet<string>(deletedPaths, LarisVMS.Core.PathComparer.Local);
+        var dirsToPrune = new HashSet<string>(LarisVMS.Core.PathComparer.Local);
         int deleted = 0, alreadyGone = 0, rejected = 0, unreachable = 0;
         foreach (var e in expired)
         {

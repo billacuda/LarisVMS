@@ -40,6 +40,13 @@ using LarisVMS.Web.Localization;
 using LarisVMS.Web.Middleware;
 using LarisVMS.Web.Services;
 
+// `LarisVMS.Web --version`: prints the version and exits (the package smoke test runs it).
+if (args is ["--version"])
+{
+    Console.WriteLine(ReleaseCheckService.RunningVersion?.Split('+')[0] ?? "unknown");
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Self-hosted Kestrel, no IIS/ANCM in front — pins ContentRootPath to AppContext.BaseDirectory (among
@@ -47,6 +54,9 @@ var builder = WebApplication.CreateBuilder(args);
 // resolve correctly under the Windows Service's own working directory. Must run before anything below
 // that depends on content root. A no-op outside an actual Windows Service (e.g. local `dotnet run`).
 builder.Host.UseWindowsService(o => o.ServiceName = "LarisVMS Web");
+// The systemd counterpart (Type=notify readiness, journal-friendly console logging); a no-op outside a
+// systemd unit. On Linux the unit file sets ASPNETCORE_ENVIRONMENT=Production itself.
+builder.Host.UseSystemd();
 // Belt-and-suspenders: install-web.ps1 sets ASPNETCORE_ENVIRONMENT=Production on the service's own
 // registry Environment value (the primary mechanism — see install-web.ps1). This only fires if that's
 // ever missing on an installed service; a local `dotnet run`/F5 session is never IsWindowsService(),
@@ -81,16 +91,22 @@ builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", fram
 // setup wizard (SetupService.MergeSetupJson), never committed to source control.
 // An install configured before database passwords were protected has its password in plain text in
 // the connection string; move it into Database:ProtectedPassword first (see DatabaseConfig).
+// On Linux both setup-generated.json and appsettings.Production.json live in /etc/larisvms
+// (LarisPaths.ConfigRoot), since the install folder is read-only to the service; on Windows they stay
+// beside the program.
+var setupGeneratedPath = LarisVMS.Core.LarisPaths.ConfigFile(builder.Environment.ContentRootPath, "setup-generated.json");
+if (LarisVMS.Core.LarisPaths.ConfigRoot is { } configRoot)
+    InsertAfterAppSettings(builder.Configuration, Path.Combine(configRoot, "appsettings.Production.json"));
 try
 {
-    if (DatabaseConfig.ProtectPlaintextPassword(Path.Combine(builder.Environment.ContentRootPath, "setup-generated.json")))
+    if (DatabaseConfig.ProtectPlaintextPassword(setupGeneratedPath))
         webFileLogger.CreateLogger("Startup").LogInformation("Moved the database password in setup-generated.json into protected storage.");
 }
 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or System.Security.Cryptography.CryptographicException)
 {
     webFileLogger.CreateLogger("Startup").LogWarning(ex, "Could not protect the database password in setup-generated.json: {Message}", ex.Message);
 }
-builder.Configuration.AddJsonFile("setup-generated.json", optional: true, reloadOnChange: true);
+builder.Configuration.AddJsonFile(setupGeneratedPath, optional: true, reloadOnChange: true);
 
 // ── Database ──────────────────────────────────────────────────────────────────
 // Conditional registration: pre-setup there is no connection string yet, and the app must still
@@ -125,8 +141,7 @@ builder.Services.AddDbContext<ApplicationDbContext>((provider, options) =>
 // everything else). Applies equally to the current NidusVMS->LarisVMS rename. No user ever sees this
 // string. If it's ever changed, every already-encrypted value needs re-encrypting first — not a
 // find-and-replace.
-var dataProtectionPath = Path.Combine(
-    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "keys");
+var dataProtectionPath = Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "keys");
 EnsureWritableDirectory(dataProtectionPath);
 // The key ring folder is locked down now, before the key ring is first written; the rest of the
 // data folder follows in the background below.
@@ -143,7 +158,7 @@ _ = Task.Run(() =>
         aclLogger.LogWarning("Could not restrict access to {Path}: {Error}", LarisVMS.Core.Security.LocalDataAcl.Root, rootError);
     foreach (var file in new[] { "setup-generated.json", "appsettings.Production.json" })
     {
-        var path = Path.Combine(builder.Environment.ContentRootPath, file);
+        var path = LarisVMS.Core.LarisPaths.ConfigFile(builder.Environment.ContentRootPath, file);
         if (LarisVMS.Core.Security.LocalDataAcl.ProtectFile(path) is { } fileError)
             aclLogger.LogWarning("Could not restrict access to {Path}: {Error}", path, fileError);
     }
@@ -767,8 +782,7 @@ builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
     ["Kestrel:Certificates:Default:Password"] = "",
 });
 var certLogger = webFileLogger.CreateLogger("Certificate");
-var selfSignedPfxPath = Path.Combine(
-    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "web.selfsigned.pfx");
+var selfSignedPfxPath = Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "web.selfsigned.pfx");
 // AllowInsecure: true — a fresh install has no real cert configured yet, and ConfigureKestrel below
 // only opens a listener when a certificate actually loaded, so refusing the self-signed fallback would
 // leave a brand-new install completely unreachable (no way to even get to the setup wizard). Matches
@@ -1069,9 +1083,10 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
     if (autoUpdateEnabled && node.Status is not (NodeStatus.Pending or NodeStatus.Disabled))
     {
         // node.Platform is set once at registration (NodeRegisterRequest.Platform) and never
-        // updated by a heartbeat — same as dploid's agent.OSPlatform. Falls back to "win-x64" for
-        // an already-registered node whose Platform is still unset/null (pre-dates this feature).
-        var platform = node.Platform ?? "win-x64";
+        // updated by a heartbeat — same as dploid's agent.OSPlatform. Each platform has its own
+        // approved build, so Windows and Linux nodes on one server each get theirs. A node registered
+        // before platforms were reported is a Windows one (PlatformId.Legacy).
+        var platform = node.Platform ?? LarisVMS.Core.PlatformId.Legacy;
         var latestBuild = await nodeBuildService.GetLatestForPlatformAsync(platform, ct);
         if (latestBuild is not null && NodeVersionComparer.IsNewer(latestBuild.Version, request.Version))
         {
@@ -1083,12 +1098,23 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
             var visionSha256 = latestBuild.VisionFilePath is not null ? latestBuild.VisionSha256 : null;
             var signature = await signing.SignAsync(
                 UpdateSignature.UpdatePayload(platform, latestBuild.Version, latestBuild.Sha256, visionSha256), ct);
+            // The native backend libraries ride along with the Vision Service binary (BackendsBundle):
+            // the node fetches them only when their stamp differs from what it has.
+            var backends = visionSha256 is not null && latestBuild is { BackendsFilePath: not null, BackendsStamp: { } backendsStamp }
+                ? await signing.SignAsync(UpdateSignature.BackendsPayload(platform, latestBuild.Version, backendsStamp), ct)
+                : null;
             updateAvailable = new NodeUpdateInfoDto(
                 latestBuild.Version, $"{baseUrl}/api/nodes/download/{latestBuild.Id}",
                 latestBuild.Sha256, latestBuild.SizeBytes,
                 latestBuild.VisionFilePath is not null ? $"{baseUrl}/api/nodes/download/{latestBuild.Id}/vision" : null,
                 visionSha256, latestBuild.VisionSizeBytes,
-                signature.Signature, signature.PublicKeyPem, latestBuild.PublisherSignature);
+                signature.Signature, signature.PublicKeyPem, latestBuild.PublisherSignature,
+                backends is null ? null : $"{baseUrl}/api/nodes/download/{latestBuild.Id}/backends",
+                backends is null ? null : latestBuild.BackendsSha256,
+                backends is null ? null : latestBuild.BackendsSizeBytes,
+                backends is null ? null : latestBuild.BackendsStamp,
+                backends?.Signature,
+                backends is null ? null : latestBuild.BackendsPublisherSignature);
         }
     }
 
@@ -1106,7 +1132,8 @@ nodesApi.MapGet("/download/{buildId:guid}", async (Guid buildId, INodeBuildServi
 {
     var build = await nodeBuildService.GetDownloadInfoAsync(buildId, ct);
     if (build is null || !File.Exists(build.FilePath)) return Results.NotFound();
-    return Results.File(build.FilePath, "application/octet-stream", "LarisVMS.Node.exe");
+    return Results.File(build.FilePath, "application/octet-stream",
+        LarisVMS.Core.ExecutableName.For(LarisVMS.Core.ExecutableName.Node, build.Platform));
 });
 
 // Companion to the download route above, for the optional Vision Service binary a build may carry
@@ -1118,7 +1145,17 @@ nodesApi.MapGet("/download/{buildId:guid}/vision", async (Guid buildId, INodeBui
 {
     var build = await nodeBuildService.GetDownloadInfoAsync(buildId, ct);
     if (build?.VisionFilePath is not { } visionPath || !File.Exists(visionPath)) return Results.NotFound();
-    return Results.File(visionPath, "application/octet-stream", "LarisVMS.Vision.Service.exe");
+    return Results.File(visionPath, "application/octet-stream",
+        LarisVMS.Core.ExecutableName.For(LarisVMS.Core.ExecutableName.VisionService, build.Platform));
+});
+
+// The build's native backend libraries (onnxruntime-backends.zip), offered beside the Vision
+// Service binary. 404 when the build has none.
+nodesApi.MapGet("/download/{buildId:guid}/backends", async (Guid buildId, INodeBuildService nodeBuildService, CancellationToken ct) =>
+{
+    var build = await nodeBuildService.GetDownloadInfoAsync(buildId, ct);
+    if (build?.BackendsFilePath is not { } backendsPath || !File.Exists(backendsPath)) return Results.NotFound();
+    return Results.File(backendsPath, "application/zip", LarisVMS.Core.Update.BackendsBundle.ZipFileName);
 });
 
 nodesApi.MapGet("/config", async (HttpContext ctx, INodeService nodeService, CancellationToken ct) =>
@@ -1149,22 +1186,26 @@ nodesApi.MapGet("/detection-model/{family}/{variant}", async (
 
 // A large Vision Service native dependency the node package doesn't bundle — currently just
 // onnxruntime_providers_cuda.dll (~320 MB), which only NVIDIA nodes load. Seeded into the server's
-// cache by deploy.ps1; a node with no seeded file keeps running DirectML. Bearer-auth like the rest
+// cache from the Web package (BundledBuildRegistrar); a node with no seeded file runs without CUDA. Bearer-auth like the rest
 // of /api/nodes/*.
-nodesApi.MapGet("/vision-native/{name}/info", async (string name, LarisVMS.Web.Services.VisionNativeDistributor distributor,
+// Each node gets the copy for its own platform (Windows .dll, Linux .so); a copy the server doesn't
+// have yet is fetched in the background, and the node asks again later.
+nodesApi.MapGet("/vision-native/{name}/info", async (string name, HttpContext ctx, LarisVMS.Web.Services.VisionNativeDistributor distributor,
     ISigningKeyService signing, CancellationToken ct) =>
 {
     if (!LarisVMS.Web.Services.VisionNativeDistributor.IsKnown(name)) return Results.NotFound();
-    var info = distributor.GetInfo(name);
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    var info = distributor.GetInfo(name, node.Platform ?? LarisVMS.Core.PlatformId.Legacy);
     if (info is null) return Results.NotFound();
     var signature = await signing.SignAsync(UpdateSignature.NativePayload(info.Name, info.Sha256), ct);
     return Results.Json(info with { Signature = signature.Signature, SigningKeyPem = signature.PublicKeyPem });
 });
 
-nodesApi.MapGet("/vision-native/{name}", (string name) =>
+nodesApi.MapGet("/vision-native/{name}", (string name, HttpContext ctx) =>
 {
     if (!LarisVMS.Web.Services.VisionNativeDistributor.IsKnown(name)) return Results.NotFound();
-    var stream = LarisVMS.Web.Services.VisionNativeDistributor.Open(name);
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    var stream = LarisVMS.Web.Services.VisionNativeDistributor.Open(name, node.Platform ?? LarisVMS.Core.PlatformId.Legacy);
     return stream is null ? Results.NotFound() : Results.Stream(stream, "application/octet-stream");
 });
 
@@ -1331,17 +1372,19 @@ proxiesApi.MapPost("/heartbeat", async (HttpContext ctx, ProxyHeartbeatRequest r
 
     // ── Auto-update check ────────────────────────────────────────────────
     // Same global-only gate (the Nodes page's NodeAutoUpdate.Enabled) and same approval queue as
-    // recorder nodes — a proxy build is just a NodeBuildVersion with Platform "proxy-win-x64",
-    // registered as Pending by every `deploy.ps1 -BuildProxy` run and only offered once approved.
+    // recorder nodes — a proxy build is just a NodeBuildVersion whose Platform is "proxy-" plus the
+    // proxy's OS ("proxy-win-x64", "proxy-linux-x64"), registered as Pending and only offered once
+    // approved. A proxy registered before platforms were stored is a Windows one.
     ProxyUpdateInfoDto? updateAvailable = null;
     if (await settings.GetAsync("NodeAutoUpdate.Enabled", true, ct: ct))
     {
-        var latestBuild = await nodeBuildService.GetLatestForPlatformAsync("proxy-win-x64", ct);
+        var proxyPlatform = LarisVMS.Core.PlatformId.ForProxy(proxy.Platform ?? LarisVMS.Core.PlatformId.Legacy);
+        var latestBuild = await nodeBuildService.GetLatestForPlatformAsync(proxyPlatform, ct);
         if (latestBuild is not null && NodeVersionComparer.IsNewer(latestBuild.Version, request.Version))
         {
             var baseUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
             var signature = await signing.SignAsync(
-                UpdateSignature.UpdatePayload("proxy-win-x64", latestBuild.Version, latestBuild.Sha256, null), ct);
+                UpdateSignature.UpdatePayload(proxyPlatform, latestBuild.Version, latestBuild.Sha256, null), ct);
             updateAvailable = new ProxyUpdateInfoDto(latestBuild.Version,
                 $"{baseUrl}/api/proxies/download/{latestBuild.Id}", latestBuild.Sha256, latestBuild.SizeBytes,
                 signature.Signature, signature.PublicKeyPem, latestBuild.PublisherSignature);
@@ -1360,7 +1403,8 @@ proxiesApi.MapGet("/download/{buildId:guid}", async (Guid buildId, INodeBuildSer
 {
     var build = await nodeBuildService.GetDownloadInfoAsync(buildId, ct);
     if (build is null || !File.Exists(build.FilePath)) return Results.NotFound();
-    return Results.File(build.FilePath, "application/octet-stream", "LarisVMS.Proxy.exe");
+    return Results.File(build.FilePath, "application/octet-stream",
+        LarisVMS.Core.ExecutableName.For(LarisVMS.Core.ExecutableName.Proxy, build.Platform));
 });
 
 proxiesApi.MapGet("/config", async (HttpContext ctx, IProxyService proxyService, CancellationToken ct) =>
@@ -3561,7 +3605,7 @@ var exportDownload = async (
     await auditService.LogAsync("Export.Download",
         ctx.User.ActorId(),
         ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(),
-        Path.GetFileName(info.FilePath), ct);
+        LarisVMS.Core.ForeignPath.GetFileName(info.FilePath), ct);
 
     var token = MediaToken.IssueForExportDownload(exportItemId, info.FilePath, info.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
     var nodeUri = $"http://{info.NodeIp}:{info.NodeLivePort}/export-file/{exportItemId}" +
@@ -3592,7 +3636,8 @@ var exportDownload = async (
         return Results.StatusCode((int)nodeResponse.StatusCode);
     }
 
-    var fileName = Path.GetFileName(info.FilePath);
+    // The node's path: a Windows one on a Linux server (or the reverse) still yields just the name.
+    var fileName = LarisVMS.Core.ForeignPath.GetFileName(info.FilePath);
     return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "video/mp4", fileDownloadName: fileName);
 };
 app.MapGet("/export-download/{exportItemId:guid}", exportDownload).RequireAuthorization("Exports.View");
@@ -4087,6 +4132,30 @@ static async Task ProxyMotionZoneScoresAsync(WebSocket node, WebSocket browser, 
     {
         await CloseRelayAsync(node, browser);
     }
+}
+
+// Adds an operator config file (Linux: /etc/larisvms/appsettings.Production.json) right after the
+// host's own appsettings*.json sources, so it overrides them but environment variables and the
+// command line still override it — the same precedence appsettings.Production.json beside the program
+// has on Windows.
+static void InsertAfterAppSettings(ConfigurationManager configuration, string path)
+{
+    var source = new Microsoft.Extensions.Configuration.Json.JsonConfigurationSource
+    {
+        Path = path,
+        Optional = true,
+        ReloadOnChange = true,
+    };
+    source.ResolveFileProvider();
+    var sources = configuration.Sources;
+    var lastAppSettings = -1;
+    for (var i = 0; i < sources.Count; i++)
+    {
+        if (sources[i] is Microsoft.Extensions.Configuration.Json.JsonConfigurationSource { Path: { } p }
+            && Path.GetFileName(p).StartsWith("appsettings", StringComparison.OrdinalIgnoreCase))
+            lastAppSettings = i;
+    }
+    sources.Insert(lastAppSettings + 1, source);
 }
 
 void EnsureWritableDirectory(string path)

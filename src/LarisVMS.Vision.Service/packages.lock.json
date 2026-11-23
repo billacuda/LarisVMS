@@ -2,6 +2,12 @@
   "version": 2,
   "dependencies": {
     "net10.0": {
+      "Intel.ML.OnnxRuntime.EP.OpenVINO": {
+        "type": "Direct",
+        "requested": "[1.8.1, )",
+        "resolved": "1.8.1",
+        "contentHash": "PXJGT1BglS7Sc3Qt99RwO1ZvyE7ToX89uSd3tPTKEo2L0Jjp0WJIbNmX9Gxa3vh9Jp87w49WbNAQ49/9JOy/XA=="
+      },
       "Microsoft.AI.DirectML": {
         "type": "Direct",
         "requested": "[1.15.4, )",
@@ -10,21 +16,30 @@
       },
       "Microsoft.ML.OnnxRuntime.DirectML": {
         "type": "Direct",
-        "requested": "[1.23.0, )",
-        "resolved": "1.23.0",
-        "contentHash": "zABy69z74iSy05blZpfFsm+3IETjJniH1hDwzAkSyrjKW96yHnEQ1zd1P+LNmuQWqnLkx5LOKQQ487ndsxTX6g==",
+        "requested": "[1.24.4, )",
+        "resolved": "1.24.4",
+        "contentHash": "rXEy9biJdgr55TdDaHrhl35K0FRXRCbvyRUv4S4C3jTxyxrqSh8YcEp5bzw4S9UlcqQKNfpb3sE+VWvO2DZY6A==",
         "dependencies": {
           "Microsoft.AI.DirectML": "1.15.4",
-          "Microsoft.ML.OnnxRuntime.Managed": "1.23.0"
+          "Microsoft.ML.OnnxRuntime.Managed": "1.24.4"
+        }
+      },
+      "Microsoft.ML.OnnxRuntime.Gpu.Linux": {
+        "type": "Direct",
+        "requested": "[1.24.4, )",
+        "resolved": "1.24.4",
+        "contentHash": "IxCsNuTv6OWDDNT58fG/qt33xqSQ1zL4i4o+6LEOw8bqrYh/cVP/RvozSUZ9a+JHey48/+pg+VPkWrUpvfuOPw==",
+        "dependencies": {
+          "Microsoft.ML.OnnxRuntime.Managed": "1.24.4"
         }
       },
       "Microsoft.ML.OnnxRuntime.Gpu.Windows": {
         "type": "Direct",
-        "requested": "[1.23.2, )",
-        "resolved": "1.23.2",
-        "contentHash": "qOU3DVcxq4XalFV3wlrNrdatYWufIqvg8FZqVC3LS2rFPoTfl++xpMC2nnaxB2Wc5jrpDb2izrcDsQatCyjVnA==",
+        "requested": "[1.24.4, )",
+        "resolved": "1.24.4",
+        "contentHash": "R+QaUibLAZ51Pj8pPeJb8KdxHisJv2u7vdHXHFx8xU35UD+Auywf8XE32UwXdh6imKuoSj9/Q/0xoX5ndUnYsg==",
         "dependencies": {
-          "Microsoft.ML.OnnxRuntime.Managed": "1.23.2"
+          "Microsoft.ML.OnnxRuntime.Managed": "1.24.4"
         }
       },
       "Microsoft.NET.ILLink.Tasks": {
@@ -64,7 +79,10 @@
         "contentHash": "hyJB4UlpAi19Xr9AXzu2NuagKC4lPfHObNMEAA0HmqFz2rX7wKgzeYzO/jM/eBHDhnUGFFEjk5cOoJaxqg5J4A=="
       },
       "larisvms.core": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "System.Security.Cryptography.ProtectedData": "[10.0.15, )"
+        }
       },
       "larisvms.media": {
         "type": "Project",
@@ -77,7 +95,8 @@
         "dependencies": {
           "Google.Protobuf": "[3.29.3, )",
           "LarisVMS.Media": "[1.0.0, )",
-          "Microsoft.ML.OnnxRuntime": "[1.23.2, )",
+          "Microsoft.ML.OnnxRuntime": "[1.24.4, )",
+          "SkiaSharp.NativeAssets.Linux.NoDependencies": "[3.119.1, )",
           "YoloDotNet": "[4.2.0, )"
         }
       },
@@ -89,21 +108,33 @@
       },
       "Microsoft.ML.OnnxRuntime": {
         "type": "CentralTransitive",
-        "requested": "[1.23.2, )",
-        "resolved": "1.23.2",
-        "contentHash": "849xImRO0vxDH7DNlg/FAVGExKfjN1r2CIZevZGI5JQCoOj+0T23ShqPEgu5mLTwElot5X7V0qkO0jUz/yJZbA==",
+        "requested": "[1.24.4, )",
+        "resolved": "1.24.4",
+        "contentHash": "895huFBVrZkZEGjlsxBSZD3p6D32Cdz6q8DM9UcUps2YKFYdFR8TefaTggFBUTYlvcSyfNTpmOOU/ZkeL69izw==",
         "dependencies": {
-          "Microsoft.ML.OnnxRuntime.Managed": "1.23.2"
+          "Microsoft.ML.OnnxRuntime.Managed": "1.24.4"
         }
       },
       "Microsoft.ML.OnnxRuntime.Managed": {
         "type": "CentralTransitive",
-        "requested": "[1.23.2, )",
-        "resolved": "1.23.2",
-        "contentHash": "HtlQuzmVrqhnkmwfmkQ+2re8xPxtVmeLRQaYSJ3pXfzKs4b36+yBfa/LnDuzfX1bGcyWn/McKxmbY87TCAmo1Q==",
+        "requested": "[1.24.4, )",
+        "resolved": "1.24.4",
+        "contentHash": "e5jsEo0HcCKDMkuRsMSievKoMv10Odv4MGmxbCin8SEm4Pto1qTpwti47xRwMtk9I/zVvfAiFIWquOq/0+22DA==",
         "dependencies": {
           "System.Numerics.Tensors": "9.0.0"
         }
+      },
+      "SkiaSharp.NativeAssets.Linux.NoDependencies": {
+        "type": "CentralTransitive",
+        "requested": "[3.119.1, )",
+        "resolved": "3.119.1",
+        "contentHash": "5jj6gBCe4K6TLnIERBXZfmUNE0TUyeTaF28RCxdCgIDVDaCAbHwEbk99eNYRFem/ubW/hKdvayZBOt6PaDL05g=="
+      },
+      "System.Security.Cryptography.ProtectedData": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.15, )",
+        "resolved": "10.0.15",
+        "contentHash": "AG49oTxB0R4YQJzeIIHRgqyaI3SOT8Q8vEfGUcju2WxOvsBkDJU4FKTQ8gYQAYCxmHOHqyJL0UDGcCf8nzRoiw=="
       },
       "YoloDotNet": {
         "type": "CentralTransitive",
@@ -115,24 +146,39 @@
         }
       }
     },
-    "net10.0/win-x64": {
+    "net10.0/linux-x64": {
+      "Intel.ML.OnnxRuntime.EP.OpenVINO": {
+        "type": "Direct",
+        "requested": "[1.8.1, )",
+        "resolved": "1.8.1",
+        "contentHash": "PXJGT1BglS7Sc3Qt99RwO1ZvyE7ToX89uSd3tPTKEo2L0Jjp0WJIbNmX9Gxa3vh9Jp87w49WbNAQ49/9JOy/XA=="
+      },
       "Microsoft.ML.OnnxRuntime.DirectML": {
         "type": "Direct",
-        "requested": "[1.23.0, )",
-        "resolved": "1.23.0",
-        "contentHash": "zABy69z74iSy05blZpfFsm+3IETjJniH1hDwzAkSyrjKW96yHnEQ1zd1P+LNmuQWqnLkx5LOKQQ487ndsxTX6g==",
+        "requested": "[1.24.4, )",
+        "resolved": "1.24.4",
+        "contentHash": "rXEy9biJdgr55TdDaHrhl35K0FRXRCbvyRUv4S4C3jTxyxrqSh8YcEp5bzw4S9UlcqQKNfpb3sE+VWvO2DZY6A==",
         "dependencies": {
           "Microsoft.AI.DirectML": "1.15.4",
-          "Microsoft.ML.OnnxRuntime.Managed": "1.23.0"
+          "Microsoft.ML.OnnxRuntime.Managed": "1.24.4"
+        }
+      },
+      "Microsoft.ML.OnnxRuntime.Gpu.Linux": {
+        "type": "Direct",
+        "requested": "[1.24.4, )",
+        "resolved": "1.24.4",
+        "contentHash": "IxCsNuTv6OWDDNT58fG/qt33xqSQ1zL4i4o+6LEOw8bqrYh/cVP/RvozSUZ9a+JHey48/+pg+VPkWrUpvfuOPw==",
+        "dependencies": {
+          "Microsoft.ML.OnnxRuntime.Managed": "1.24.4"
         }
       },
       "Microsoft.ML.OnnxRuntime.Gpu.Windows": {
         "type": "Direct",
-        "requested": "[1.23.2, )",
-        "resolved": "1.23.2",
-        "contentHash": "qOU3DVcxq4XalFV3wlrNrdatYWufIqvg8FZqVC3LS2rFPoTfl++xpMC2nnaxB2Wc5jrpDb2izrcDsQatCyjVnA==",
+        "requested": "[1.24.4, )",
+        "resolved": "1.24.4",
+        "contentHash": "R+QaUibLAZ51Pj8pPeJb8KdxHisJv2u7vdHXHFx8xU35UD+Auywf8XE32UwXdh6imKuoSj9/Q/0xoX5ndUnYsg==",
         "dependencies": {
-          "Microsoft.ML.OnnxRuntime.Managed": "1.23.2"
+          "Microsoft.ML.OnnxRuntime.Managed": "1.24.4"
         }
       },
       "SkiaSharp.NativeAssets.macOS": {
@@ -147,12 +193,79 @@
       },
       "Microsoft.ML.OnnxRuntime": {
         "type": "CentralTransitive",
-        "requested": "[1.23.2, )",
-        "resolved": "1.23.2",
-        "contentHash": "849xImRO0vxDH7DNlg/FAVGExKfjN1r2CIZevZGI5JQCoOj+0T23ShqPEgu5mLTwElot5X7V0qkO0jUz/yJZbA==",
+        "requested": "[1.24.4, )",
+        "resolved": "1.24.4",
+        "contentHash": "895huFBVrZkZEGjlsxBSZD3p6D32Cdz6q8DM9UcUps2YKFYdFR8TefaTggFBUTYlvcSyfNTpmOOU/ZkeL69izw==",
         "dependencies": {
-          "Microsoft.ML.OnnxRuntime.Managed": "1.23.2"
+          "Microsoft.ML.OnnxRuntime.Managed": "1.24.4"
         }
+      },
+      "SkiaSharp.NativeAssets.Linux.NoDependencies": {
+        "type": "CentralTransitive",
+        "requested": "[3.119.1, )",
+        "resolved": "3.119.1",
+        "contentHash": "5jj6gBCe4K6TLnIERBXZfmUNE0TUyeTaF28RCxdCgIDVDaCAbHwEbk99eNYRFem/ubW/hKdvayZBOt6PaDL05g=="
+      }
+    },
+    "net10.0/win-x64": {
+      "Intel.ML.OnnxRuntime.EP.OpenVINO": {
+        "type": "Direct",
+        "requested": "[1.8.1, )",
+        "resolved": "1.8.1",
+        "contentHash": "PXJGT1BglS7Sc3Qt99RwO1ZvyE7ToX89uSd3tPTKEo2L0Jjp0WJIbNmX9Gxa3vh9Jp87w49WbNAQ49/9JOy/XA=="
+      },
+      "Microsoft.ML.OnnxRuntime.DirectML": {
+        "type": "Direct",
+        "requested": "[1.24.4, )",
+        "resolved": "1.24.4",
+        "contentHash": "rXEy9biJdgr55TdDaHrhl35K0FRXRCbvyRUv4S4C3jTxyxrqSh8YcEp5bzw4S9UlcqQKNfpb3sE+VWvO2DZY6A==",
+        "dependencies": {
+          "Microsoft.AI.DirectML": "1.15.4",
+          "Microsoft.ML.OnnxRuntime.Managed": "1.24.4"
+        }
+      },
+      "Microsoft.ML.OnnxRuntime.Gpu.Linux": {
+        "type": "Direct",
+        "requested": "[1.24.4, )",
+        "resolved": "1.24.4",
+        "contentHash": "IxCsNuTv6OWDDNT58fG/qt33xqSQ1zL4i4o+6LEOw8bqrYh/cVP/RvozSUZ9a+JHey48/+pg+VPkWrUpvfuOPw==",
+        "dependencies": {
+          "Microsoft.ML.OnnxRuntime.Managed": "1.24.4"
+        }
+      },
+      "Microsoft.ML.OnnxRuntime.Gpu.Windows": {
+        "type": "Direct",
+        "requested": "[1.24.4, )",
+        "resolved": "1.24.4",
+        "contentHash": "R+QaUibLAZ51Pj8pPeJb8KdxHisJv2u7vdHXHFx8xU35UD+Auywf8XE32UwXdh6imKuoSj9/Q/0xoX5ndUnYsg==",
+        "dependencies": {
+          "Microsoft.ML.OnnxRuntime.Managed": "1.24.4"
+        }
+      },
+      "SkiaSharp.NativeAssets.macOS": {
+        "type": "Transitive",
+        "resolved": "3.119.1",
+        "contentHash": "6hR3BdLhApjDxR1bFrJ7/lMydPfI01s3K+3WjIXFUlfC0MFCFCwRzv+JtzIkW9bDXs7XUVQS+6EVf0uzCasnGQ=="
+      },
+      "SkiaSharp.NativeAssets.Win32": {
+        "type": "Transitive",
+        "resolved": "3.119.1",
+        "contentHash": "8C4GSXVJqSr0y3Tyyv5jz6MJSTVUyYkMjeKrzK+VyZPGLo89MNoUEclVuYahzOCDdtbfXrd2HtxXfDuvoSXrUw=="
+      },
+      "Microsoft.ML.OnnxRuntime": {
+        "type": "CentralTransitive",
+        "requested": "[1.24.4, )",
+        "resolved": "1.24.4",
+        "contentHash": "895huFBVrZkZEGjlsxBSZD3p6D32Cdz6q8DM9UcUps2YKFYdFR8TefaTggFBUTYlvcSyfNTpmOOU/ZkeL69izw==",
+        "dependencies": {
+          "Microsoft.ML.OnnxRuntime.Managed": "1.24.4"
+        }
+      },
+      "SkiaSharp.NativeAssets.Linux.NoDependencies": {
+        "type": "CentralTransitive",
+        "requested": "[3.119.1, )",
+        "resolved": "3.119.1",
+        "contentHash": "5jj6gBCe4K6TLnIERBXZfmUNE0TUyeTaF28RCxdCgIDVDaCAbHwEbk99eNYRFem/ubW/hKdvayZBOt6PaDL05g=="
       }
     }
   }

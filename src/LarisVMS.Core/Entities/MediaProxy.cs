@@ -40,6 +40,11 @@ public class MediaProxy
 
     public bool Enabled { get; set; } = true;
     public string? Version { get; set; }
+
+    /// <summary>The proxy's OS platform ("win-x64", "linux-x64") as it reported at registration; its
+    /// update builds are registered under <c>PlatformId.ForProxy</c> of this. Null for a proxy
+    /// registered before platforms were stored, which is a Windows one.</summary>
+    public string? Platform { get; set; }
     public DateTime? LastSeenAt { get; set; }
     public string? LastIpAddress { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

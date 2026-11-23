@@ -1,0 +1,25 @@
+# LarisVMS media proxy. Pair it with: sudo larisvms-proxy setup --server-url <url> --registration-key <key>
+# Settings: /etc/larisvms/proxy.env (written by setup).
+[Unit]
+Description=LarisVMS Media Proxy
+Documentation=https://github.com/billacuda/LarisVMS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=larisvms
+Group=larisvms
+WorkingDirectory=/opt/larisvms/proxy
+ExecStart=/opt/larisvms/proxy/LarisVMS.Proxy
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+EnvironmentFile=-/etc/larisvms/proxy.env
+Restart=always
+RestartSec=60
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,65 @@
+#!/bin/sh
+# LarisVMS @KIND@: after install or upgrade (deb postinst, rpm %post). build-linux-packages.ps1 fills
+# in @KIND@ (web, node, or proxy).
+set -e
+KIND=@KIND@
+UNIT="larisvms-$KIND"
+
+# Opens a port ("8444/tcp") in firewalld or ufw, whichever is active, and records it so removing
+# the package closes it again.
+open_port() {
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+        firewall-cmd --permanent --add-port="$1" >/dev/null 2>&1 || return 0
+        firewall-cmd --reload >/dev/null 2>&1 || true
+    elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+        ufw allow "$1" >/dev/null 2>&1 || return 0
+    else
+        return 0
+    fi
+    grep -qx "$1" "/etc/larisvms/$KIND.firewall" 2>/dev/null || echo "$1" >> "/etc/larisvms/$KIND.firewall"
+}
+
+install -d -o larisvms -g larisvms -m 0750 /var/lib/larisvms /var/log/larisvms /etc/larisvms
+
+if [ "$KIND" = node ]; then
+    # AI detection models: drop .onnx files here (the node also caches the YOLOX models it fetches
+    # from the server here). The Windows MSI creates C:\ProgramData\LarisVMS\models the same way.
+    install -d -o larisvms -g larisvms -m 0750 /var/lib/larisvms/models
+fi
+
+if [ "$KIND" = node ] && [ -d /opt/larisvms/node/onnxruntime-backends/cuda ]; then
+    # The node downloads the CUDA provider into this folder itself (ONNX Runtime loads it from beside
+    # libonnxruntime.so); only the Vision Service, which also runs as larisvms, loads from it.
+    chown larisvms:larisvms /opt/larisvms/node/onnxruntime-backends/cuda
+fi
+
+# No systemd (a container image build): nothing more to do.
+[ -d /run/systemd/system ] || exit 0
+systemctl daemon-reload
+
+if [ "$KIND" != web ]; then
+    # The root helper that installs the updates this service stages (LarisVMS.NodeUpdater --linux-apply).
+    systemctl enable --now "$UNIT-update.path" >/dev/null 2>&1 || true
+fi
+
+case "$KIND" in
+    web)
+        port=$(sed -n 's/^[[:space:]]*Kestrel__HttpsPort=["]\{0,1\}\([0-9][0-9]*\).*/\1/p' /etc/larisvms/web.env 2>/dev/null | tail -n 1)
+        port=${port:-8444}
+        open_port "$port/tcp"
+        open_port "$port/udp"
+        systemctl enable "$UNIT" >/dev/null 2>&1 || true
+        systemctl restart "$UNIT"
+        echo "LarisVMS Web is starting. Open https://$(hostname -f 2>/dev/null || hostname):$port to finish setting it up."
+        ;;
+    *)
+        if [ -f "/var/lib/larisvms/$KIND.config" ] || [ -f /var/lib/larisvms/registration.key ]; then
+            systemctl enable "$UNIT" >/dev/null 2>&1 || true
+            systemctl restart "$UNIT"
+        else
+            echo "Pair this $KIND with the server: sudo larisvms-$KIND setup --server-url <url> --registration-key <key>"
+        fi
+        ;;
+esac
+
+exit 0

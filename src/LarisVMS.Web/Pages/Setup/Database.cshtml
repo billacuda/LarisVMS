@@ -37,7 +37,7 @@
             <input asp-for="DatabaseName" class="form-control" />
         </div>
         <div class="mb-3">
-            <label class="form-label" asp-for="Username">@L["setup.database.sqlLoginOptionalBlankUses"]</label>
+            <label class="form-label" asp-for="Username">@(OperatingSystem.IsWindows() ? L["setup.database.sqlLoginOptionalBlankUses"] : L["setup.database.sqlLoginLinux"])</label>
             <input asp-for="Username" class="form-control" />
         </div>
         <div class="mb-3">

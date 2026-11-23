@@ -22,22 +22,30 @@ namespace LarisVMS.Proxy;
 /// here is a brief drop of in-flight live/playback connections while the service restarts — the same
 /// short interruption a node update already causes, and browsers reconnect through the fallback chain
 /// (backup proxy → direct-to-node → central) in the meantime.
+///
+/// On Linux the proxy runs as the unprivileged larisvms user, so it stages the verified binary and
+/// writes a <see cref="LinuxUpdateRequest"/>; the root helper (larisvms-proxy-update.path, running
+/// <c>LarisVMS.NodeUpdater --linux-apply --service larisvms-proxy</c>) installs it and restarts the unit.
 /// </summary>
 public class ProxyUpdateService(ProxyConfig config, ILogger log, IHostApplicationLifetime lifetime,
     HttpMessageHandler? httpHandler = null)
 {
-    private static readonly string UpdateDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "update");
+    // Its own folder, not the node's "update": a node and a proxy on one machine each recreate their
+    // folder for every download, which would otherwise delete the other's staged files.
+    internal static readonly string UpdateDir = Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "update-proxy");
 
-    private static readonly string StagedPath = Path.Combine(UpdateDir, "LarisVMS.Proxy.exe");
+    private static readonly string StagedPath = Path.Combine(UpdateDir, LarisVMS.Core.ExecutableName.For(LarisVMS.Core.ExecutableName.Proxy));
 
     // Published alongside LarisVMS.Proxy.exe by build-proxy.ps1 and copied into the same install
     // directory by install-proxy.ps1 — always sits next to the currently-running binary. Reuses the
     // recorder node's updater verbatim: it is already service-name-parameterised (--service), and its
     // wait-for-stopped / swap / start-again / re-apply-failure-recovery steps are all generic sc.exe.
-    private static readonly string UpdaterPath = Path.Combine(AppContext.BaseDirectory, "LarisVMS.NodeUpdater.exe");
+    private static readonly string UpdaterPath = Path.Combine(AppContext.BaseDirectory, LarisVMS.Core.ExecutableName.For(LarisVMS.Core.ExecutableName.Updater));
 
     private const string ServiceName = "LarisVMSProxy";
+
+    /// <summary>The systemd unit on Linux (larisvms-proxy.service).</summary>
+    public const string LinuxServiceName = "larisvms-proxy";
 
     /// <summary>Guards against <c>ProxyWorker</c>'s loop re-triggering an update while one is already
     /// downloading/verifying. Left true after a successful <see cref="ApplyWindows"/> launch
@@ -91,7 +99,10 @@ public class ProxyUpdateService(ProxyConfig config, ILogger log, IHostApplicatio
             }
 
             log.LogInformation("Checksum verified. Applying update to {Version}...", update.Version);
-            ApplyWindows();
+            if (OperatingSystem.IsLinux())
+                ApplyLinux(update);
+            else
+                ApplyWindows();
             return true;
         }
         catch (Exception ex)
@@ -101,6 +112,40 @@ public class ProxyUpdateService(ProxyConfig config, ILogger log, IHostApplicatio
             IsApplying = false;
             return false;
         }
+    }
+
+    /// <summary>Linux: the verified binary is staged; the root helper installs it and restarts this
+    /// service (see <see cref="LinuxUpdateRequest"/>).</summary>
+    private void ApplyLinux(ProxyUpdateInfoDto update)
+    {
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(StagedPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        new LinuxUpdateRequest
+        {
+            Platform = LarisVMS.Core.PlatformId.ForProxy(LarisVMS.Core.PlatformId.Current),
+            Version = update.Version,
+            Sha256 = update.Sha256,
+            PublisherSignature = update.PublisherSignature,
+        }.WriteTo(UpdateDir);
+        log.LogInformation("Update {Version} staged; the update helper (larisvms-proxy-update) installs it and restarts this service.", update.Version);
+        _ = GiveUpIfNotAppliedAsync(update.Version);
+    }
+
+    /// <summary>When nothing picks the request up (the helper's units aren't installed), says so and
+    /// lets the next offer try again.</summary>
+    private async Task GiveUpIfNotAppliedAsync(string version)
+    {
+        await Task.Delay(TimeSpan.FromMinutes(5));
+        var request = Path.Combine(UpdateDir, LinuxUpdateRequest.FileName);
+        if (!File.Exists(request)) return;
+        log.LogError("Update {Version} was staged 5 minutes ago but the update helper never installed it. Check that " +
+            "larisvms-proxy-update.path is enabled (systemctl status larisvms-proxy-update.path) and see updater-*.log in {LogDir}.",
+            version, LarisVMS.Core.LarisPaths.LogRoot);
+        try { File.Delete(request); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* replaced by the next attempt */ }
+        TryCleanStaged();
+        IsApplying = false;
     }
 
     private void ApplyWindows()
@@ -113,7 +158,7 @@ public class ProxyUpdateService(ProxyConfig config, ILogger log, IHostApplicatio
         }
 
         var currentBinary = Process.GetCurrentProcess().MainModule?.FileName
-            ?? Path.Combine(AppContext.BaseDirectory, "LarisVMS.Proxy.exe");
+            ?? Path.Combine(AppContext.BaseDirectory, LarisVMS.Core.ExecutableName.For(LarisVMS.Core.ExecutableName.Proxy));
 
         // Swap while still running (see InPlaceBinarySwap), so the updater only has to restart the
         // service. Falls back to the updater doing the swap after the stop if the rename fails.
@@ -155,7 +200,7 @@ public class ProxyUpdateService(ProxyConfig config, ILogger log, IHostApplicatio
         log.LogWarning("A proxy update downloaded {When:u} was never applied (the staged binary is still at {Path}). " +
             "See updater-*.log in {LogDir} for why. It will be downloaded again on the next update offer.",
             File.GetLastWriteTimeUtc(StagedPath), StagedPath,
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs"));
+            LarisVMS.Core.LarisPaths.LogRoot);
         try { File.Delete(StagedPath); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* replaced by the next download */ }
     }

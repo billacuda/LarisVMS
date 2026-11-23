@@ -2,9 +2,9 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <!-- Published with -r win-x64. Restoring that target on every restore (the IDE's background
+    <!-- Published with -r win-x64 and -r linux-x64. Restoring those targets on every restore (the IDE's background
          one included) keeps a plain restore from dropping it mid-publish (NETSDK1047). -->
-    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Version>0.222.2</Version>
@@ -75,6 +75,12 @@
     <PackageReference Include="Microsoft.AspNetCore.Identity.UI" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" />
+    <!-- The localized UI needs ICU (culture-aware dates and numbers), so unlike the node and proxy this
+         app can't run with InvariantGlobalization. A linux-x64 publish ships ICU beside the program
+         (libicu*.so.72) and loads it from there, so the .deb/.rpm needs no libicu dependency. The
+         package holds only Linux files, so a Windows publish is unchanged and keeps Windows' own ICU. -->
+    <PackageReference Include="Microsoft.ICU.ICU4C.Runtime.linux-x64" />
     <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
@@ -87,6 +93,10 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'linux-x64'">
+    <RuntimeHostConfigurationOption Include="System.Globalization.AppLocalIcu" Value="72.1.0.3" />
   </ItemGroup>
 
 </Project>

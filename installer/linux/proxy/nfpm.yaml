@@ -1,0 +1,64 @@
+# nFPM definition for the larisvms-proxy .deb and .rpm. build-linux-packages.ps1 fills in the ${LARISVMS_*}
+# placeholders below (nFPM won't expand them in contents), and appends the program files (with their modes) to the
+# end of contents, so keep contents last.
+name: larisvms-proxy
+arch: amd64
+platform: linux
+version: ${LARISVMS_VERSION}
+release: "1"
+section: video
+priority: optional
+maintainer: ${LARISVMS_MAINTAINER}
+vendor: LarisVMS
+homepage: https://github.com/billacuda/LarisVMS
+license: Apache-2.0
+description: |-
+  LarisVMS media proxy
+  Relays live view and playback between browsers and LarisVMS recorder nodes.
+  Pair it with: sudo larisvms-proxy setup --server-url <url> --registration-key <key>
+
+scripts:
+  preinstall: ${LARISVMS_SCRIPTS}/preinstall.sh
+  postinstall: ${LARISVMS_SCRIPTS}/postinstall.sh
+  preremove: ${LARISVMS_SCRIPTS}/preremove.sh
+  postremove: ${LARISVMS_SCRIPTS}/postremove.sh
+
+overrides:
+  deb:
+    depends:
+      - libc6
+      - libgcc-s1 | libgcc1
+      - libstdc++6
+      - libssl3 | libssl3t64 | libssl1.1
+      - zlib1g
+      - ca-certificates
+  rpm:
+    depends:
+      - glibc
+      - libgcc
+      - libstdc++
+      - openssl-libs
+      - zlib
+      - ca-certificates
+
+contents:
+  - src: ${LARISVMS_LINUX}/proxy/larisvms-proxy.service
+    dst: /usr/lib/systemd/system/larisvms-proxy.service
+    file_info:
+      mode: 0644
+  - src: ${LARISVMS_LINUX}/proxy/larisvms-proxy-update.path
+    dst: /usr/lib/systemd/system/larisvms-proxy-update.path
+    file_info:
+      mode: 0644
+  - src: ${LARISVMS_LINUX}/proxy/larisvms-proxy-update.service
+    dst: /usr/lib/systemd/system/larisvms-proxy-update.service
+    file_info:
+      mode: 0644
+  - src: ${LARISVMS_LINUX}/proxy/proxy.env
+    dst: /etc/larisvms/proxy.env
+    type: config|noreplace
+    file_info:
+      mode: 0644
+  - src: /opt/larisvms/proxy/LarisVMS.Proxy
+    dst: /usr/bin/larisvms-proxy
+    type: symlink

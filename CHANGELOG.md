@@ -7,8 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ➕ Added
+
+- **Linux packages.** The Web server, node, and media proxy now come as .deb and .rpm packages for
+  x64 Linux, running as systemd services under their own `larisvms` account. Pair a node or proxy
+  with `sudo larisvms-node setup` or `sudo larisvms-proxy setup`, which also opens the firewall. Every
+  Web package now carries node and proxy builds for both Windows and Linux, plus the CUDA library that
+  NVIDIA nodes on either system download from it, and all of a release's installers share one
+  version number.
+- **Linux CI.** A new workflow runs the tests on Linux, builds the .deb and .rpm packages, and
+  installs them on Ubuntu 22.04, 24.04, and 26.04, Debian 12 and 13, and Rocky Linux 9 and 10.
+- **`--version`.** The node, proxy, and Web server print their version with `--version`.
+- **Remove old builds.** The Builds section of the Nodes page has a **Remove old builds** button that
+  deletes every node and proxy build older than the approved one for its platform, with its files,
+  plus any stray file in the server's node-builds folder. The approved build and newer ones waiting
+  for approval are kept.
+
+### ➖ Removed
+
+- **deploy.ps1.** The old IIS deploy script is gone; install-web.ps1 replaced it. The Nodes and
+  Proxies pages no longer tell you to run it: installing or upgrading the Web server registers the
+  builds it carries.
+
+### ⚙️ Changed
+
+- **ONNX Runtime 1.24.4.** AI detection moves from ONNX Runtime 1.23 to 1.24.4, the last release
+  that still supports DirectML, so AMD GPUs on Windows keep their acceleration. NVIDIA GPUs still
+  use CUDA 12 and cuDNN 9.
+- **Intel GPUs use OpenVINO.** Nodes with an Intel GPU now run AI detection on Intel's OpenVINO
+  plugin, which ships in the node package and needs only a current Intel graphics driver. If it
+  can't start, the node falls back to DirectML, then to the CPU, and says why on the Nodes page.
+- **OpenVINO model cache.** A node saves the model OpenVINO compiles for its Intel GPU, so only the
+  first start takes a minute or more; later starts load it in seconds. It compiles again by itself
+  when the model or OpenVINO changes.
+- **Groundwork for Linux.** The Web server, nodes, and proxies now find their data, log, and
+  config folders per operating system, keep their saved secrets readable on Linux, and report disk
+  space, host load, and GPUs there. Nothing changes on Windows.
+- **Letterbox on Intel GPUs.** The node page and the detection settings recommend Letterbox over
+  Slice on Intel GPUs (OpenVINO), where Slice runs one tile at a time and uses far more CPU and GPU.
+- **Mixed Windows and Linux fleets.** One server now keeps update builds for each platform, offers
+  every node and proxy the build for its own operating system, and shows each one's OS on the Nodes
+  and Media proxies pages. **Approve all** approves a release's builds for every platform at once.
+- **NVIDIA driver check.** A node whose NVIDIA driver is too old for the bundled CUDA (570.26 on
+  Linux, 570.65 on Windows) now runs its fallback backend right away and says on the Nodes page
+  which driver it has and which it needs.
+- **Accelerator names.** A node's **Accelerator** choices now name the hardware each one runs on,
+  such as **OpenVINO (Intel)** and **CUDA (NVIDIA)**, and the Auto hint lists those same names
+  instead of just the GPU maker.
+- **AI libraries in node updates.** A pushed node update now also brings the CUDA, DirectML, and
+  OpenVINO libraries AI detection runs on, when they changed, so an updated node no longer needs the
+  installer run again to get them. Nodes check them against the build's signatures before using them.
+- **Updates on Linux.** Linux nodes and proxies take pushed updates: they check and stage the update
+  themselves, and a small root helper installs it and restarts the service.
+
 ### 🛠️ Fixed
 
+- **Hardware encoders without the GPU.** A node now uses NVIDIA, Intel, or AMD video encoding only
+  when it has that GPU. ffmpeg lists those encoders even when the hardware is missing, and choosing one
+  failed privacy-masked recording and export conversion on a machine without it.
+- **Node and proxy on one machine.** A proxy now stages its updates in its own folder, so a node and
+  a proxy on the same machine no longer delete each other's downloads.
+- **End of the setup wizard.** The last step now opens LarisVMS for the administrator it has already
+  signed in. It used to show a login page with the full menu beside it.
+- **install-web.ps1 and Linux builds.** install-web.ps1 now builds the node, and the proxy with
+  `-BuildProxy`, for both Windows and Linux with one build number (`-Platforms` picks which), and
+  bundles them the way the installers do, with their signatures and AI backends. It used to build
+  only the Windows node, so Linux nodes and proxies never got a build to approve.
+- **Installer checksums.** build-installers.ps1 no longer fails while writing SHA256SUMS.txt after
+  building the Linux packages, because nFPM's progress output no longer gets mixed into the list of
+  built files.
 - **OSV-Scanner.** The scan no longer passes `--skip-git`, which OSV-Scanner 2 removed, and it now
   grants the `actions: read` permission that version 2 needs to start, so it runs again after the
   Dependabot update.
@@ -186,11 +253,6 @@ The latest .NET 10 patch: runtime and libraries at 10.0.15.
 
 A maintenance update: a clean build and a working .NET 10 code scan.
 
-### 🔒 Security
-
-- **Small hardening.** Connecting a Gmail account in Settings → Email only ever returns you to
-  LarisVMS, and preparing a translated Help page has a time limit.
-
 ### ⚙️ Changed
 
 - **Clean build.** Release builds finish without warnings; reviewed analyzer findings are marked
@@ -198,16 +260,20 @@ A maintenance update: a clean build and a working .NET 10 code scan.
 - **.NET 10 code scan.** The scan builds again when GitHub's runner has a newer .NET SDK than the
   one the release lock files were made with.
 
+### 🔒 Security
+
+- **Small hardening.** Connecting a Gmail account in Settings → Email only ever returns you to
+  LarisVMS, and preparing a translated Help page has a time limit.
+
 ## [0.221.2] - 2026-11-14
 
 Another small security update: page text escaped everywhere, a few labels that stayed in English
 now translated, and more code scanning.
 
-### 🔒 Security
+### ⚙️ Changed
 
-- **Escaped page text.** The Activity page, Dashboard, Map, Export check, and the schedule and zone
-  editors now escape every translated label, count, and ID before showing it, like the rest of
-  their text.
+- **More code scanning.** DevSkim, ESLint (security rules), SecurityCodeScan, Semgrep, OSV-Scanner,
+  and PSScriptAnalyzer now check every push, alongside CodeQL.
 
 ### 🛠️ Fixed
 
@@ -215,10 +281,11 @@ now translated, and more code scanning.
   on the Dashboard, the sort button's tooltip on dashboard widgets, and "(floorplan)" in the map
   picker now follow your language.
 
-### ⚙️ Changed
+### 🔒 Security
 
-- **More code scanning.** DevSkim, ESLint (security rules), SecurityCodeScan, Semgrep, OSV-Scanner,
-  and PSScriptAnalyzer now check every push, alongside CodeQL.
+- **Escaped page text.** The Activity page, Dashboard, Map, Export check, and the schedule and zone
+  editors now escape every translated label, count, and ID before showing it, like the rest of
+  their text.
 
 ## [0.221.1] - 2026-11-13
 
@@ -589,16 +656,16 @@ language, from the keyboard, or with a screen reader.
   `mariadb-dump`. This is new, so for an installation that needs to be stable, use SQL Server for
   now, and please report any issues.
 
+### ⚙️ Changed
+
+- **Removing an evidence lock.** The reason now goes in a pop-up box instead of a dropdown squeezed
+  into the lock's row.
+
 ### 🔒 Security
 
 - **Database password encrypted.** A SQL login's password is no longer kept in plain text in
   `setup-generated.json`. It's encrypted for this machine, and an existing one is moved over at the
   next start.
-
-### ⚙️ Changed
-
-- **Removing an evidence lock.** The reason now goes in a pop-up box instead of a dropdown squeezed
-  into the lock's row.
 
 ## [0.218.0] - 2026-10-19
 
@@ -647,6 +714,27 @@ language, from the keyboard, or with a screen reader.
 - **Browser notifications.** Notifications reach the browser while LarisVMS is open (fully
   on-premises), or with no LarisVMS page open, through standard Web Push or your own Firebase
   project; on a computer the browser itself has to be running. Email works too.
+
+### ⚙️ Changed
+
+- **Faster database.** New indexes for the busiest node and Live queries, nightly index and
+  statistics upkeep, and old raw camera events are cleared after 30 days (adjustable under
+  Settings → Logging).
+- **Movement detection.** Whether a tracked object is moving is now judged from the shape of its
+  recent path rather than how far its centre went in 2 seconds. Anything that moves steadily counts
+  within a few frames, from a car crossing the view to a truck pulling out, because each object's
+  steps are compared with its own box wobble rather than with its size. Objects entering at
+  the edge of the picture or from behind something are judged by the side in view. Box wobble, and a
+  box that only changes shape (a potted plant, or a parked car as something passes in front of it),
+  doesn't count. Movement sensitivity (Low,
+  Normal, or High) tunes it per camera, and Movement detection → Legacy keeps the previous rule.
+- **HTTP/2 and HTTP/3.** The web server uses HTTP/2, so a browser's requests share one connection,
+  and adds HTTP/3 on Windows 11, Windows Server 2022, and later. HTTP/3 can be turned off under
+  Settings → Security. The installer also opens the HTTPS port for UDP.
+- **Export camera picker.** Cameras to export are chosen from a dropdown list instead of a row of
+  checkboxes, the same as for evidence locks.
+- **Help and on-screen wording.** Lists in the Help pages and on-screen text consistently use the
+  serial comma.
 
 ### 🛠️ Fixed
 
@@ -799,27 +887,6 @@ language, from the keyboard, or with a screen reader.
   people who can still see that node. The node installer can limit its live port to the server and
   proxies (`LIVEALLOWFROM`, or `-LiveAllowFrom`).
 
-### ⚙️ Changed
-
-- **Faster database.** New indexes for the busiest node and Live queries, nightly index and
-  statistics upkeep, and old raw camera events are cleared after 30 days (adjustable under
-  Settings → Logging).
-- **Movement detection.** Whether a tracked object is moving is now judged from the shape of its
-  recent path rather than how far its centre went in 2 seconds. Anything that moves steadily counts
-  within a few frames, from a car crossing the view to a truck pulling out, because each object's
-  steps are compared with its own box wobble rather than with its size. Objects entering at
-  the edge of the picture or from behind something are judged by the side in view. Box wobble, and a
-  box that only changes shape (a potted plant, or a parked car as something passes in front of it),
-  doesn't count. Movement sensitivity (Low,
-  Normal, or High) tunes it per camera, and Movement detection → Legacy keeps the previous rule.
-- **HTTP/2 and HTTP/3.** The web server uses HTTP/2, so a browser's requests share one connection,
-  and adds HTTP/3 on Windows 11, Windows Server 2022, and later. HTTP/3 can be turned off under
-  Settings → Security. The installer also opens the HTTPS port for UDP.
-- **Export camera picker.** Cameras to export are chosen from a dropdown list instead of a row of
-  checkboxes, the same as for evidence locks.
-- **Help and on-screen wording.** Lists in the Help pages and on-screen text consistently use the
-  serial comma.
-
 ## [0.217.0] - 2026-10-15
 
 ### ➕ Added
@@ -900,6 +967,12 @@ language, from the keyboard, or with a screen reader.
   trap over a limit, filtered by camera, category, label, color, zone, and active days and hours. They
   fire within seconds of the detection.
 
+### ⚙️ Changed
+
+- **One Nodes page.** Node builds and node settings are merged into Nodes: the current build and any waiting for approval, a build history pop-up, and auto-update and registration-key settings. Nodes moved from Settings to the sidebar, and the Settings page no longer repeats Cameras. Old links redirect.
+- **Encryption and signing settings.** The Encryption settings page is on the Settings home, and it also shows the signing key with a public key download.
+- **Dashboard thumbnails hidden.** The camera table's thumbnail option is turned off for now.
+
 ### 🛠️ Fixed
 
 - **The map forgot its view.** It now reopens where you left it, and Done editing saves where it
@@ -945,12 +1018,6 @@ language, from the keyboard, or with a screen reader.
 
 - **Updated a vulnerable cryptography package.** System.Security.Cryptography.Pkcs, used for email, is
   updated to 10.0.13 for two security advisories.
-
-### ⚙️ Changed
-
-- **One Nodes page.** Node builds and node settings are merged into Nodes: the current build and any waiting for approval, a build history pop-up, and auto-update and registration-key settings. Nodes moved from Settings to the sidebar, and the Settings page no longer repeats Cameras. Old links redirect.
-- **Encryption and signing settings.** The Encryption settings page is on the Settings home, and it also shows the signing key with a public key download.
-- **Dashboard thumbnails hidden.** The camera table's thumbnail option is turned off for now.
 
 ## [0.216.0] - 2026-10-09
 
@@ -1207,6 +1274,15 @@ language, from the keyboard, or with a screen reader.
 
 ## [0.207.0] - 2026-09-22
 
+### ➕ Added
+
+- Live-view health telemetry (stream stalls, catch-ups, decode throughput, resyncs, box alignment)
+  logged server-side instead of only to the browser console.
+- A node process health heartbeat that flags when it stalls and whether GC or thread starvation is
+  the cause.
+- Live view now recovers automatically from an unexpected playback pause instead of waiting to
+  drift out of sync.
+
 ### 🛠️ Fixed
 
 - Live view could freeze for tens of seconds and reconnect every tile at once. Caused by node-side
@@ -1219,15 +1295,6 @@ language, from the keyboard, or with a screen reader.
 - Saves on Admin → Settings → Detection and Admin → Settings → Email silently did nothing after
   the Blazor rewrite of those pages — the page reloaded stored values over the submitted ones
   before the save ran. Fixed; audited the rest of that migration and found no other pages affected.
-
-### ➕ Added
-
-- Live-view health telemetry (stream stalls, catch-ups, decode throughput, resyncs, box alignment)
-  logged server-side instead of only to the browser console.
-- A node process health heartbeat that flags when it stalls and whether GC or thread starvation is
-  the cause.
-- Live view now recovers automatically from an unexpected playback pause instead of waiting to
-  drift out of sync.
 
 ## [0.206.0] - 2026-09-18
 
@@ -1285,22 +1352,17 @@ language, from the keyboard, or with a screen reader.
 
 ## [0.202.0] - 2026-09-14
 
-### 🛠️ Fixed
-
-- Better ONNX model metadata detection. Custom models now work in Slice mode. Fixed duplicate/split
-  detections when two tiles disagreed on an object's class.
-
 ### ➕ Added
 
 - Custom ONNX models can use a faster single-pass detection mode when the model supports it, with
   automatic fallback to the safe per-tile path.
 
+### 🛠️ Fixed
+
+- Better ONNX model metadata detection. Custom models now work in Slice mode. Fixed duplicate/split
+  detections when two tiles disagreed on an object's class.
+
 ## [0.201.0] - 2026-09-13
-
-### ⚙️ Changed
-
-- Relicensed from MIT to Apache-2.0, matching sibling project SideGlance's own relicensing, so code
-  and patterns can be shared between the two freely.
 
 ### ➕ Added
 
@@ -1313,6 +1375,11 @@ language, from the keyboard, or with a screen reader.
 - Models are no longer bundled into the node build; drop them into the models folder instead.
 - The external HTTP inference backend can send raw pixels instead of JPEG for lower overhead, and
   reports a per-stage timing breakdown.
+
+### ⚙️ Changed
+
+- Relicensed from MIT to Apache-2.0, matching sibling project SideGlance's own relicensing, so code
+  and patterns can be shared between the two freely.
 
 ### ⚙️ Changed
 
@@ -1440,22 +1507,17 @@ language, from the keyboard, or with a screen reader.
 
 ## [0.189.0] - 2026-09-06
 
+### ⚙️ Changed
+
+- Hover thumbnails and AI snapshot images are now stored as WebP instead of JPEG.
+
 ### 🛠️ Fixed
 
 - Moving people/animals could be misclassified as idle by an overly strict directedness check added
   in 0.188.0; reverted to a simpler centroid-displacement check.
 - The node registration key field on Admin → Settings → Nodes rendered blank instead of masked.
 
-### ⚙️ Changed
-
-- Hover thumbnails and AI snapshot images are now stored as WebP instead of JPEG.
-
 ## [0.188.0] - 2026-09-06
-
-### ⚙️ Changed
-
-- Storage configuration (recording/archive paths) is now per recorder node instead of one global
-  setting.
 
 ### ➕ Added
 
@@ -1463,6 +1525,11 @@ language, from the keyboard, or with a screen reader.
   it, with its own retention window; playback and thumbnails work transparently from either volume.
 - Node build numbers, so a rebuild without a version bump still registers as newer for auto-update.
 - Snapshot badges now show object counts (e.g. "Human ×2").
+
+### ⚙️ Changed
+
+- Storage configuration (recording/archive paths) is now per recorder node instead of one global
+  setting.
 
 ### 🛠️ Fixed
 
@@ -1473,24 +1540,24 @@ language, from the keyboard, or with a screen reader.
 
 ## [0.187.2] - 2026-09-05
 
-### 🛠️ Fixed
-
-- Dragging the recording timeline flashed the video black between positions.
-
 ### ⚙️ Changed
 
 - Camera queries that load groups/streams together now run as split queries for performance.
 
+### 🛠️ Fixed
+
+- Dragging the recording timeline flashed the video black between positions.
+
 ## [0.187.1] - 2026-09-05
+
+### ⚙️ Changed
+
+- AI detections of people are now labeled "Human" instead of "Human — person".
 
 ### 🛠️ Fixed
 
 - A snapshot with several tagged objects now crops around all of them instead of just the
   highest-confidence one.
-
-### ⚙️ Changed
-
-- AI detections of people are now labeled "Human" instead of "Human — person".
 
 ## [0.187.0] - 2026-09-05
 
@@ -1511,16 +1578,16 @@ language, from the keyboard, or with a screen reader.
 
 ## [0.186.2] - 2026-09-05
 
+### ➕ Added
+
+- The vision log now reports a Slice camera's resolved tile geometry and per-slice
+  detection/merge counts.
+
 ### 🛠️ Fixed
 
 - On a node with TensorRT enabled, only the first camera in Slice mode worked — every other camera
   failed on every frame due to a TensorRT engine cache collision that didn't account for per-camera
   shape differences. Also fixed misleading "warm cache" logging and excessive per-frame error spam.
-
-### ➕ Added
-
-- The vision log now reports a Slice camera's resolved tile geometry and per-slice
-  detection/merge counts.
 
 ## [0.186.1] - 2026-09-05
 
@@ -1564,16 +1631,16 @@ language, from the keyboard, or with a screen reader.
 
 ## [0.182.0] - 2026-09-04
 
+### ⚙️ Changed
+
+- Camera row actions (Zones, Event tags, Schedule, Re-probe) are now emoji-only buttons with
+  tooltips.
+
 ### 🛠️ Fixed
 
 - D-FINE on a TensorRT-enabled node produced no detections at all, with nothing in any log
   (FP16 overflow). D-FINE now runs on plain CUDA by default; TensorRT is opt-in per node. Also
   fixed misleading "cold cache" logging.
-
-### ⚙️ Changed
-
-- Camera row actions (Zones, Event tags, Schedule, Re-probe) are now emoji-only buttons with
-  tooltips.
 
 ## [0.181.0] - 2026-09-04
 
@@ -1598,16 +1665,16 @@ language, from the keyboard, or with a screen reader.
 
 ## [0.179.1] - 2026-09-03
 
+### ⚙️ Changed
+
+- TensorRT's GPU workspace is now bounded instead of unconstrained.
+
 ### 🛠️ Fixed
 
 - Enabling TensorRT could stop recording and live view entirely — engine builds ran on the
   recording pipeline's own thread and starved it. Builds now run off that path, one at a time.
   Also fixed overlapping start requests tearing down in-progress builds, and a too-generous
   timeout starving the live detection overlay.
-
-### ⚙️ Changed
-
-- TensorRT's GPU workspace is now bounded instead of unconstrained.
 
 ## [0.179.0] - 2026-09-03
 
@@ -1642,15 +1709,15 @@ language, from the keyboard, or with a screen reader.
 
 ## [0.175.0] - 2026-09-02
 
-### 🛠️ Fixed
-
-- Lowering the AI detection confidence below 0.6 had no effect — a separate, fixed tracking
-  threshold silently discarded anything under it regardless of the configured confidence.
-
 ### ➕ Added
 
 - Detection cadence log line now reports what the model found vs. what survived tracking, to
   distinguish "no detection" from "detected but rejected."
+
+### 🛠️ Fixed
+
+- Lowering the AI detection confidence below 0.6 had no effect — a separate, fixed tracking
+  threshold silently discarded anything under it regardless of the configured confidence.
 
 ## [0.174.2] - 2026-09-02
 
@@ -1724,12 +1791,6 @@ language, from the keyboard, or with a screen reader.
 - Snapshots pagination above the grid as well as below.
 - Optional high-resolution snapshots.
 
-### 🛠️ Fixed
-
-- AI-detection snapshots are now cropped from the exact detected frame instead of a later
-  timestamp seek, and are no longer taken a fraction of a second late.
-- Overlapping detections on one camera now show as a single card.
-
 ### ⚙️ Changed
 
 - Node registration key is now masked.
@@ -1737,16 +1798,22 @@ language, from the keyboard, or with a screen reader.
 - FFmpeg is no longer bundled with the node — install it separately.
 - Single-camera playback hides the redundant merged timeline.
 
+### 🛠️ Fixed
+
+- AI-detection snapshots are now cropped from the exact detected frame instead of a later
+  timestamp seek, and are no longer taken a fraction of a second late.
+- Overlapping detections on one camera now show as a single card.
+
 ## [0.170.0] - 2026-08-31
+
+### ➕ Added
+
+- Deployment-wide log level setting, applied without a restart.
 
 ### ⚙️ Changed
 
 - High-resolution re-detection now runs its pixel work on the GPU instead of the CPU, cutting a
   major CPU cost on multi-camera nodes.
-
-### ➕ Added
-
-- Deployment-wide log level setting, applied without a restart.
 
 ## [0.169.1] - 2026-08-31
 
@@ -1853,15 +1920,15 @@ language, from the keyboard, or with a screen reader.
 
 ## [0.163.2] - 2026-08-30
 
-### 🛠️ Fixed
-
-- The node process could crash entirely after an ordinary HTTPS timeout talking to the web tier —
-  a cancellation-exception check incorrectly treated a timeout the same as a real shutdown.
-
 ### ➕ Added
 
 - Temporary diagnostic dump of high-res re-detection's decoded/cropped frames as JPEGs, to
   visually confirm box alignment.
+
+### 🛠️ Fixed
+
+- The node process could crash entirely after an ordinary HTTPS timeout talking to the web tier —
+  a cancellation-exception check incorrectly treated a timeout the same as a real shutdown.
 
 ## [0.163.1] - 2026-08-30
 
@@ -1962,6 +2029,19 @@ language, from the keyboard, or with a screen reader.
 
 ## [0.158.0] - 2026-08-26
 
+### ➕ Added
+
+- AI detection settings tab with a global-default + per-camera-override pattern.
+- Camera list shows which cameras have AI detection enabled and which stream.
+- Snapshots filter is now a collapsible tree instead of a flat checkbox row.
+
+### ⚙️ Changed
+
+- Replaced YOLOv9 with D-FINE as the default AI detection model (licensing).
+- Detection confidence/IoU thresholds and which stream feeds detection are now real, editable
+  settings.
+- Unified the "person detected" vocabulary between camera-native and AI detections.
+
 ### 🛠️ Fixed
 
 - Vision Service CPU usage went up, not down, after switching to D-FINE, due to unnecessary
@@ -1978,19 +2058,6 @@ language, from the keyboard, or with a screen reader.
 - Live-view tiles never showed a badge for AI-detected objects.
 - Clicking a snapshot deep link could land on a paused tile needing a manual Pause/Play click to
   actually start.
-
-### ⚙️ Changed
-
-- Replaced YOLOv9 with D-FINE as the default AI detection model (licensing).
-- Detection confidence/IoU thresholds and which stream feeds detection are now real, editable
-  settings.
-- Unified the "person detected" vocabulary between camera-native and AI detections.
-
-### ➕ Added
-
-- AI detection settings tab with a global-default + per-camera-override pattern.
-- Camera list shows which cameras have AI detection enabled and which stream.
-- Snapshots filter is now a collapsible tree instead of a flat checkbox row.
 
 ## [0.157.1] - 2026-08-25
 
@@ -2036,15 +2103,15 @@ language, from the keyboard, or with a screen reader.
 
 ## [0.156.0] - 2026-08-23
 
-### 🛠️ Fixed
-
-- Some snapshots stalled forever on Play, looping the same recovery attempt; now gives up
-  gracefully after repeated failures instead of looping indefinitely.
-
 ### ➕ Added
 
 - Snapshots search can now filter by camera group or saved view, not just single camera/all.
 - Playback timeline is taller and auto-hides on mobile.
+
+### 🛠️ Fixed
+
+- Some snapshots stalled forever on Play, looping the same recovery attempt; now gives up
+  gracefully after repeated failures instead of looping indefinitely.
 
 ## [0.155.0] - 2026-08-23
 

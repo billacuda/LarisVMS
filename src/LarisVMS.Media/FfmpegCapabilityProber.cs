@@ -20,13 +20,15 @@ public static class FfmpegCapabilityProber
     /// encoder from Node.DetectedEncodersJson has a known, finite set of values to switch on, the
     /// same reasoning PermissionCatalog gives for being a closed list rather than free text. One
     /// software fallback (libx264/libx265, present in essentially every ffmpeg build) plus the H.264/
-    /// H.265 encoder from each of the three hardware vendors the roadmap names.</summary>
+    /// H.265 encoder from each of the three hardware vendors the roadmap names, plus VAAPI, which is how
+    /// Intel and AMD GPUs encode on Linux.</summary>
     public static readonly IReadOnlyList<string> KnownEncoders =
     [
         "libx264", "libx265",
         "h264_qsv", "hevc_qsv",
         "h264_nvenc", "hevc_nvenc",
-        "h264_amf", "hevc_amf"
+        "h264_amf", "hevc_amf",
+        "h264_vaapi", "hevc_vaapi"
     ];
 
     /// <summary>Runs `ffmpeg -encoders` and parses which of <see cref="KnownEncoders"/> it lists.
@@ -60,13 +62,28 @@ public static class FfmpegCapabilityProber
             var stdout = await process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
             await process.WaitForExitAsync(timeoutCts.Token);
 
-            return ParseEncodersOutput(stdout);
+            return WithoutUnusableVaapi(ParseEncodersOutput(stdout), VaapiDevice.Path is not null);
         }
         catch (Exception) when (ct.IsCancellationRequested is false)
         {
             return [];
         }
     }
+
+    /// <summary>ffmpeg lists every hardware encoder it was built with (distribution and Windows builds
+    /// carry NVENC, QSV, and AMF), whether or not the machine has the GPU; choosing one without it fails
+    /// every privacy-masked recording and export conversion. Each family is kept only when its GPU maker
+    /// was detected: NVENC for NVIDIA, QSV for Intel, AMF for AMD. Software encoders always stay.</summary>
+    public static IReadOnlyList<string> WithoutMissingHardware(IReadOnlyList<string> encoders, bool nvidia, bool intel, bool amd) =>
+        encoders.Where(e =>
+            e.EndsWith("_nvenc", StringComparison.Ordinal) ? nvidia
+            : e.EndsWith("_qsv", StringComparison.Ordinal) ? intel
+            : !e.EndsWith("_amf", StringComparison.Ordinal) || amd).ToList();
+
+    /// <summary>ffmpeg lists its VAAPI encoders whether or not the machine has a GPU they can run on;
+    /// they're only reported when there's an Intel or AMD render node (<see cref="VaapiDevice"/>).</summary>
+    internal static IReadOnlyList<string> WithoutUnusableVaapi(IReadOnlyList<string> encoders, bool haveVaapiDevice) =>
+        haveVaapiDevice ? encoders : encoders.Where(e => !e.EndsWith("_vaapi", StringComparison.Ordinal)).ToList();
 
     /// <summary>Whether this ffmpeg build has the <c>libwebp</c> encoder — gates whether the node
     /// writes hover thumbnails and snapshot crops as WebP (smaller/faster) or falls back to JPEG.

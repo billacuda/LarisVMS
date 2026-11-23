@@ -54,7 +54,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             // client-side in node.config, never re-sent after this.
             MediaSigningKey = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
             Version = request.Version,
-            Platform = request.Platform,
+            Platform = LarisVMS.Core.PlatformId.Sanitize(request.Platform),
             // Storage/archive paths are per-node — captured here from what install-node.ps1 passed
             // (--storage-root / --archive-root). A node that registers with neither (an older
             // install-node.ps1) starts with no storage path and records nothing until an admin sets

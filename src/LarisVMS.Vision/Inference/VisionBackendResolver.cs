@@ -55,6 +55,9 @@ public static class VisionBackendResolver
     private static bool _degraded;
     private static readonly List<string> _notes = [];
 
+    /// <summary>Reads the installed NVIDIA driver version; tests replace it.</summary>
+    internal static Func<Version?> DriverVersionProbe = CudaRequirements.InstalledDriverVersion;
+
     /// <summary>Test-only override of <see cref="BackendsRoot"/>.</summary>
     internal static string? BackendsRootOverride;
 
@@ -147,14 +150,14 @@ public static class VisionBackendResolver
                 // is turned on via EngineOptions.EnableTensorRt (VisionServiceSupervisor.SetEnableTensorRt
                 // -> Vision__EnableTensorRt), not a separate backend folder.
                 "nvidia" or "tensorrt" => ResolveNvidia(logger),
-                // Explicit OpenVINO — previously only reachable via the separate backendOverride
-                // parameter above, never from a node's own AiAccelerator choice (the bug "amd" this
-                // preserves for AMD; "intel" used to fall into this same DirectML case too, which was
-                // the mislabeling AiAccelerator.OpenVino now fixes).
-                "openvino" => HasBackendFolder(VisionBackend.OpenVino)
+                // Intel GPUs (Auto on an Intel machine resolves to "intel"; "openvino" is the explicit
+                // choice) run Intel's own OpenVINO plugin on both Windows and Linux, falling back to
+                // DirectML on Windows and CPU elsewhere. AMD stays on DirectML (any DX12 GPU) — it is
+                // Windows-only, so on Linux an AMD node runs CPU inference.
+                "openvino" or "intel" => HasBackendFolder(VisionBackend.OpenVino)
                     ? VisionBackend.OpenVino
                     : Fallback(VisionBackend.OpenVino, MissingFolderReason("OpenVINO")),
-                "intel" or "amd" => HasBackendFolder(VisionBackend.DirectMl)
+                "amd" => HasBackendFolder(VisionBackend.DirectMl)
                     ? VisionBackend.DirectMl
                     : Fallback(VisionBackend.DirectMl, MissingFolderReason("DirectML")),
                 _ => VisionBackend.Cpu,
@@ -170,7 +173,14 @@ public static class VisionBackendResolver
             _ => "CPU",
         };
 
-        if (chosen != VisionBackend.Cpu)
+        if (chosen == VisionBackend.OpenVino)
+        {
+            // The OpenVINO plugin loads on top of the CPU onnxruntime at the app root, so the
+            // onnxruntime loader stays where it is. Its own folder goes on PATH so the plugin's
+            // sibling libraries (openvino, tbb) resolve when ONNX Runtime loads it.
+            PrependToPath(BackendFolder(chosen));
+        }
+        else if (chosen != VisionBackend.Cpu)
         {
             PointLoaderAt(BackendFolder(chosen), logger);
         }
@@ -185,29 +195,39 @@ public static class VisionBackendResolver
     {
         var cudaDir = BackendFolder(VisionBackend.Cuda);
 
-        if (!File.Exists(Path.Combine(cudaDir, "onnxruntime.dll")))
+        if (!File.Exists(Path.Combine(cudaDir, LarisVMS.Core.NativeLibraryNames.OnnxRuntime)))
             return Fallback(VisionBackend.Cuda, MissingFolderReason("CUDA"));
 
         // onnxruntime_providers_cuda.dll (~320 MB) isn't in the node package — the node downloads it
         // from the server in the background once it's an NVIDIA machine with the CUDA Toolkit
         // installed. Until it lands, DirectML.
-        if (!File.Exists(Path.Combine(cudaDir, "onnxruntime_providers_cuda.dll")))
+        if (!File.Exists(Path.Combine(cudaDir, LarisVMS.Core.NativeLibraryNames.OnnxRuntimeCudaProvider)))
             return Fallback(VisionBackend.Cuda,
                 "the CUDA provider library hasn't been fetched from the server yet — the node downloads it in the background");
+
+        // A driver older than the CUDA version this build needs fails every session with "insufficient
+        // driver"; say so plainly instead. An unreadable version is not held against the node.
+        if (CudaRequirements.DriverTooOldNote(DriverVersionProbe(), CudaRequirements.MinDriver) is { } driverNote)
+            return Fallback(VisionBackend.Cuda, driverNote);
 
         // Put the CUDA folder on PATH first — install-node.ps1 copies the CUDA Toolkit / cuDNN
         // runtime DLLs there when it finds them, so the probe below should see them.
         PrependToPath(cudaDir);
 
-        var haveCudart = NativeLibLoadable("cudart64_12");
-        var haveCudnn = NativeLibLoadable("cudnn64_9");
+        // On Linux these come from NVIDIA's packages in the system library path (or /usr/local/cuda/lib64,
+        // which the node starts this process with on LD_LIBRARY_PATH).
+        var haveCudart = NativeLibLoadable(LarisVMS.Core.NativeLibraryNames.LoadName(LarisVMS.Core.NativeLibraryNames.CudaRuntime));
+        var haveCudnn = NativeLibLoadable(LarisVMS.Core.NativeLibraryNames.LoadName(LarisVMS.Core.NativeLibraryNames.Cudnn));
         if (haveCudart && haveCudnn) return VisionBackend.Cuda;
 
-        var missing = !haveCudart && !haveCudnn ? "the CUDA Toolkit 12.x runtime and cuDNN 9.x"
-            : !haveCudart ? "the CUDA Toolkit 12.x runtime (cudart64_12.dll)"
-            : "cuDNN 9.x (cudnn64_9.dll)";
+        var missing = !haveCudart && !haveCudnn ? "the CUDA 12.x runtime and cuDNN 9.x"
+            : !haveCudart ? $"the CUDA 12.x runtime ({LarisVMS.Core.NativeLibraryNames.CudaRuntime})"
+            : $"cuDNN 9.x ({LarisVMS.Core.NativeLibraryNames.Cudnn})";
+        var fix = OperatingSystem.IsWindows()
+            ? "install it (the node picks it up within 10 minutes) for CUDA acceleration"
+            : "install NVIDIA's cuda-runtime-12-x and libcudnn9-cuda-12 packages for CUDA acceleration";
         return Fallback(VisionBackend.Cuda,
-            $"an NVIDIA GPU was selected but {missing} could not be found on this node — install it and re-run install-node.ps1 for CUDA acceleration");
+            $"an NVIDIA GPU was selected but {missing} could not be found on this node — {fix}");
     }
 
     /// <summary>Steps a failed backend down to the next viable one and records why.</summary>
@@ -271,14 +291,25 @@ public static class VisionBackendResolver
 
     private static string BackendFolder(VisionBackend backend) => Path.Combine(BackendsRoot, DirName(backend));
 
+    /// <summary>File name of the OpenVINO plugin execution provider library inside its backend
+    /// folder (Intel.ML.OnnxRuntime.EP.OpenVINO).</summary>
+    internal static string OpenVinoPluginFileName => OperatingSystem.IsWindows()
+        ? "onnxruntime_providers_openvino_plugin.dll"
+        : "libonnxruntime_providers_openvino_plugin.so";
+
+    /// <summary>Full path of the OpenVINO plugin library <see cref="OrtSessionFactory"/> registers
+    /// with ONNX Runtime.</summary>
+    public static string OpenVinoPluginPath => Path.Combine(BackendFolder(VisionBackend.OpenVino), OpenVinoPluginFileName);
+
     private static bool HasBackendFolder(VisionBackend backend)
     {
         if (backend == VisionBackend.Cpu) return true;
+        if (backend == VisionBackend.OpenVino) return File.Exists(OpenVinoPluginPath);
         var dir = BackendFolder(backend);
-        if (!File.Exists(Path.Combine(dir, "onnxruntime.dll"))) return false;
+        if (!File.Exists(Path.Combine(dir, LarisVMS.Core.NativeLibraryNames.OnnxRuntime))) return false;
         // The CUDA backend also needs its big provider library, which the node fetches from the
         // server rather than shipping in the package.
-        return backend != VisionBackend.Cuda || File.Exists(Path.Combine(dir, "onnxruntime_providers_cuda.dll"));
+        return backend != VisionBackend.Cuda || File.Exists(Path.Combine(dir, LarisVMS.Core.NativeLibraryNames.OnnxRuntimeCudaProvider));
     }
 
     private static string DirName(VisionBackend backend) => backend switch
@@ -313,7 +344,7 @@ public static class VisionBackendResolver
             NativeLibrary.SetDllImportResolver(typeof(OrtEnv).Assembly, (name, _, _) =>
             {
                 if (!string.Equals(name, "onnxruntime", StringComparison.OrdinalIgnoreCase)) return IntPtr.Zero;
-                var dll = Path.Combine(backendFolder, "onnxruntime.dll");
+                var dll = Path.Combine(backendFolder, LarisVMS.Core.NativeLibraryNames.OnnxRuntime);
                 return File.Exists(dll) && NativeLibrary.TryLoad(dll, out var handle) ? handle : IntPtr.Zero;
             });
         }
@@ -350,8 +381,8 @@ public static class VisionBackendResolver
     }
 
     private static string MissingFolderReason(string backend) =>
-        $"the {backend} backend is missing from this install (onnxruntime-backends\\) — re-run install-node.ps1 " +
-        "to get the bundled backends; auto-update only replaces the executable";
+        $"the {backend} backend is missing from this install (the onnxruntime-backends folder) — reinstall the node " +
+        "package (the MSI on Windows, the .deb or .rpm on Linux), or approve the next node update, which brings the backends";
 
     private static string Capitalize(string s) => string.IsNullOrEmpty(s) ? s : char.ToUpperInvariant(s[0]) + s[1..];
 }

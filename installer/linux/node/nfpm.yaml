@@ -1,0 +1,70 @@
+# nFPM definition for the larisvms-node .deb and .rpm. build-linux-packages.ps1 fills in the ${LARISVMS_*}
+# placeholders below (nFPM won't expand them in contents), and appends the program files (with their modes) to the
+# end of contents, so keep contents last.
+name: larisvms-node
+arch: amd64
+platform: linux
+version: ${LARISVMS_VERSION}
+release: "1"
+section: video
+priority: optional
+maintainer: ${LARISVMS_MAINTAINER}
+vendor: LarisVMS
+homepage: https://github.com/billacuda/LarisVMS
+license: Apache-2.0
+description: |-
+  LarisVMS recorder node
+  Records cameras for a LarisVMS server, serves their live view and playback, and runs
+  AI detection. Pair it with: sudo larisvms-node setup --server-url <url> --registration-key <key>
+
+scripts:
+  preinstall: ${LARISVMS_SCRIPTS}/preinstall.sh
+  postinstall: ${LARISVMS_SCRIPTS}/postinstall.sh
+  preremove: ${LARISVMS_SCRIPTS}/preremove.sh
+  postremove: ${LARISVMS_SCRIPTS}/postremove.sh
+
+overrides:
+  deb:
+    depends:
+      - libc6
+      - libgcc-s1 | libgcc1
+      - libstdc++6
+      - libssl3 | libssl3t64 | libssl1.1
+      - zlib1g
+      - ca-certificates
+      - ffmpeg
+    suggests:
+      - va-driver-all
+      - intel-opencl-icd
+  rpm:
+    depends:
+      - glibc
+      - libgcc
+      - libstdc++
+      - openssl-libs
+      - zlib
+      - ca-certificates
+      # Any package that provides it: RPM Fusion's ffmpeg, or ffmpeg-free.
+      - /usr/bin/ffmpeg
+
+contents:
+  - src: ${LARISVMS_LINUX}/node/larisvms-node.service
+    dst: /usr/lib/systemd/system/larisvms-node.service
+    file_info:
+      mode: 0644
+  - src: ${LARISVMS_LINUX}/node/larisvms-node-update.path
+    dst: /usr/lib/systemd/system/larisvms-node-update.path
+    file_info:
+      mode: 0644
+  - src: ${LARISVMS_LINUX}/node/larisvms-node-update.service
+    dst: /usr/lib/systemd/system/larisvms-node-update.service
+    file_info:
+      mode: 0644
+  - src: ${LARISVMS_LINUX}/node/node.env
+    dst: /etc/larisvms/node.env
+    type: config|noreplace
+    file_info:
+      mode: 0644
+  - src: /opt/larisvms/node/LarisVMS.Node
+    dst: /usr/bin/larisvms-node
+    type: symlink

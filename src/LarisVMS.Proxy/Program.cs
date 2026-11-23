@@ -8,6 +8,20 @@ using LarisVMS.Core.Dtos;
 using LarisVMS.Proxy;
 using LarisVMS.Relay;
 
+// `larisvms-proxy --version`: prints the version and exits (the package smoke test runs it).
+if (args is ["--version"])
+{
+    Console.WriteLine(ProxyVersion.Current);
+    return;
+}
+
+// `sudo larisvms-proxy setup ...` on Linux: write the settings, then restart the service (ProxySetupCommand).
+if (args.Length > 0 && args[0] == "setup")
+{
+    Environment.Exit(LarisVMS.Proxy.ProxySetupCommand.Run(args[1..]));
+    return;
+}
+
 // ── First-run registration ──────────────────────────────────────────────────
 // If proxy.config doesn't exist yet, this run must be given --server-url and --registration-key
 // (what install-proxy.ps1 passes) to register once; the assigned ProxyId/secret are then persisted.
@@ -40,8 +54,10 @@ if (config is null)
         ?? LarisVMS.Core.Security.RegistrationKeyFile.Read(); // left by the installer
     if (serverUrl is null || registrationKey is null)
     {
-        Console.Error.WriteLine("Not yet registered. Run with --server-url <url> --registration-key <key> " +
-            "(or set LARISVMS_SERVER_URL / LARISVMS_REGISTRATION_KEY) the first time.");
+        Console.Error.WriteLine(OperatingSystem.IsWindows()
+            ? "Not yet registered. Run with --server-url <url> --registration-key <key> " +
+              "(or set LARISVMS_SERVER_URL / LARISVMS_REGISTRATION_KEY) the first time."
+            : "Not yet registered. Pair this proxy with: sudo larisvms-proxy setup --server-url <url> --registration-key <key>");
         Environment.Exit(1);
         return;
     }
@@ -59,7 +75,7 @@ if (config is null)
 
     var registerClient = new ProxyApiClient(serverUrl, trust);
     var response = await registerClient.RegisterAsync(
-        new ProxyRegisterRequest(registrationKey, Environment.MachineName, ProxyVersion.Current, "win-x64"),
+        new ProxyRegisterRequest(registrationKey, Environment.MachineName, ProxyVersion.Current, LarisVMS.Core.PlatformId.Current),
         CancellationToken.None);
     config = new ProxyConfig(serverUrl, response.ProxyId, response.Secret, UpdateSigningKeyPem: response.UpdateSigningKeyPem);
     ProxyConfigStore.Save(config);
@@ -74,7 +90,7 @@ apiClient.SetCredentials(config.ProxyId, config.Secret);
 var builder = WebApplication.CreateBuilder(args);
 
 var proxyFileLogger = new LarisVMS.Core.Logging.FileLoggerProvider(
-    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs"),
+    LarisVMS.Core.LarisPaths.LogRoot,
     "proxy", LogLevel.Information);
 builder.Logging.AddProvider(proxyFileLogger);
 var frameworkFilter = LarisVMS.Core.Logging.FrameworkLogFilter.HiddenUnlessDebug(proxyFileLogger);
@@ -83,8 +99,7 @@ builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", frameworkFilter);
 
 // ── HTTPS listener ──────────────────────────────────────────────────────────
 var endpoint = ProxyEndpointConfig.Resolve(config.CachedConfig);
-var selfSignedPfx = Path.Combine(
-    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "proxy-endpoint.selfsigned.pfx");
+var selfSignedPfx = Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "proxy-endpoint.selfsigned.pfx");
 var certHolder = new CertHolder(
     new CertHolderOptions(endpoint.PfxPath, endpoint.PfxPassword, endpoint.AllowInsecure, endpoint.Host, selfSignedPfx),
     proxyFileLogger.CreateLogger("Endpoint"));
@@ -103,7 +118,9 @@ builder.WebHost.ConfigureKestrel(o =>
         o.ListenAnyIP(endpoint.Port);
 });
 
+// No-ops unless running as a Windows service or a systemd unit respectively.
 builder.Services.AddWindowsService(o => o.ServiceName = "LarisVMS Proxy");
+builder.Services.AddSystemd();
 builder.Services.AddSingleton(apiClient);
 builder.Services.AddSingleton(config);
 builder.Services.AddSingleton(endpoint);

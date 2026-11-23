@@ -1,0 +1,12 @@
+# Installs updates the LarisVMS proxy staged. The proxy runs as the unprivileged larisvms user and
+# can't write /opt/larisvms/proxy, so it verifies an update, stages it, and writes ready.json; this
+# unit sees that file and starts larisvms-proxy-update.service, which installs it as root.
+[Unit]
+Description=Watch for LarisVMS proxy updates
+
+[Path]
+PathExists=/var/lib/larisvms/update-proxy/ready.json
+Unit=larisvms-proxy-update.service
+
+[Install]
+WantedBy=multi-user.target

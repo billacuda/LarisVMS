@@ -1,7 +1,13 @@
 using System.Security.Cryptography;
 using System.Text;
 
+// LarisVMS.NodeUpdater compiles this same file (it references no other project) under its own
+// namespace, so a project that references both (the tests) doesn't see the type twice.
+#if LARISVMS_NODEUPDATER
+namespace LarisVMS.NodeUpdater.Shared;
+#else
 namespace LarisVMS.Core.Security;
+#endif
 
 /// <summary>
 /// Signatures on what the server tells nodes and proxies to install: an update (the binary's and the
@@ -15,6 +21,11 @@ public static class UpdateSignature
 {
     public static string UpdatePayload(string platform, string version, string sha256, string? visionSha256) =>
         $"larisvms-update:v1|{platform}|{version}|{sha256.ToLowerInvariant()}|{visionSha256?.ToLowerInvariant() ?? ""}";
+
+    /// <summary>The native backend libraries a node build ships (<c>BackendsBundle</c>):
+    /// covered by the tree's stamp, a hash of every file in it, so it is checked after unpacking.</summary>
+    public static string BackendsPayload(string platform, string version, string stamp) =>
+        $"larisvms-backends:v1|{platform}|{version}|{stamp.ToLowerInvariant()}";
 
     public static string NativePayload(string name, string sha256) =>
         $"larisvms-native:v1|{name}|{sha256.ToLowerInvariant()}";

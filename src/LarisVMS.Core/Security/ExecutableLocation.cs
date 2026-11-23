@@ -39,17 +39,36 @@ public static class ExecutableLocation
     }
 
     /// <summary>True when Users, Authenticated Users, Everyone, or Interactive may create or change
-    /// files in <paramref name="dir"/>, or when that can't be told. Not Windows: false (the check
-    /// doesn't apply).</summary>
+    /// files in <paramref name="dir"/>, or when that can't be told. Elsewhere: true when any user may
+    /// write to the folder or one above it (the "other" write bit, as on /tmp), which would let them
+    /// swap the program for their own.</summary>
     public static bool WritableByNonAdmins(string dir)
     {
-        if (!OperatingSystem.IsWindows()) return false;
+        if (!OperatingSystem.IsWindows()) return WorldWritableUpTheTree(dir);
         try
         {
             return HasBroadWrite(dir);
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or InvalidOperationException
                                    or ArgumentException or NotSupportedException or SystemException)
+        {
+            return true; // can't tell: don't run it
+        }
+    }
+
+    [UnsupportedOSPlatform("windows")]
+    private static bool WorldWritableUpTheTree(string dir)
+    {
+        try
+        {
+            for (var current = new DirectoryInfo(Path.GetFullPath(dir)); current is not null; current = current.Parent)
+            {
+                if (!current.Exists) continue;
+                if ((current.UnixFileMode & UnixFileMode.OtherWrite) != 0) return true;
+            }
+            return false;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or ArgumentException)
         {
             return true; // can't tell: don't run it
         }

@@ -35,8 +35,7 @@ public sealed class ClientEndpointConfig
     /// local json's <c>Host</c>, else the machine name.</summary>
     public string Host { get; init; } = Environment.MachineName;
 
-    public static readonly string LocalConfigPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "client-endpoint.json");
+    public static readonly string LocalConfigPath = Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "client-endpoint.json");
 
     private static readonly JsonSerializerOptions CaseInsensitive = new() { PropertyNameCaseInsensitive = true };
 

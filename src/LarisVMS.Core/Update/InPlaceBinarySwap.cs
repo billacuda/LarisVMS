@@ -52,7 +52,8 @@ public static class InPlaceBinarySwap
     {
         try
         {
-            foreach (var old in Directory.EnumerateFiles(directory, "*.exe" + OldSuffix))
+            // Program files are "X.exe" on Windows and plain "X" on Linux.
+            foreach (var old in Directory.EnumerateFiles(directory, ExecutableName.For("*") + OldSuffix))
             {
                 try { File.Delete(old); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* retried next start */ }

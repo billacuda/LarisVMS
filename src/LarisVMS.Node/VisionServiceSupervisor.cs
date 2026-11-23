@@ -21,7 +21,7 @@ namespace LarisVMS.Node;
 /// </summary>
 public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string ffmpegPath, ILogger<VisionServiceSupervisor> logger)
 {
-    public const string ExeFileName = "LarisVMS.Vision.Service.exe";
+    public static readonly string ExeFileName = LarisVMS.Core.ExecutableName.For(LarisVMS.Core.ExecutableName.VisionService);
 
     // Loopback-only, matching Vision Service's own default (VisionServiceOptions.Port) — fixed
     // rather than negotiated, since exactly one instance ever runs per node.
@@ -99,7 +99,7 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
                 _warnedMissingExe = true;
                 logger.LogWarning(
                     "AI detection is enabled for at least one camera on this node, but {ExePath} was not " +
-                    "found alongside LarisVMS.Node.exe — AI detection will not run until it's installed. " +
+                    "found alongside the node program — AI detection will not run until it's installed. " +
                     "Every other detection path already configured for affected cameras is unaffected.",
                     exePath);
             }
@@ -132,6 +132,19 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
         psi.EnvironmentVariables["Vision__PreferredAccelerator"] = _preferredAccelerator;
         if (_enableTensorRt) psi.EnvironmentVariables["Vision__EnableTensorRt"] = "true";
         if (!string.IsNullOrWhiteSpace(_backendOverride)) psi.EnvironmentVariables["Vision__Backend"] = _backendOverride;
+        // Linux's loader reads LD_LIBRARY_PATH once, at process start, so the native libraries the
+        // backends need are put on it here (on Windows the Vision Service steers DLL loading itself,
+        // through PATH and a DllImport resolver). The child dying with the node is systemd's job there
+        // (KillMode=control-group), the counterpart of the Windows job object below.
+        // Read with TryGetValue: on .NET a variable that isn't set throws from the indexer instead of
+        // returning null, and an unset LD_LIBRARY_PATH is the usual case under systemd.
+        if (OperatingSystem.IsLinux())
+        {
+            psi.Environment["LD_LIBRARY_PATH"] = LinuxLibraryPath(nodeInstallDirectory,
+                EnvironmentValue(psi, "LD_LIBRARY_PATH"),
+                [EnvironmentValue(psi, "Vision__CudnnPath"), EnvironmentValue(psi, "Vision__TensorRtLibPath")],
+                Directory.Exists);
+        }
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
         AssignToKillOnCloseJob(process);
@@ -163,6 +176,32 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
                 _startedAccelerator, normalized);
             Stop();
         }
+    }
+
+    /// <summary>A variable from the child's environment, or null when it isn't set.</summary>
+    internal static string? EnvironmentValue(ProcessStartInfo psi, string name) =>
+        psi.Environment.TryGetValue(name, out var value) ? value : null;
+
+    /// <summary>LD_LIBRARY_PATH for the Vision Service on Linux: the bundled CUDA and OpenVINO backend
+    /// folders, NVIDIA's /usr/local/cuda/lib64 when it exists, any configured cuDNN or TensorRT folder,
+    /// then whatever the service already had. Folders that don't exist are left out.</summary>
+    internal static string LinuxLibraryPath(string installDirectory, string? existing, IEnumerable<string?> extraDirectories,
+        Func<string, bool> directoryExists)
+    {
+        var backends = Path.Combine(installDirectory, "onnxruntime-backends");
+        IEnumerable<string?> candidates =
+        [
+            Path.Combine(backends, "cuda"),
+            Path.Combine(backends, "openvino"),
+            CudaProviderProvisioner.LinuxCudaLibDir,
+            .. extraDirectories,
+        ];
+        var parts = candidates
+            .Where(d => !string.IsNullOrWhiteSpace(d) && directoryExists(d!))
+            .Select(d => d!)
+            .Concat((existing ?? "").Split(':', StringSplitOptions.RemoveEmptyEntries))
+            .Distinct(StringComparer.Ordinal);
+        return string.Join(':', parts);
     }
 
     /// <summary>Turns TensorRT on for every local engine (not just D-FINE) via

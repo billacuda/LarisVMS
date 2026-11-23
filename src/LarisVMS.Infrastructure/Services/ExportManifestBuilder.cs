@@ -140,7 +140,7 @@ public class ExportManifestBuilder(ApplicationDbContext db, ISigningKeyService s
             requested = new { fromUtc = Utc(item.ExportJob.FromUtc), toUtc = Utc(item.ExportJob.ToUtc) },
             file = new
             {
-                name = report.OutputFilePath is null ? null : Path.GetFileName(report.OutputFilePath),
+                name = report.OutputFilePath is null ? null : LarisVMS.Core.ForeignPath.GetFileName(report.OutputFilePath),
                 sizeBytes = report.SizeBytes,
                 sha256 = report.OutputSha256,
             },

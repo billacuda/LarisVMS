@@ -108,7 +108,9 @@ public sealed class ServerCertificateTrust(ServerCertificateCheck mode, string? 
         if (string.IsNullOrWhiteSpace(given)) return (null, null);
         return NormalizeThumbprint(given) is { } thumbprint
             ? (thumbprint, null)
-            : (null, "--server-cert-thumbprint must be the server certificate's SHA-256 thumbprint (64 hex characters), as shown on Settings → Nodes.");
+            : (null, "--server-cert-thumbprint must be the server certificate's SHA-256 thumbprint (64 hex characters), as shown under " +
+                     "Updates and registration → Server certificate at the bottom of the Nodes page; the Add node page's install command " +
+                     "already includes it. The 40-character thumbprint Windows' certificate manager shows is SHA-1 and won't work.");
     }
 
     /// <summary>Forgets the pin: the next certificate seen is trusted (--reset-server-pin).</summary>

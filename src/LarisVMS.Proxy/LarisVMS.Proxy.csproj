@@ -5,9 +5,9 @@
        Self-contained single-file per platform (see build-proxy.ps1), same shape as LarisVMS.Node. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <!-- Published with -r win-x64. Restoring that target on every restore (the IDE's background
+    <!-- Published with -r win-x64 and -r linux-x64. Restoring those targets on every restore (the IDE's background
          one included) keeps a plain restore from dropping it mid-publish (NETSDK1047). -->
-    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Version>0.222.2</Version>
@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" />
   </ItemGroup>
 

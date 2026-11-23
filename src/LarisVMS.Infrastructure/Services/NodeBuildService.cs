@@ -9,19 +9,19 @@ namespace LarisVMS.Infrastructure.Services;
 
 /// <summary>Approval-queue / node-download side of recorder-node auto-update — see
 /// INodeBuildService's own doc comment for why registration itself (file placement + the initial
-/// Pending row) lives in deploy.ps1 instead of here.</summary>
+/// Pending row) lives in BundledBuildRegistrar instead of here.</summary>
 public class NodeBuildService(ApplicationDbContext db) : INodeBuildService
 {
     /// <summary>Deliberately outside the IIS site directory entirely — same %ProgramData%\LarisVMS
     /// root as node.config's DPAPI store (NodeConfigStore) and the data-protection key ring
-    /// (Program.cs), just its own subfolder. deploy.ps1's robocopy /MIR only ever touches
-    /// $DestinationPath, so a folder that never lives under it needs no /XD exclusion entry — see
-    /// deploy.ps1's own storage-root guard for why a registered build living *inside* the site
-    /// directory would be actively dangerous (the next deploy would silently delete it). Mirrored in
-    /// deploy.ps1's own node-build-registration step, which writes directly into the same folder —
-    /// keep the two in sync if this ever changes.</summary>
-    public static string DefaultRoot => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "node-builds");
+    /// (Program.cs), just its own subfolder. install-web.ps1's robocopy /MIR only touches the install
+    /// folder, so a folder outside it needs no /XD exclusion; a build stored *inside* the install folder
+    /// would be silently deleted by the next install.</summary>
+    public static string DefaultRoot => Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "node-builds");
+
+    /// <summary>The folder the builds' files are stored in — overridable for tests. Only files inside
+    /// it are ever deleted.</summary>
+    public string BuildsRoot { get; init; } = DefaultRoot;
 
     public async Task<NodeBuildVersion?> GetLatestForPlatformAsync(string platform, CancellationToken ct = default)
         => await db.NodeBuildVersions.AsNoTracking()
@@ -55,8 +55,7 @@ public class NodeBuildService(ApplicationDbContext db) : INodeBuildService
     /// than the newest Approved one — and marks the rest Superseded. Versions compare as
     /// System.Version (NodeVersionComparer's ordering), newest registration breaking ties; an
     /// unparseable version sorts lowest. Static so BundledBuildRegistrar can run it on its own
-    /// context; deploy.ps1 inserts Pending rows straight into the table, so the admin page runs it
-    /// too rather than relying on any one registration path.</summary>
+    /// context; the admin page runs it too rather than relying on any one registration path.</summary>
     internal static async Task<int> SupersedeOutdatedPendingAsync(ApplicationDbContext db, CancellationToken ct)
     {
         var candidates = await db.NodeBuildVersions
@@ -87,6 +86,81 @@ public class NodeBuildService(ApplicationDbContext db) : INodeBuildService
     }
 
     private static Version ParseVersion(string version) => Version.TryParse(version, out var v) ? v : new Version(0, 0);
+
+    /// <summary>The builds <see cref="PurgeOldBuildsAsync"/> would delete: per platform, every build
+    /// whose version is older than the newest approved one. Public so the Nodes page can show the
+    /// count before anything is deleted.</summary>
+    public static List<NodeBuildVersion> Purgeable(IEnumerable<NodeBuildVersion> builds)
+    {
+        var result = new List<NodeBuildVersion>();
+        foreach (var platform in builds.GroupBy(b => b.Platform))
+        {
+            var approved = platform.Where(b => b.Status == NodeBuildStatus.Approved)
+                .OrderByDescending(b => ParseVersion(b.Version)).ThenByDescending(b => b.UploadedAt).FirstOrDefault();
+            if (approved is null) continue;
+            var current = ParseVersion(approved.Version);
+            result.AddRange(platform.Where(b => b.Id != approved.Id && ParseVersion(b.Version) < current));
+        }
+        return result;
+    }
+
+    public async Task<BuildPurgeResult> PurgeOldBuildsAsync(CancellationToken ct = default)
+    {
+        var all = await db.NodeBuildVersions.ToListAsync(ct);
+        var purge = Purgeable(all);
+        var (files, bytes) = (0, 0L);
+
+        foreach (var build in purge)
+        {
+            foreach (var path in new[] { build.FilePath, build.VisionFilePath, build.BackendsFilePath })
+            {
+                if (TryDeleteStoredFile(path) is { } size) { files++; bytes += size; }
+            }
+        }
+        if (purge.Count > 0)
+        {
+            db.NodeBuildVersions.RemoveRange(purge);
+            await db.SaveChangesAsync(ct);
+        }
+
+        // Files left behind by builds removed some other way, or by a registration that failed
+        // halfway: anything in the folder no remaining build points at.
+        var kept = all.Except(purge)
+            .SelectMany(b => new[] { b.FilePath, b.VisionFilePath, b.BackendsFilePath })
+            .Where(p => !string.IsNullOrEmpty(p))
+            .Select(p => Path.GetFullPath(p!))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (Directory.Exists(BuildsRoot))
+        {
+            foreach (var file in Directory.EnumerateFiles(BuildsRoot))
+            {
+                if (kept.Contains(Path.GetFullPath(file))) continue;
+                if (TryDeleteStoredFile(file) is { } size) { files++; bytes += size; }
+            }
+        }
+        return new BuildPurgeResult(purge.Count, files, bytes);
+    }
+
+    /// <summary>Deletes a build's file when it's directly inside <see cref="BuildsRoot"/>; returns its
+    /// size, or null when it was elsewhere, missing, or couldn't be deleted (a download in progress
+    /// holds it open; the next clean-up gets it).</summary>
+    private long? TryDeleteStoredFile(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        try
+        {
+            var full = Path.GetFullPath(path);
+            var root = Path.GetFullPath(BuildsRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!string.Equals(Path.GetDirectoryName(full), root, StringComparison.OrdinalIgnoreCase) || !File.Exists(full)) return null;
+            var size = new FileInfo(full).Length;
+            File.Delete(full);
+            return size;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+    }
 
     public Task<NodeBuildVersion> RejectAsync(Guid buildId, string approvedBy, CancellationToken ct = default)
         => SetStatusAsync(buildId, NodeBuildStatus.Rejected, approvedBy, ct);

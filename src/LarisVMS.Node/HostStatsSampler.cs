@@ -8,8 +8,9 @@ namespace LarisVMS.Node;
 /// <summary>
 /// The node machine's own load, sampled once per heartbeat for the dashboard: CPU percent busy across
 /// all cores and network bytes/s across active adapters (both as deltas since the previous sample, so
-/// the first call reports them as null), plus physical memory used/total. Windows only — elsewhere
-/// <see cref="Sample"/> returns null and the dashboard shows no host figures for the node.
+/// the first call reports them as null), plus physical memory used/total. Windows reads these from
+/// kernel32; Linux from /proc/stat and /proc/meminfo. Any other OS returns null and the dashboard
+/// shows no host figures for the node.
 /// </summary>
 public sealed class HostStatsSampler
 {
@@ -18,7 +19,7 @@ public sealed class HostStatsSampler
 
     public NodeHostStats? Sample()
     {
-        if (!OperatingSystem.IsWindows()) return null;
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return null;
 
         double? cpuPercent = null;
         if (TryGetCpuTimes() is { } cpu)
@@ -27,13 +28,7 @@ public sealed class HostStatsSampler
             _lastCpu = cpu;
         }
 
-        long? memoryUsed = null, memoryTotal = null;
-        var memory = new MemoryStatusEx { Length = (uint)Marshal.SizeOf<MemoryStatusEx>() };
-        if (GlobalMemoryStatusEx(ref memory))
-        {
-            memoryTotal = (long)memory.TotalPhys;
-            memoryUsed = (long)(memory.TotalPhys - memory.AvailPhys);
-        }
+        var (memoryUsed, memoryTotal) = TryGetMemory();
 
         long? receivePerSec = null, sendPerSec = null;
         if (TryGetNetworkBytes() is { } net)
@@ -75,8 +70,55 @@ public sealed class HostStatsSampler
 
     private static CpuTimes? TryGetCpuTimes()
     {
+        if (!OperatingSystem.IsWindows()) return TryRead("/proc/stat") is { } stat ? ParseProcStat(stat) : null;
         if (!GetSystemTimes(out var idle, out var kernel, out var user)) return null;
         return new CpuTimes(idle.ToUInt64(), kernel.ToUInt64(), user.ToUInt64());
+    }
+
+    private static (long? Used, long? Total) TryGetMemory()
+    {
+        if (!OperatingSystem.IsWindows())
+            return TryRead("/proc/meminfo") is { } meminfo && ParseMemInfo(meminfo) is { } m ? (m.Used, m.Total) : (null, null);
+        var memory = new MemoryStatusEx { Length = (uint)Marshal.SizeOf<MemoryStatusEx>() };
+        if (!GlobalMemoryStatusEx(ref memory)) return (null, null);
+        return ((long)(memory.TotalPhys - memory.AvailPhys), (long)memory.TotalPhys);
+    }
+
+    private static string? TryRead(string path)
+    {
+        try { return File.ReadAllText(path); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    /// <summary>The aggregate "cpu" line of /proc/stat (user nice system idle iowait irq softirq steal,
+    /// in clock ticks), mapped onto the Windows shape <see cref="CpuPercentBetween"/> expects: Kernel
+    /// includes Idle, and waiting on I/O counts as idle.</summary>
+    internal static CpuTimes? ParseProcStat(string stat)
+    {
+        var line = stat.Split('\n').FirstOrDefault(l => l.StartsWith("cpu ", StringComparison.Ordinal));
+        if (line is null) return null;
+        var fields = line.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1)
+            .Select(f => ulong.TryParse(f, out var v) ? v : 0UL).ToArray();
+        if (fields.Length < 4) return null;
+        ulong At(int i) => i < fields.Length ? fields[i] : 0;
+        var idle = At(3) + At(4);
+        var system = At(2) + At(5) + At(6) + At(7);
+        return new CpuTimes(idle, idle + system, At(0) + At(1));
+    }
+
+    /// <summary>Used and total physical memory, in bytes, from /proc/meminfo (MemTotal less
+    /// MemAvailable, both in kB).</summary>
+    internal static (long Used, long Total)? ParseMemInfo(string meminfo)
+    {
+        long? total = null, available = null;
+        foreach (var line in meminfo.Split('\n'))
+        {
+            var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2 || !long.TryParse(parts[1], out var kb)) continue;
+            if (parts[0] == "MemTotal:") total = kb * 1024;
+            else if (parts[0] == "MemAvailable:") available = kb * 1024;
+        }
+        return total is { } t && available is { } a ? (t - a, t) : null;
     }
 
     private static (long Received, long Sent)? TryGetNetworkBytes()

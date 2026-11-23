@@ -511,6 +511,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.PreviousApiKeyHash).HasMaxLength(200);
             e.Property(x => x.CheckInNonce).HasMaxLength(64);
             e.Property(x => x.CertPfxPath).HasMaxLength(500);
+            e.Property(x => x.Platform).HasMaxLength(50);
             // Only the pfx password is a secret — encrypted like Node.MediaSigningKey.
             e.Property(x => x.CertPfxPassword).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
             e.Property(x => x.Version).HasMaxLength(50);
@@ -578,6 +579,10 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.Sha256).HasMaxLength(64).IsRequired();
             e.Property(x => x.VisionFilePath).HasMaxLength(500);
             e.Property(x => x.VisionSha256).HasMaxLength(64);
+            e.Property(x => x.BackendsFilePath).HasMaxLength(500);
+            e.Property(x => x.BackendsSha256).HasMaxLength(64);
+            e.Property(x => x.BackendsStamp).HasMaxLength(64);
+            e.Property(x => x.BackendsPublisherSignature).HasMaxLength(200).IsUnicode(false);
             e.Property(x => x.Notes).HasMaxLength(1000);
             e.Property(x => x.ApprovedBy).HasMaxLength(256);
             // What GetLatestForPlatformAsync queries on every heartbeat from every checked-in node —

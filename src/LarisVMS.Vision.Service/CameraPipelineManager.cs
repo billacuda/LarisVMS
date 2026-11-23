@@ -196,7 +196,7 @@ public sealed class CameraPipelineManager : IAsyncDisposable
     /// optional same-basename <c>.json</c> sidecars) into this folder directly; see
     /// <see cref="Models.ModelDiscovery"/>.</summary>
     public static string DefaultModelsDirectory =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "models");
+        Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "models");
 
     private static string ModelsDirectory(string configuredPath)
     {

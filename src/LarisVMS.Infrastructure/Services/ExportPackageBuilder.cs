@@ -96,19 +96,20 @@ public class ExportPackageBuilder(ApplicationDbContext db, ISigningKeyService si
             var fileData = new List<object>();
             foreach (var item in done.Where(i => i.CameraId == cameraId))
             {
-                var name = Path.GetFileName(item.OutputFilePath!);
+                // The node's path, which may be a Windows one on a Linux server or the reverse.
+                var name = LarisVMS.Core.ForeignPath.GetFileName(item.OutputFilePath!);
                 var videoPath = $"video/{folder}/{name}";
                 videos.Add(new ExportPackageVideo(videoPath, item.Id, item.NodeId!.Value, item.OutputFilePath!, item.OutputSizeBytes!.Value, item.OutputSha256!));
                 string? h264Path = null;
                 if (item is { ConvertedFilePath: not null, ConvertedSha256: not null, ConvertedSizeBytes: not null })
                 {
-                    h264Path = $"video/{folder}/{Path.GetFileName(item.ConvertedFilePath)}";
+                    h264Path = $"video/{folder}/{LarisVMS.Core.ForeignPath.GetFileName(item.ConvertedFilePath)}";
                     videos.Add(new ExportPackageVideo(h264Path, item.Id, item.NodeId!.Value, item.ConvertedFilePath, item.ConvertedSizeBytes.Value, item.ConvertedSha256));
                 }
                 string? manifestPath = null;
                 if (manifests.TryGetValue(item.Id, out var manifestJson))
                 {
-                    manifestPath = $"manifests/{Path.GetFileNameWithoutExtension(name)}.manifest.json";
+                    manifestPath = $"manifests/{LarisVMS.Core.ForeignPath.GetFileNameWithoutExtension(name)}.manifest.json";
                     files.Add(new ExportPackageFile(manifestPath, Encoding.UTF8.GetBytes(manifestJson)));
                 }
 

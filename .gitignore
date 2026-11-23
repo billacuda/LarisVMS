@@ -35,7 +35,7 @@ appsettings.*.json
 node.config
 
 # Recordings and media working directories — never meant to be in source control,
-# and deploy.ps1's /MIR must never see them either (see deploy.ps1's -XD list).
+# and install-web.ps1's /MIR must never see them either (see its /XD list).
 recordings/
 spool/
 exports/

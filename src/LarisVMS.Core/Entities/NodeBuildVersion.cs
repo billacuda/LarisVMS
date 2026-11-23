@@ -7,7 +7,7 @@ namespace LarisVMS.Core.Entities;
 /// approved. Direct port of dploid's AgentVersion, deliberately trimmed: no IsPilotOnly/staged-rollout
 /// column — LarisVMS has no pilot-group concept for nodes the way dploid does for agents, so there's
 /// nothing for a flag like that to gate here. One row per registered build, normally created by
-/// deploy.ps1 directly against the database (see deploy.ps1's own "Registering node build" step) as
+/// BundledBuildRegistrar from the builds a Web package carries (packages\<kind>\<platform>\) as
 /// Pending, and only offered to a heartbeating node once an admin flips it to Approved on
 /// the Nodes page — NodeBuildService.GetLatestForPlatformAsync only ever considers Approved rows,
 /// picking the newest by UploadedAt, and LarisVMS.Web's heartbeat handler compares that against the
@@ -28,7 +28,7 @@ public class NodeBuildVersion
     public string Platform { get; set; } = "win-x64";
 
     /// <summary>Full path to the stored binary on this Web server's own disk — outside the IIS site
-    /// directory entirely (see NodeBuildService.DefaultRoot's doc comment), so deploy.ps1's robocopy
+    /// directory entirely (see NodeBuildService.DefaultRoot's doc comment), so install-web.ps1's robocopy
     /// /MIR never touches it.</summary>
     public string FilePath { get; set; } = string.Empty;
 
@@ -52,8 +52,8 @@ public class NodeBuildVersion
     /// `&lt;Version&gt;` of its own (see its own csproj), it's a build artifact of the same release,
     /// always published and shipped in lockstep with LarisVMS.Node/LarisVMS.NodeUpdater.
     ///
-    /// **One execution-provider variant per Platform row, not per node.** deploy.ps1 registers
-    /// whichever single accelerator `-NodeAccel` built (Cpu by default) — there's no per-node
+    /// **One execution-provider variant per Platform row, not per node.** A build carries
+    /// every accelerator's backend for its platform — there's no per-node
     /// selection anywhere in this auto-update path, since GetLatestForPlatformAsync only keys off
     /// Platform. A fleet with genuinely mixed hardware (some nodes CUDA-capable, some not) and this
     /// row registered as, say, Cuda, would offer every win-x64 node the Cuda binary regardless of
@@ -69,6 +69,24 @@ public class NodeBuildVersion
     public long? VisionSizeBytes { get; set; }
 
     public string? VisionSha256 { get; set; }
+
+    /// <summary>The build's native backend libraries (onnxruntime-backends.zip, see
+    /// LarisVMS.Core.Update.BackendsBundle), stored beside the binaries. Offered with the update so a
+    /// pushed update keeps a node's CUDA, DirectML, and OpenVINO libraries in step with its Vision
+    /// Service; a node downloads it only when <see cref="BackendsStamp"/> differs from its own. Null
+    /// for builds without a Vision Service and builds made before bundles.</summary>
+    public string? BackendsFilePath { get; set; }
+
+    public long? BackendsSizeBytes { get; set; }
+
+    /// <summary>Lowercase hex SHA-256 of the zip, checked by the node after downloading it.</summary>
+    public string? BackendsSha256 { get; set; }
+
+    /// <summary>The unpacked tree's stamp (BackendsBundle.ComputeStamp), which the signatures cover.</summary>
+    public string? BackendsStamp { get; set; }
+
+    /// <summary>The publisher's signature over UpdateSignature.BackendsPayload, from the build.</summary>
+    public string? BackendsPublisherSignature { get; set; }
 
     public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
 

@@ -3,12 +3,9 @@ using LarisVMS.Core.Entities;
 namespace LarisVMS.Core.Interfaces;
 
 /// <summary>Approval-queue / node-download side of recorder-node auto-update. Registration itself
-/// (file placement + the initial Pending row) happens outside this service now — deploy.ps1 writes
-/// straight to the node-builds folder and the database, the same way it already reads/writes
-/// Settings for the storage-root guard — there is no browser upload path anymore (IIS's own
-/// requestFiltering content-length limit made a several-hundred-MB self-contained exe upload through
-/// the browser a recurring 413, and deploy.ps1 already runs locally on the server with everything it
-/// needs). This interface only covers what still needs to run in-process: the approve/reject queue
+/// (file placement + the initial Pending row) happens in BundledBuildRegistrar at startup, from the
+/// builds the Web package carries; there is no browser upload path (a several-hundred-MB
+/// self-contained exe through the browser was a recurring 413). This interface only covers what still needs to run in-process: the approve/reject queue
 /// workflow and the node-facing download lookup.</summary>
 public interface INodeBuildService
 {
@@ -40,7 +37,16 @@ public interface INodeBuildService
     /// Returns how many were superseded. Also run automatically after an approval and after the
     /// bundled builds are registered.</summary>
     Task<int> SupersedeOutdatedPendingAsync(CancellationToken ct = default);
+
+    /// <summary>Deletes every build older than its platform's approved build — whatever its status —
+    /// with its stored files, plus any file in the builds folder no build refers to. A platform with
+    /// no approved build is left alone, and so is anything newer than the approved build (a build
+    /// waiting for approval). The approved build itself is always kept: nodes still download it.</summary>
+    Task<BuildPurgeResult> PurgeOldBuildsAsync(CancellationToken ct = default);
 }
+
+/// <summary>What <see cref="INodeBuildService.PurgeOldBuildsAsync"/> removed.</summary>
+public record BuildPurgeResult(int Builds, int Files, long Bytes);
 
 /// <summary>Registers the node and media-proxy builds shipped inside the web install (its
 /// <c>packages\</c> folder, filled by the Web MSI or install-web.ps1) as Pending on the Nodes page,

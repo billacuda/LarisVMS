@@ -5,8 +5,8 @@ namespace LarisVMS.Vision.Inference;
 
 /// <summary>
 /// Builds a <see cref="SessionOptions"/> configured for whichever ONNX Runtime backend
-/// <see cref="VisionBackendResolver"/> selected for this process at startup (CUDA, DirectML or CPU;
-/// OpenVINO only via an explicit override and a hand-placed backend folder) -- the successor to the
+/// <see cref="VisionBackendResolver"/> selected for this process at startup (CUDA, DirectML, the
+/// OpenVINO plugin, or CPU) -- the successor to the
 /// old compile-time <c>#if ACCEL_*</c> switch. The node package ships the CUDA and DirectML native
 /// builds; the resolver points the OS loader at one folder and this method appends the matching
 /// execution provider, degrading to the CPU provider inside the same native build if the GPU
@@ -33,7 +33,34 @@ public static class OrtSessionFactory
         {
             logger.LogDebug(ex, "Could not turn off ONNX Runtime telemetry events.");
         }
+        WarnOnVersionMismatch(logger);
     }
+
+    /// <summary>The managed ONNX Runtime assembly must not be newer than the native library it loads
+    /// (a missing entry point then fails sessions in confusing ways). Node updates ship the native
+    /// libraries too (BackendsBundle), so this only trips when that part of an update didn't install;
+    /// it says so in the log instead of leaving a bare load error.</summary>
+    private static void WarnOnVersionMismatch(ILogger logger)
+    {
+        string native;
+        try { native = OrtEnv.Instance().GetVersionString(); }
+        catch (Exception ex) when (ex is OnnxRuntimeException or DllNotFoundException or EntryPointNotFoundException)
+        {
+            return;
+        }
+        var managed = typeof(OrtEnv).Assembly.GetName().Version;
+        if (NativeOlderThanManaged(native, managed))
+        {
+            logger.LogWarning("ONNX Runtime's native library is version {Native} but this Vision Service was built against {Managed}. " +
+                "The native backend libraries didn't update with it; reinstall the node package, or approve the next node update, " +
+                "which brings them.", native, $"{managed!.Major}.{managed.Minor}.{managed.Build}");
+        }
+    }
+
+    /// <summary>Compares major.minor only: patch releases share the native API.</summary>
+    internal static bool NativeOlderThanManaged(string native, Version? managed) =>
+        managed is not null && Version.TryParse(native, out var nativeVersion)
+        && (nativeVersion.Major, nativeVersion.Minor).CompareTo((managed.Major, managed.Minor)) < 0;
 
     public static SessionOptions Create(EngineOptions options, ILogger logger)
     {
@@ -49,7 +76,7 @@ public static class OrtSessionFactory
             {
                 VisionBackend.Cuda => CreateCuda(options, logger),
                 VisionBackend.DirectMl => CreateDirectMl(options, logger),
-                VisionBackend.OpenVino => CreateSimple("OpenVINO", o => o.AppendExecutionProvider_OpenVINO(options.OpenVinoDeviceType), logger),
+                VisionBackend.OpenVino => CreateOpenVino(options, logger),
                 _ => CreateCpu(logger),
             };
         }
@@ -76,13 +103,113 @@ public static class OrtSessionFactory
         return sessionOptions;
     }
 
-    private static SessionOptions CreateSimple(string provider, Action<SessionOptions> append, ILogger logger)
+    private const string OpenVinoRegistrationName = "larisvms_openvino";
+    private const string OpenVinoEpName = "OpenVINOExecutionProvider";
+    private static readonly Lock OpenVinoGate = new();
+    private static bool _openVinoRegistered;
+
+    /// <summary>
+    /// Intel's OpenVINO execution provider, loaded as a plugin (Intel.ML.OnnxRuntime.EP.OpenVINO) on
+    /// top of the CPU onnxruntime build. The plugin library is registered with the process-wide
+    /// <see cref="OrtEnv"/> once; each session then picks the OpenVINO device whose hardware type
+    /// matches <see cref="EngineOptions.OpenVinoDeviceType"/> ("GPU" for an Intel iGPU or Arc card,
+    /// "NPU", or "CPU"). A device suffix such as "GPU.1" selects the second device of that type.
+    /// No matching device (a driver missing, or no such hardware) throws, and <see cref="Create"/>
+    /// falls back to CPU and records why.
+    ///
+    /// Compiled models are cached (OpenVINO's CACHE_DIR, passed through the provider's load_config) in
+    /// <see cref="ResolveOpenVinoCachePath"/>, the counterpart of the TensorRT engine cache: the first
+    /// start compiles, later starts load the compiled blob.
+    /// </summary>
+    private static SessionOptions CreateOpenVino(EngineOptions options, ILogger logger)
     {
+        var env = OrtEnv.Instance();
+        lock (OpenVinoGate)
+        {
+            if (!_openVinoRegistered)
+            {
+                env.RegisterExecutionProviderLibrary(OpenVinoRegistrationName, VisionBackendResolver.OpenVinoPluginPath);
+                _openVinoRegistered = true;
+            }
+        }
+
+        var (wantedType, wantedIndex) = ParseOpenVinoDevice(options.OpenVinoDeviceType);
+        var openVinoDevices = env.GetEpDevices()
+            // Exact name: the plugin also registers "OpenVINOExecutionProvider.AUTO", which would
+            // list every device twice.
+            .Where(d => string.Equals(d.EpName, OpenVinoEpName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var matching = openVinoDevices
+            .Where(d => string.Equals(d.HardwareDevice.Type.ToString(), wantedType, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (wantedIndex >= matching.Count)
+        {
+            var found = openVinoDevices.Count == 0
+                ? "none"
+                : string.Join(", ", openVinoDevices.Select(d => $"{d.HardwareDevice.Type} ({d.HardwareDevice.Vendor})"));
+            throw new InvalidOperationException(
+                $"OpenVINO found no {options.OpenVinoDeviceType} device (devices found: {found}) -- " +
+                "check the Intel graphics or NPU driver is installed");
+        }
+
+        var device = matching[wantedIndex];
+        var cachePath = ResolveOpenVinoCachePath(options.OpenVinoCachePath);
+        var providerOptions = new Dictionary<string, string>();
+        try
+        {
+            Directory.CreateDirectory(cachePath);
+            providerOptions["load_config"] = OpenVinoLoadConfig(wantedType, cachePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // No cache folder means a compile on every start, not a failure.
+            logger.LogWarning(ex, "Could not create the OpenVINO model cache at {CachePath} -- every start will compile the model again.", cachePath);
+        }
+
         var sessionOptions = new SessionOptions();
-        append(sessionOptions);
-        VisionBackendResolver.SetEffectiveProvider(provider);
-        logger.LogInformation("{Provider} execution provider appended.", provider);
+        try
+        {
+            sessionOptions.AppendExecutionProvider(env, [device], providerOptions);
+        }
+        catch (OnnxRuntimeException ex) when (providerOptions.Count > 0)
+        {
+            // The cache is an optimization; a plugin that rejects the option must not cost the GPU.
+            logger.LogWarning(ex, "This OpenVINO plugin rejected the model cache setting -- continuing without a cache.");
+            sessionOptions.Dispose();
+            sessionOptions = new SessionOptions();
+            sessionOptions.AppendExecutionProvider(env, [device], new Dictionary<string, string>());
+            cachePath = "(none)";
+        }
+        VisionBackendResolver.SetEffectiveProvider("OpenVINO");
+        logger.LogInformation("OpenVINO execution provider: device={DeviceType} #{Index} ({Vendor}), compiled model cache={CachePath}.",
+            device.HardwareDevice.Type, wantedIndex, device.HardwareDevice.Vendor, cachePath);
         return sessionOptions;
+    }
+
+    /// <summary>Where OpenVINO caches compiled models: a configured path, else openvino-cache in the
+    /// data folder, beside the TensorRT cache.</summary>
+    internal static string ResolveOpenVinoCachePath(string? configured) =>
+        !string.IsNullOrWhiteSpace(configured)
+            ? configured
+            : Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "openvino-cache");
+
+    /// <summary>The provider's load_config value: OpenVINO properties per device, as JSON, here just
+    /// the device's CACHE_DIR ({"GPU":{"CACHE_DIR":"..."}}).</summary>
+    internal static string OpenVinoLoadConfig(string deviceType, string cachePath) =>
+        System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, Dictionary<string, string>>
+        {
+            [deviceType] = new() { ["CACHE_DIR"] = cachePath },
+        });
+
+    /// <summary>Splits an OpenVINO device setting such as "GPU" or "GPU.1" into the hardware type and
+    /// a zero-based index among devices of that type. Blank means "GPU".</summary>
+    internal static (string Type, int Index) ParseOpenVinoDevice(string? setting)
+    {
+        if (string.IsNullOrWhiteSpace(setting)) return ("GPU", 0);
+        var parts = setting.Trim().Split('.', 2);
+        var index = parts.Length == 2 && int.TryParse(parts[1], out var i) && i >= 0 ? i : 0;
+        return (parts[0].ToUpperInvariant(), index);
     }
 
     private static SessionOptions CreateDirectMl(EngineOptions options, ILogger logger)
@@ -112,8 +239,7 @@ public static class OrtSessionFactory
     internal static string ResolveTensorRtCachePath(string? configured) =>
         !string.IsNullOrWhiteSpace(configured)
             ? configured
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                "LarisVMS", "trt-cache");
+            : Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "trt-cache");
 
     /// <summary>
     /// Builds the <see cref="EngineOptions.TensorRtCacheKey"/> for one engine's exact graph variant.
@@ -159,7 +285,7 @@ public static class OrtSessionFactory
     {
         var sessionOptions = new SessionOptions();
 
-        EngineFactory.PrependToPath(options.CudnnPath, "cudnn64_9.dll", "cuDNN", logger);
+        EngineFactory.PrependToPath(options.CudnnPath, LarisVMS.Core.NativeLibraryNames.Cudnn, "cuDNN", logger);
 
         var tensorRtAppended = false;
         if (options.EnableTensorRt)
@@ -170,7 +296,7 @@ public static class OrtSessionFactory
             // CPU.
             try
             {
-                EngineFactory.PrependToPath(options.TensorRtLibPath, "nvinfer_10.dll", "TensorRT", logger);
+                EngineFactory.PrependToPath(options.TensorRtLibPath, LarisVMS.Core.NativeLibraryNames.TensorRt, "TensorRT", logger);
 
                 var cachePath = ResolveTensorRtCachePath(options.TensorRtEngineCachePath);
 
@@ -300,7 +426,8 @@ public static class OrtSessionFactory
             {
                 logger.LogWarning(ex,
                     "TensorRT was requested but could not be enabled -- continuing on plain CUDA. Needs TensorRT 10.x " +
-                    "(nvinfer_10.dll) matching this ONNX Runtime build, with Vision:TensorRtLibPath pointing at its folder.");
+                    "(nvinfer_10.dll, or libnvinfer.so.10 on Linux) matching this ONNX Runtime build, with Vision:TensorRtLibPath " +
+                    "pointing at its folder.");
                 VisionBackendResolver.NoteTensorRtUnavailable(ex.Message);
             }
         }

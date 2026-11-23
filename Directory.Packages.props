@@ -4,10 +4,10 @@
     <!-- packages.lock.json beside each project pins every transitive package version too, so two
          builds of the same commit restore the same packages. -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
-    <!-- Every project restores for win-x64 too, libraries included. Without this a library's lock
-         file depended on how it was last restored: a node publish (-r win-x64) added the win-x64
-         section and a plain build took it out again. -->
-    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <!-- Every project restores for win-x64 and linux-x64 too, libraries included. Without this a
+         library's lock file depended on how it was last restored: a node publish (-r win-x64) added
+         the win-x64 section and a plain build took it out again. -->
+    <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
     <!-- The node, proxy, updater, and Vision Service publish as single files, which turns this on in
          every project they build and adds the ILLink package to its restore. On for every build, a
          plain restore and a publish restore agree (and single-file problems show up while building). -->
@@ -44,6 +44,10 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.15" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.15" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.15" />
+    <!-- ICU for the Web server on Linux, shipped with the app (LarisVMS.Web.csproj) so a Linux install
+         needs no libicu package. Windows uses the ICU built into Windows. -->
+    <PackageVersion Include="Microsoft.ICU.ICU4C.Runtime.linux-x64" Version="72.1.0.3" />
     <PackageVersion Include="Microsoft.Graph" Version="6.5.0" />
     <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.33.0.1635">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -58,6 +62,10 @@
     <!-- LarisVMS.Vision / LarisVMS.Vision.Service — object detection (see the detection plan).
          Versions match what aitest (g:\Projects\aitest) already proved out. -->
     <PackageVersion Include="YoloDotNet" Version="4.2.0" />
+    <!-- SkiaSharp's Linux natives. YoloDotNet pulls SkiaSharp in with only the Windows and macOS
+         natives; NoDependencies is the build with no fontconfig dependency (LarisVMS draws no text).
+         Keep on the SkiaSharp version YoloDotNet resolves (see LarisVMS.Vision's lock file). -->
+    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.1" />
     <!-- ONNX graph edit (pass 4a): the D-FINE model gets an nv12->normalized-tensor preprocessing
          head merged in at load so colour conversion + normalize run on the accelerator, not the CPU.
          Google.Protobuf (BSD-3-Clause) is the runtime; Grpc.Tools (Apache-2.0, build-only) compiles
@@ -68,20 +76,24 @@
     <!-- ONNX Runtime, multi-backend (see LarisVMS.Vision.csproj / VisionBackendResolver). One managed
          assembly (comes with the base CPU package) is paired with several native builds staged into
          onnxruntime-backends\<name>\ at publish time and chosen at runtime per machine:
-           - base package  -> managed assembly + the CPU native onnxruntime.dll at the app root
-           - Gpu.Windows   -> onnxruntime-backends\cuda\     (CUDA + TensorRT provider natives)
-           - DirectML + Microsoft.AI.DirectML -> onnxruntime-backends\directml\
-         Keep these on the same 1.23.x line; the managed assembly is unified to the highest by CPM.
-         OpenVINO (Intel.ML.OnnxRuntime.OpenVino) is intentionally not bundled — it lags at 1.22 and
-         would force a managed/native mismatch; DirectML already covers Intel GPUs.
-         Gpu.Windows forces the shared managed assembly to 1.23.2 (its nuspec minimum). base is
-         pinned to 1.23.2 to match; DirectML has no 1.23.2 release so it stays at 1.23.0 (its EP ABI
-         is stable — 1.23.0 native against the 1.23.2 managed assembly is fine, and pinning it stops
-         NuGet from floating it up to 1.24.x and dragging the managed assembly with it). -->
-    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.23.2" />
-    <PackageVersion Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.23.2" />
-    <PackageVersion Include="Microsoft.ML.OnnxRuntime.Gpu.Windows" Version="1.23.2" />
-    <PackageVersion Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.23.0" />
+           - base package  -> managed assembly + the CPU native onnxruntime at the app root
+           - Gpu.Windows / Gpu.Linux -> onnxruntime-backends\cuda\ (CUDA + TensorRT provider natives)
+           - DirectML + Microsoft.AI.DirectML -> onnxruntime-backends\directml\ (Windows only)
+           - Intel.ML.OnnxRuntime.EP.OpenVINO -> onnxruntime-backends\openvino\ (a plugin execution
+             provider with the OpenVINO runtime bundled; loads on top of the CPU build, ORT 1.23+)
+         Keep the Microsoft packages on one 1.24.x line; the managed assembly is unified to the highest
+         by CPM and must not be newer than any native build it loads.
+         1.24.4 is deliberately the ceiling for now: it is the last Microsoft.ML.OnnxRuntime.DirectML
+         release (DirectML is in sustained engineering), and it is built on CUDA 12.8. Going to
+         1.27+ means CUDA 13 (drops Pascal and older) and a separate DirectML-pinned Vision.Service
+         build for AMD on Windows — see the Linux support plan's "later" list. Bump CudaRequirements
+         and the README/Help GPU requirements table together with these. -->
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.24.4" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.24.4" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime.Gpu.Windows" Version="1.24.4" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime.Gpu.Linux" Version="1.24.4" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.24.4" />
+    <PackageVersion Include="Intel.ML.OnnxRuntime.EP.OpenVINO" Version="1.8.1" />
     <PackageVersion Include="Microsoft.AI.DirectML" Version="1.15.4" />
     <PackageVersion Include="System.Management" Version="10.0.15" />
     <!-- Testing -->

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Security.Cryptography;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -8,22 +9,29 @@ using LarisVMS.Core.Update;
 namespace LarisVMS.Node.Update;
 
 /// <summary>
-/// Port of dploid.Agent's Update/UpdateService.cs (Windows-only path — LarisVMS.Node has no Linux
-/// build; see NodeConfigStore's doc comment). Downloads a new LarisVMS.Node.exe build over an
+/// Port of dploid.Agent's Update/UpdateService.cs. Downloads a new LarisVMS.Node.exe build over an
 /// authenticated HttpClient (same Bearer "{nodeId}:{secret}" shape as NodeApiClient), verifies its
 /// SHA-256 against the heartbeat response's checksum, then hands off to LarisVMS.NodeUpdater.exe — a
 /// detached process that waits for this Windows Service to actually stop before swapping the binary
 /// (this process can't safely overwrite its own running .exe file while it's still executing) — and
 /// calls IHostApplicationLifetime.StopApplication() so the Service Control Manager stops this process
 /// cleanly, releasing the file lock the detached updater is waiting on.
+///
+/// On Linux the node runs as the unprivileged larisvms user and can't write its program folder, so
+/// it stages the verified files and writes a <see cref="LinuxUpdateRequest"/> instead; a systemd path
+/// unit runs <c>LarisVMS.NodeUpdater --linux-apply</c> as root to install them and restart the service.
+///
+/// Both OSes also keep the Vision Service's native backend libraries current (<see cref="BackendsBundle"/>):
+/// when the offer's stamp differs from the installed one, the bundle is downloaded, unpacked, and
+/// checked into the update folder, then swapped in while the Vision Service isn't running (Windows:
+/// by this service at its next start, before anything loads them; Linux: by the root helper).
 /// </summary>
 public class UpdateService(NodeConfig config, ILogger log, IHostApplicationLifetime lifetime,
     HttpMessageHandler? httpHandler = null)
 {
-    private static readonly string UpdateDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "update");
+    private static readonly string UpdateDir = Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "update");
 
-    private static readonly string StagedPath = Path.Combine(UpdateDir, "LarisVMS.Node.exe");
+    private static readonly string StagedPath = Path.Combine(UpdateDir, LarisVMS.Core.ExecutableName.For(LarisVMS.Core.ExecutableName.Node));
 
     // Object detection plan follow-up: same UpdateDir, own filename — VisionServiceSupervisor.ExeFileName
     // is the fixed name a Vision Service binary must have on disk regardless of which execution-provider
@@ -31,9 +39,19 @@ public class UpdateService(NodeConfig config, ILogger log, IHostApplicationLifet
     // TrySwapBinary a same-name overwrite rather than a rename.
     private static readonly string StagedVisionPath = Path.Combine(UpdateDir, VisionServiceSupervisor.ExeFileName);
 
+    private static readonly string StagedBackendsPath = Path.Combine(UpdateDir, BackendsBundle.StagedFolderName);
+
+    private static readonly string StagedBackendsZip = Path.Combine(UpdateDir, BackendsBundle.ZipFileName);
+
+    /// <summary>The systemd unit on Linux (larisvms-node.service).</summary>
+    public const string LinuxServiceName = "larisvms-node";
+
+    /// <summary>How long a Linux request may wait for the root helper before it's given up on.</summary>
+    private static readonly TimeSpan LinuxApplyTimeout = TimeSpan.FromMinutes(5);
+
     // Published alongside LarisVMS.Node.exe by build-node.ps1 and copied into the same install
     // directory by install-node.ps1 — always sits next to the currently-running binary.
-    private static readonly string UpdaterPath = Path.Combine(AppContext.BaseDirectory, "LarisVMS.NodeUpdater.exe");
+    private static readonly string UpdaterPath = Path.Combine(AppContext.BaseDirectory, LarisVMS.Core.ExecutableName.For(LarisVMS.Core.ExecutableName.Updater));
 
     /// <summary>Guards against NodeWorker.ReconcileLoopAsync re-triggering an update while one is
     /// already downloading/verifying — in practice the reconcile loop already awaits TryApplyAsync
@@ -55,6 +73,23 @@ public class UpdateService(NodeConfig config, ILogger log, IHostApplicationLifet
     /// the updater would otherwise be knocked permanently offline by this button.</summary>
     public bool TryRestartService()
     {
+        if (OperatingSystem.IsLinux())
+        {
+            // The root helper restarts the unit (this user can't); see LinuxUpdateRequest.
+            try
+            {
+                LarisVMS.Core.Security.LocalDataAcl.SecureFolder(UpdateDir);
+                new LinuxUpdateRequest { RestartOnly = true }.WriteTo(UpdateDir);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                log.LogWarning(ex, "Restart requested but the request for the update helper couldn't be written to {Path}.", UpdateDir);
+                return false;
+            }
+            log.LogInformation("Restart requested from the server — the update helper (larisvms-node-update) restarts this service.");
+            return true;
+        }
+
         if (!File.Exists(UpdaterPath))
         {
             log.LogWarning("Restart requested but the updater binary is missing at {Path} — refusing, since " +
@@ -149,14 +184,23 @@ public class UpdateService(NodeConfig config, ILogger log, IHostApplicationLifet
                     LarisVMS.Core.Security.UpdateDownload.Resolve(config.ServerUrl, visionUrl).AbsoluteUri, visionSha, update.Version, ct);
             }
 
+            var backendsStaged = update is { BackendsDownloadUrl: { } backendsUrl, BackendsSha256: { } backendsSha, BackendsStamp: { } backendsStamp }
+                && await TryStageBackendsAsync(http, LarisVMS.Core.Security.UpdateDownload.Resolve(config.ServerUrl, backendsUrl).AbsoluteUri,
+                    backendsSha, backendsStamp, update.Version, ct);
+
             log.LogInformation("Applying update to {Version}...", update.Version);
-            ApplyWindows(visionStaged);
+            if (OperatingSystem.IsLinux())
+                ApplyLinux(update, visionStaged, backendsStaged);
+            else
+                ApplyWindows(visionStaged);
             return true;
         }
         catch (Exception ex)
         {
             log.LogError(ex, "Node update failed");
             TryCleanStaged();
+            TryCleanStagedVision();
+            TryCleanStagedBackends();
             IsApplying = false;
             return false;
         }
@@ -207,6 +251,108 @@ public class UpdateService(NodeConfig config, ILogger log, IHostApplicationLifet
         }
     }
 
+    /// <summary>Downloads the build's native backend libraries, when the Vision Service is installed
+    /// and its libraries' stamp differs from the offer's, and unpacks them into the update folder,
+    /// checked against the signed stamp. Best-effort like the Vision Service binary: false leaves the
+    /// installed libraries as they are.</summary>
+    internal async Task<bool> TryStageBackendsAsync(HttpClient http, string downloadUrl, string expectedSha256, string expectedStamp,
+        string version, CancellationToken ct)
+    {
+        if (!File.Exists(Path.Combine(AppContext.BaseDirectory, VisionServiceSupervisor.ExeFileName))) return false;
+        if (string.Equals(BackendsBundle.InstalledStamp(AppContext.BaseDirectory), expectedStamp, StringComparison.OrdinalIgnoreCase))
+            return false;
+        try
+        {
+            using (var response = await http.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, ct))
+            {
+                if (!response.IsSuccessStatusCode)
+                {
+                    log.LogWarning("Native backend libraries for {Version} returned {Status}; AI detection keeps its current ones.", version, response.StatusCode);
+                    return false;
+                }
+                await using var fileStream = File.Create(StagedBackendsZip);
+                await response.Content.CopyToAsync(fileStream, ct);
+            }
+
+            var actualSha256 = await ComputeSha256Async(StagedBackendsZip, ct);
+            if (!string.Equals(actualSha256, expectedSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                log.LogWarning("Native backend libraries for {Version}: checksum mismatch (expected {Expected}, got {Actual}); skipped.",
+                    version, expectedSha256, actualSha256);
+                TryCleanStagedBackends();
+                return false;
+            }
+
+            if (Directory.Exists(StagedBackendsPath)) Directory.Delete(StagedBackendsPath, recursive: true);
+            // Refuses entries that would land outside the folder.
+            ZipFile.ExtractToDirectory(StagedBackendsZip, StagedBackendsPath, overwriteFiles: false);
+            File.Delete(StagedBackendsZip);
+
+            var stamp = BackendsBundle.ComputeStamp(StagedBackendsPath);
+            if (!string.Equals(stamp, expectedStamp, StringComparison.OrdinalIgnoreCase))
+            {
+                log.LogWarning("Native backend libraries for {Version} don't match their signed stamp; skipped.", version);
+                TryCleanStagedBackends();
+                return false;
+            }
+            await File.WriteAllTextAsync(Path.Combine(StagedBackendsPath, BackendsBundle.StampFileName), stamp, ct);
+            log.LogInformation("Native backend libraries for {Version} downloaded and verified.", version);
+            return true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning(ex, "Native backend libraries for {Version} couldn't be downloaded; AI detection keeps its current ones.", version);
+            TryCleanStagedBackends();
+            return false;
+        }
+    }
+
+    /// <summary>Linux: the verified files are staged; the root helper installs them (see
+    /// <see cref="LinuxUpdateRequest"/>) and restarts this service, so nothing here stops it.</summary>
+    private void ApplyLinux(NodeUpdateInfoDto update, bool visionStaged, bool backendsStaged)
+    {
+        MakeExecutable(StagedPath);
+        if (visionStaged) MakeExecutable(StagedVisionPath);
+        new LinuxUpdateRequest
+        {
+            Platform = LarisVMS.Core.PlatformId.Current,
+            Version = update.Version,
+            Sha256 = update.Sha256,
+            // The signed payload covers the offered Vision Service hash whether or not it was staged.
+            VisionSha256 = update.VisionSha256,
+            PublisherSignature = update.PublisherSignature,
+            BackendsStamp = backendsStaged ? update.BackendsStamp : null,
+            BackendsPublisherSignature = backendsStaged ? update.BackendsPublisherSignature : null,
+        }.WriteTo(UpdateDir);
+        log.LogInformation("Update {Version} staged; the update helper (larisvms-node-update) installs it and restarts this service.", update.Version);
+        _ = GiveUpIfNotAppliedAsync(update.Version);
+    }
+
+    /// <summary>When nothing picks the request up (the helper's units aren't installed, as when running
+    /// a build from source), says so and lets the next offer try again.</summary>
+    private async Task GiveUpIfNotAppliedAsync(string version)
+    {
+        await Task.Delay(LinuxApplyTimeout);
+        var request = Path.Combine(UpdateDir, LinuxUpdateRequest.FileName);
+        if (!File.Exists(request)) return;
+        log.LogError("Update {Version} was staged {Minutes} minutes ago but the update helper never installed it. Check that " +
+            "larisvms-node-update.path is enabled (systemctl status larisvms-node-update.path) and see updater-*.log in {LogDir}.",
+            version, (int)LinuxApplyTimeout.TotalMinutes, LarisVMS.Core.LarisPaths.LogRoot);
+        try { File.Delete(request); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* replaced by the next attempt */ }
+        TryCleanStaged();
+        TryCleanStagedVision();
+        TryCleanStagedBackends();
+        IsApplying = false;
+    }
+
+    private static void MakeExecutable(string path)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+    }
+
     private void ApplyWindows(bool visionStaged = false)
     {
         if (!File.Exists(UpdaterPath))
@@ -217,7 +363,7 @@ public class UpdateService(NodeConfig config, ILogger log, IHostApplicationLifet
         }
 
         var currentBinary = Process.GetCurrentProcess().MainModule?.FileName
-            ?? Path.Combine(AppContext.BaseDirectory, "LarisVMS.Node.exe");
+            ?? Path.Combine(AppContext.BaseDirectory, LarisVMS.Core.ExecutableName.For(LarisVMS.Core.ExecutableName.Node));
         var currentVisionBinary = Path.Combine(AppContext.BaseDirectory, VisionServiceSupervisor.ExeFileName);
 
         // Swap while still running (see InPlaceBinarySwap), so the updater only has to restart the
@@ -286,14 +432,47 @@ public class UpdateService(NodeConfig config, ILogger log, IHostApplicationLifet
     public void CheckLastUpdate()
     {
         InPlaceBinarySwap.CleanUp(AppContext.BaseDirectory);
+        BackendsBundle.CleanUp(AppContext.BaseDirectory);
+        ApplyStagedBackends();
         if (!File.Exists(StagedPath)) return;
 
         log.LogWarning("A node update downloaded {When:u} was never applied (the staged binary is still at {Path}). " +
             "See updater-*.log in {LogDir} for why. It will be downloaded again on the next update offer.",
             File.GetLastWriteTimeUtc(StagedPath), StagedPath,
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs"));
+            LarisVMS.Core.LarisPaths.LogRoot);
         TryCleanStaged();
         TryCleanStagedVision();
+    }
+
+    /// <summary>Windows: swaps in native backend libraries the last update staged. Runs at startup,
+    /// before the Vision Service starts and loads them. On Linux the root helper does this; a staged
+    /// folder still here means it didn't run, and it's removed.</summary>
+    private void ApplyStagedBackends()
+    {
+        if (!Directory.Exists(StagedBackendsPath)) return;
+        if (!OperatingSystem.IsWindows())
+        {
+            log.LogWarning("Native backend libraries staged by the last update were never installed; see updater-*.log in {LogDir}.",
+                LarisVMS.Core.LarisPaths.LogRoot);
+            TryCleanStagedBackends();
+            return;
+        }
+
+        var stampFile = Path.Combine(StagedBackendsPath, BackendsBundle.StampFileName);
+        var expected = File.Exists(stampFile) ? File.ReadAllText(stampFile).Trim() : null;
+        if (expected is null || !string.Equals(BackendsBundle.ComputeStamp(StagedBackendsPath), expected, StringComparison.OrdinalIgnoreCase))
+        {
+            log.LogWarning("The staged native backend libraries changed since they were verified; not installing them.");
+            TryCleanStagedBackends();
+            return;
+        }
+        if (BackendsBundle.TrySwapIn(StagedBackendsPath, AppContext.BaseDirectory, out var error))
+            log.LogInformation("Installed the native backend libraries from the last update.");
+        else
+        {
+            log.LogWarning("Could not install the native backend libraries from the last update ({Error}); AI detection keeps its current ones.", error);
+            TryCleanStagedBackends();
+        }
     }
 
     private static HttpClientHandler CreateDefaultHandler()
@@ -321,5 +500,13 @@ public class UpdateService(NodeConfig config, ILogger log, IHostApplicationLifet
     {
         try { if (File.Exists(StagedVisionPath)) File.Delete(StagedVisionPath); }
         catch { /* best effort */ }
+    }
+
+    private static void TryCleanStagedBackends()
+    {
+        try { if (File.Exists(StagedBackendsZip)) File.Delete(StagedBackendsZip); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort */ }
+        try { if (Directory.Exists(StagedBackendsPath)) Directory.Delete(StagedBackendsPath, recursive: true); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort */ }
     }
 }

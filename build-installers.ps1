@@ -1,28 +1,35 @@
 <#
 .SYNOPSIS
-    Builds the LarisVMS Web, Node and Proxy MSI installers.
+    Builds the LarisVMS Web, Node, and Proxy installers: MSIs for Windows, .deb and .rpm for Linux.
 
 .DESCRIPTION
       1. Checks the release version is in sync (CHANGELOG.md, every csproj <Version>, and
          AppRelease.Version) — see tools\VersionGuard.ps1
-      2. Builds the recorder node and media proxy packages (build-node.ps1, build-proxy.ps1)
-      3. Publishes LarisVMS.Web self-contained (win-x64) and bundles the node/proxy packages and the
-         CUDA provider into its packages\ folder — the web app registers them as Pending on startup
-      4. Builds the three MSIs with WiX v5 (restored from NuGet; no global install needed)
-      5. Copies them to publish\installers\LarisVMS-{Web,Node,Proxy}-<version>-x64.msi (other
-         languages from -Cultures get a -<culture> suffix)
+      2. Builds the recorder node and media proxy for every platform in -Platforms (build-node.ps1,
+         build-proxy.ps1), all with one build number, so every product and platform shares a version
+      3. Publishes LarisVMS.Web self-contained for each platform and bundles every platform's
+         node and proxy builds into its packages\ folder (packages\<kind>\<platform>\), with every
+         platform's CUDA provider (packages\cuda-provider\<platform>\) — the web app registers the
+         builds as Pending on startup and serves the CUDA providers to NVIDIA nodes, so one server
+         updates and accelerates Windows and Linux nodes alike with nothing to download
+      4. Builds the three MSIs with WiX v5 (restored from NuGet; no global install needed) and copies
+         them to publish\installers\LarisVMS-{Web,Node,Proxy}-<version>-x64.msi (other languages
+         from -Cultures get a -<culture> suffix)
+      5. Builds larisvms-{web,node,proxy} .deb and .rpm packages with nFPM (build-linux-packages.ps1)
       6. Writes SHA256SUMS.txt beside them, to upload with the release
 
     With -SignThumbprint, the node, proxy, updater, and Vision Service executables are signed before
     they're bundled, and the MSIs after they're built.
 
-    Needs the .NET 10 SDK. Does not need administrator rights — nothing is installed.
+    Needs the .NET 10 SDK, and nFPM for the Linux packages (-Platforms win-x64 skips them). Does not
+    need administrator rights — nothing is installed.
 
 .EXAMPLE
     .\build-installers.ps1
     .\build-installers.ps1 -SkipNodeVision
     .\build-installers.ps1 -SignThumbprint 0123456789ABCDEF0123456789ABCDEF01234567
     .\build-installers.ps1 -Cultures en-US,fr-FR
+    .\build-installers.ps1 -Platforms win-x64
 #>
 param(
     [string]$Configuration = 'Release',
@@ -36,7 +43,13 @@ param(
     [string]$TimestampUrl   = 'http://timestamp.digicert.com',
     # Installer languages: one MSI set per culture, each needing installer\Common\Strings.<culture>.wxl.
     # The first is the main download; untranslated text falls back to English.
-    [string[]]$Cultures     = @('en-US')
+    [string[]]$Cultures     = @('en-US'),
+    # Which platforms to build. Every Web package bundles node and proxy builds for all of them.
+    [ValidateSet('win-x64', 'linux-x64')][string[]]$Platforms = @('win-x64', 'linux-x64'),
+    # nFPM, for the .deb and .rpm packages.
+    [string]$Nfpm = 'nfpm',
+    # Optional: the publisher's private key (tools\publisher-key.ps1), passed to build-node.ps1 and build-proxy.ps1.
+    [string]$PublisherKeyPath
 )
 
 Set-StrictMode -Version Latest
@@ -63,7 +76,16 @@ function Invoke-Sign([string[]]$Files) {
 }
 
 $webProject = Join-Path $PSScriptRoot 'src\LarisVMS.Web\LarisVMS.Web.csproj'
-$publishWeb = Join-Path $PSScriptRoot 'publish\LarisVMS.Web'
+# Each platform's Web publish. The Windows one is what the Web MSI harvests, so the Linux one must
+# not sit inside it.
+$publishWebFor = @{
+    'win-x64'   = (Join-Path $PSScriptRoot 'publish\LarisVMS.Web')
+    'linux-x64' = (Join-Path $PSScriptRoot 'publish\LarisVMS.Web-linux')
+}
+# Where build-node.ps1 and build-proxy.ps1 leave each platform's build ($NodeProxyBuildOutputs), and
+# Copy-NodeProxyPackages, which bundles them into a Web publish (shared with install-web.ps1).
+. (Join-Path $PSScriptRoot 'tools\BuildPackages.ps1')
+$buildOutputs = $NodeProxyBuildOutputs
 
 # ── version ──────────────────────────────────────────────────────────────────
 . (Join-Path $PSScriptRoot 'tools\VersionGuard.ps1')
@@ -100,13 +122,26 @@ if (-not $SkipVulnerabilityCheck) {
 }
 
 # ── node and proxy packages ──────────────────────────────────────────────────
-Write-Step "Building recorder node package"
-$nodeArgs = @{ Configuration = $Configuration }
-if ($SkipNodeVision) { $nodeArgs['SkipVision'] = $true }
-& (Join-Path $PSScriptRoot 'build-node.ps1') @nodeArgs
+# One build number for the whole run: every product and platform ships as the same version.
+$buildNumberPath = Join-Path $PSScriptRoot 'build-number.txt'
+if (-not (Test-Path $buildNumberPath)) { throw "build-number.txt not found at $buildNumberPath." }
+$buildNumber = [int]((Get-Content $buildNumberPath -Raw).Trim()) + 1
+Set-Content -Path $buildNumberPath -Value $buildNumber -NoNewline
+$fullVersion = "$version.$buildNumber"
+Write-Ok "Build $fullVersion"
 
-Write-Step "Building media proxy package"
-& (Join-Path $PSScriptRoot 'build-proxy.ps1') -Configuration $Configuration
+foreach ($platform in $Platforms) {
+    Write-Step "Building recorder node package ($platform)"
+    $nodeArgs = @{ Configuration = $Configuration; Platform = $platform; BuildNumber = $buildNumber }
+    if ($SkipNodeVision) { $nodeArgs['SkipVision'] = $true }
+    if ($PublisherKeyPath) { $nodeArgs['PublisherKeyPath'] = $PublisherKeyPath }
+    & (Join-Path $PSScriptRoot 'build-node.ps1') @nodeArgs
+
+    Write-Step "Building media proxy package ($platform)"
+    $proxyArgs = @{ Configuration = $Configuration; Platform = $platform; BuildNumber = $buildNumber }
+    if ($PublisherKeyPath) { $proxyArgs['PublisherKeyPath'] = $PublisherKeyPath }
+    & (Join-Path $PSScriptRoot 'build-proxy.ps1') @proxyArgs
+}
 
 # Signed before they're bundled: the server hashes and signs exactly these files for auto-update,
 # and the MSIs pick up the same copies.
@@ -120,41 +155,31 @@ if ($signtool) {
     Invoke-Sign $executables
 }
 
-# ── web, self-contained, with the packages bundled ───────────────────────────
-Write-Step "Publishing LarisVMS.Web (self-contained win-x64)"
-if (Test-Path $publishWeb) { Remove-Item $publishWeb -Recurse -Force }
-Invoke-Cmd 'dotnet' @('publish', $webProject, '-c', $Configuration, '-r', 'win-x64', '--self-contained', '-o', $publishWeb)
+New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 
-$packagesDir = Join-Path $publishWeb 'packages'
-$bundles = @(
-    @{ Src = 'publish\LarisVMS.Node\win\LarisVMS.Node.exe';                       Dest = 'node' },
-    @{ Src = 'publish\LarisVMS.Node\win\LarisVMS.Vision.Service.exe';             Dest = 'node' },
-    @{ Src = 'publish\LarisVMS.Node\node-build-version.txt';                      Dest = 'node' },
-    @{ Src = 'publish\LarisVMS.Node\publisher.sig';                               Dest = 'node' },
-    @{ Src = 'publish\LarisVMS.Proxy\win\LarisVMS.Proxy.exe';                     Dest = 'proxy' },
-    @{ Src = 'publish\LarisVMS.Proxy\proxy-build-version.txt';                    Dest = 'proxy' },
-    @{ Src = 'publish\LarisVMS.Proxy\publisher.sig';                              Dest = 'proxy' },
-    @{ Src = 'publish\LarisVMS.Node\cuda-provider\onnxruntime_providers_cuda.dll'; Dest = 'cuda-provider' }
-)
-foreach ($b in $bundles) {
-    $src = Join-Path $PSScriptRoot $b.Src
-    if (-not (Test-Path $src)) { Write-Host "    (not built, skipped) $($b.Src)" -ForegroundColor DarkGray; continue }
-    $dest = Join-Path $packagesDir $b.Dest
-    New-Item -ItemType Directory -Path $dest -Force | Out-Null
-    Copy-Item $src $dest -Force
+# ── web, self-contained, with the packages bundled ───────────────────────────
+foreach ($webPlatform in $Platforms) {
+    $publishWeb = $publishWebFor[$webPlatform]
+    Write-Step "Publishing LarisVMS.Web (self-contained $webPlatform)"
+    if (Test-Path $publishWeb) { Remove-Item $publishWeb -Recurse -Force }
+    Invoke-Cmd 'dotnet' @('publish', $webProject, '-c', $Configuration, '-r', $webPlatform, '--self-contained', '-o', $publishWeb)
+
+    # packages\<kind>\<platform>\: every platform's node and proxy, read by BundledBuildRegistrar.
+    Copy-NodeProxyPackages -RepoRoot $PSScriptRoot -PackagesDir (Join-Path $publishWeb 'packages') -Platforms $Platforms
+    Write-Ok "Web ($webPlatform) published with every platform's node, proxy, and CUDA provider bundled."
 }
-Write-Ok "Web published with node/proxy packages bundled."
 
 # ── MSIs ─────────────────────────────────────────────────────────────────────
-New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 $built = @()
+$buildMsis = $Platforms -contains 'win-x64'
 foreach ($culture in $Cultures) {
+    if (-not $buildMsis) { break }
     if (-not (Test-Path (Join-Path $PSScriptRoot "installer\Common\Strings.$culture.wxl"))) {
         throw "No installer text for $culture - add installer\Common\Strings.$culture.wxl (copy Strings.en-US.wxl)."
     }
 }
 $cultureGroups = ($Cultures | ForEach-Object { if ($_ -eq 'en-US') { $_ } else { "$_,en-US" } }) -join ';'
-foreach ($product in @('Web', 'Node', 'Proxy')) {
+foreach ($product in $(if ($buildMsis) { @('Web', 'Node', 'Proxy') } else { @() })) {
     Write-Step "Building LarisVMS-$product MSI ($($Cultures -join ', '))"
     $proj = Join-Path $PSScriptRoot "installer\$product\LarisVMS.$product.Installer.wixproj"
     # ';' and ',' escaped, or MSBuild reads them as separating properties.
@@ -168,9 +193,18 @@ foreach ($product in @('Web', 'Node', 'Proxy')) {
     }
 }
 
-if ($signtool) {
+if ($signtool -and $built.Count -gt 0) {
     Write-Step "Signing installers"
     Invoke-Sign $built
+}
+
+# ── .deb and .rpm ────────────────────────────────────────────────────────────
+if ($Platforms -contains 'linux-x64') {
+    Write-Step "Building the Linux packages (.deb and .rpm)"
+    $built += & (Join-Path $PSScriptRoot 'build-linux-packages.ps1') -Version $fullVersion -Nfpm $Nfpm -OutputDir $OutputDir `
+        -WebDir $publishWebFor['linux-x64'] `
+        -NodeDir (Join-Path $PSScriptRoot $buildOutputs['linux-x64'].Node) `
+        -ProxyDir (Join-Path $PSScriptRoot $buildOutputs['linux-x64'].Proxy)
 }
 
 # ── checksums ────────────────────────────────────────────────────────────────

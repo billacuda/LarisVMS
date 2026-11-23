@@ -1,0 +1,181 @@
+name: Linux
+
+# Runs the tests on Linux, builds the .deb and .rpm packages, and installs them on every supported
+# distro. Packages only build for pushes to main, pull requests, and manual runs: they take a while.
+
+on:
+  push:
+    branches: [ "main" ]
+    paths: [ 'src/**', 'tests/**', 'installer/linux/**', 'tools/**', '*.ps1', 'build-number.txt',
+             '**.csproj', '**.props', '**.slnx', 'global.json', 'CHANGELOG.md', '.github/workflows/linux.yml' ]
+  pull_request:
+    branches: [ "main" ]
+    paths: [ 'src/**', 'tests/**', 'installer/linux/**', 'tools/**', '*.ps1', 'build-number.txt',
+             '**.csproj', '**.props', '**.slnx', 'global.json', 'CHANGELOG.md', '.github/workflows/linux.yml' ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  NFPM_VERSION: '2.48.0'
+  NFPM_SHA256: '6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750'
+
+jobs:
+  test:
+    name: Tests (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Test
+        # The full suite: fine on a runner (the local rule against it is about VS Code's memory).
+        run: >-
+          dotnet test tests/LarisVMS.Tests/LarisVMS.Tests.csproj --configuration Release
+          --logger "trx;LogFileName=linux.trx" --results-directory TestResults
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-linux
+          path: TestResults
+          retention-days: 7
+
+  packages:
+    name: Build .deb and .rpm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Free disk space
+        # The Vision Service's ONNX Runtime packages (CUDA, OpenVINO) need several GB; the runner
+        # image's Android SDK, GHC, and CodeQL bundles aren't used here.
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Install nFPM
+        run: |
+          curl -fsSL -o /tmp/nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          echo "${NFPM_SHA256}  /tmp/nfpm.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm
+          nfpm --version
+
+      - name: Build the Linux packages
+        # Unsigned (no publisher key): a CI build is for checking, never for release. The
+        # vulnerability check is left to the OSV-Scanner workflow, so a new advisory doesn't fail
+        # this one.
+        shell: pwsh
+        run: ./build-installers.ps1 -Platforms linux-x64 -SkipVulnerabilityCheck
+
+      - name: Upload packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-packages
+          path: |
+            publish/installers/*.deb
+            publish/installers/*.rpm
+            publish/installers/SHA256SUMS.txt
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+
+  smoke:
+    name: Install on ${{ matrix.image }}
+    needs: packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ 'ubuntu:22.04', 'ubuntu:24.04', 'ubuntu:26.04', 'debian:12', 'debian:13',
+                 'rockylinux/rockylinux:9', 'rockylinux/rockylinux:10' ]
+    container: ${{ matrix.image }}
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-packages
+          path: pkgs
+
+      - name: Install (deb)
+        if: startsWith(matrix.image, 'ubuntu') || startsWith(matrix.image, 'debian')
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        # apt resolves the dependencies (ffmpeg, libssl, ...) from the distro's own repositories, so
+        # a dependency name that doesn't exist on this release fails here.
+        run: |
+          apt-get update
+          apt-get install -y ./pkgs/larisvms-web_*_amd64.deb ./pkgs/larisvms-node_*_amd64.deb ./pkgs/larisvms-proxy_*_amd64.deb
+
+      - name: Install (rpm)
+        if: startsWith(matrix.image, 'rockylinux')
+        # The node needs ffmpeg, which RHEL-family systems get from RPM Fusion (on top of EPEL and
+        # CRB): the same steps the install docs give.
+        run: |
+          dnf install -y epel-release dnf-plugins-core
+          crb enable
+          dnf install -y "https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-$(rpm -E %rhel).noarch.rpm"
+          dnf install -y ./pkgs/larisvms-web-*.x86_64.rpm ./pkgs/larisvms-node-*.x86_64.rpm ./pkgs/larisvms-proxy-*.x86_64.rpm
+
+      - name: Check the install
+        run: |
+          set -eux
+          id larisvms
+          for kind in web node proxy; do
+            test -f /usr/lib/systemd/system/larisvms-$kind.service
+            test -f /etc/larisvms/$kind.env
+          done
+          for kind in node proxy; do
+            test -f /usr/lib/systemd/system/larisvms-$kind-update.path
+            test -f /usr/lib/systemd/system/larisvms-$kind-update.service
+          done
+          test -d /var/lib/larisvms/models
+          [ "$(stat -c %U /var/lib/larisvms)" = larisvms ]
+          # Each program starts on this distro's libraries (glibc, libssl, ICU for the Web).
+          web=$(/opt/larisvms/web/LarisVMS.Web --version)
+          node=$(larisvms-node --version)
+          proxy=$(larisvms-proxy --version)
+          echo "web $web, node $node, proxy $proxy"
+          [ -n "$web" ] && [ "$web" != unknown ] && [ "$node" != unknown ] && [ "$proxy" != unknown ]
+          larisvms-node setup --help >/dev/null
+          larisvms-proxy setup --help >/dev/null
+          # Run as the service account too: it owns nothing under /opt, so this catches a file
+          # installed unreadable or not executable.
+          su -s /bin/sh larisvms -c 'larisvms-node --version && larisvms-proxy --version && /opt/larisvms/web/LarisVMS.Web --version'
+
+      - name: Remove
+        # The remove scripts run without systemd here (a container), like a container image build.
+        # The data and the account stay, as on Windows.
+        run: |
+          set -eux
+          if command -v apt-get >/dev/null; then
+            apt-get remove -y larisvms-web larisvms-node larisvms-proxy
+          else
+            dnf remove -y larisvms-web larisvms-node larisvms-proxy
+          fi
+          test ! -e /opt/larisvms/web/LarisVMS.Web
+          test ! -e /usr/bin/larisvms-node
+          # rpm removes an unchanged config file, dpkg keeps it until a purge; the data stays on both.
+          test -d /var/lib/larisvms/models
+          id larisvms

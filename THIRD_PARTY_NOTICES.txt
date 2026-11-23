@@ -44,13 +44,15 @@ YoloDotNet 4.2.0
     ByteTracker/MovementClassifier/CameraDetectionPipeline never needed to change, and (2) its public
     LAPJV.Solve, which the ByteTrack port below calls directly.
 
-Microsoft.ML.OnnxRuntime + Microsoft.ML.OnnxRuntime.Gpu.Windows + Microsoft.ML.OnnxRuntime.DirectML
+Microsoft.ML.OnnxRuntime + Microsoft.ML.OnnxRuntime.Gpu.Windows + Microsoft.ML.OnnxRuntime.Gpu.Linux
++ Microsoft.ML.OnnxRuntime.DirectML
     MIT
     https://github.com/microsoft/onnxruntime
     Copyright (c) Microsoft Corporation
     LarisVMS.Vision references the managed assembly and the CPU native; LarisVMS.Vision.Service also
-    stages the CUDA(+TensorRT) and DirectML native builds into onnxruntime-backends/<name>/ so one
-    node package runs on any hardware (VisionBackendResolver picks one at runtime). The ~320 MB
+    stages the CUDA(+TensorRT) native build for the target OS (Gpu.Windows or Gpu.Linux) and, on
+    Windows, the DirectML build into onnxruntime-backends/<name>/ so one node package runs on any
+    hardware (VisionBackendResolver picks one at runtime). The ~320 MB
     onnxruntime_providers_cuda.dll is not shipped in the node package — install-web.ps1 seeds it onto the
     LarisVMS server and an NVIDIA node downloads it from there once. Used directly from
     Inference/OrtSessionFactory.cs, DFineEngine.cs, YoloXEngine.cs.
@@ -60,6 +62,22 @@ Microsoft.AI.DirectML
     https://github.com/microsoft/DirectML
     Copyright (c) Microsoft Corporation
     Provides DirectML.dll, staged alongside the DirectML ONNX Runtime build.
+
+Intel.ML.OnnxRuntime.EP.OpenVINO (OpenVINO execution provider plugin for ONNX Runtime)
+    MIT
+    https://github.com/onnxruntime/onnxruntime-ep-openvino
+    Copyright (c) Intel Corporation
+    Staged by LarisVMS.Vision.Service into onnxruntime-backends/openvino/ and registered with ONNX
+    Runtime at runtime (OrtSessionFactory) for Intel GPUs and NPUs on Windows and Linux. The package
+    bundles these runtime libraries, shipped unmodified in the same folder:
+      - OpenVINO Runtime (openvino, its CPU/GPU/NPU device plugins and ONNX/IR frontends),
+        Apache-2.0, Copyright (C) Intel Corporation, https://github.com/openvinotoolkit/openvino
+      - oneTBB (tbb12, tbbmalloc, tbbbind), Apache-2.0, Copyright (c) Intel Corporation,
+        https://github.com/uxlfoundation/oneTBB
+      - hwloc (libhwloc, Linux only), BSD-3-Clause, Copyright (c) Inria, the University of
+        Bordeaux, and others, https://github.com/open-mpi/hwloc
+    The package's own third-party-programs.txt, shipped in that folder, lists every bundled
+    component and its license text.
 
 SkiaSharp
     MIT

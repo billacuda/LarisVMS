@@ -13,7 +13,8 @@ Un seul paquet de nœud couvre toutes les machines. Au démarrage, le service de
 | Matériel | Moteur | Requis sur le nœud |
 |---|---|---|
 | GPU NVIDIA | CUDA (repasse à DirectML) | CUDA Toolkit 12.x et cuDNN 9.x |
-| GPU AMD / Intel | DirectML | Un pilote de GPU à jour |
+| GPU Intel | OpenVINO (repasse à DirectML) | Un pilote graphique Intel à jour |
+| GPU AMD | DirectML | Un pilote de GPU à jour |
 | Pas de GPU | CPU | Rien |
 
 La page de modification du nœud affiche les accélérateurs détectés, et son paramètre **Accélérateur** peut en imposer un. Les modèles ne sont jamais fournis avec le logiciel. Un nœud récupère les modèles YOLOX intégrés depuis le serveur, et les autres modèles vont dans `C:\ProgramData\LarisVMS\models` sur le nœud.
@@ -48,7 +49,7 @@ Comment l’image d’une caméra s’adapte à l’entrée carrée du modèle :
 
 - **Bandes noires** (par défaut) : conserve les proportions et complète avec des bandes noires.
 - **Étirer** : écrase l’image pour remplir le carré, ce qui déforme les formes.
-- **Tranche** : découpe l’image en carrés se chevauchant à pleine résolution. C’est idéal pour les objets petits ou lointains sur des caméras grand angle, mais coûte environ 2× le travail sur une caméra 16:9. Elle nécessite le prétraitement par GPU, et l’active automatiquement.
+- **Tranche** : découpe l’image en carrés se chevauchant à pleine résolution. C’est idéal pour les objets petits ou lointains sur des caméras grand angle, mais coûte environ 2× le travail sur une caméra 16:9. Elle nécessite le prétraitement par GPU, et l’active automatiquement. Sur un GPU Intel (OpenVINO), utilisez plutôt **Bandes noires** : Tranche y traite chaque tuile séparément et consomme bien plus de CPU et de GPU.
 
 Le **prétraitement des images par GPU** déplace la conversion des couleurs du CPU vers le GPU, ce qui aide sur les nœuds avec de nombreuses caméras.
 

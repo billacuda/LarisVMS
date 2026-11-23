@@ -13,7 +13,8 @@ Un paquete de nodo cubre cada máquina. Al arrancar, el servicio de visión elig
 | Hardware | Backend | Necesita en el nodo |
 |---|---|---|
 | GPU NVIDIA | CUDA (vuelve a DirectML) | CUDA Toolkit 12.x y cuDNN 9.x |
-| GPU AMD / Intel | DirectML | Un driver de GPU actual |
+| GPU Intel | OpenVINO (vuelve a DirectML) | Un driver de gráficos Intel actual |
+| GPU AMD | DirectML | Un driver de GPU actual |
 | Sin GPU | CPU | Nada |
 
 La página de edición del nodo muestra los aceleradores detectados, y su configuración **Acelerador** puede forzar uno. Los modelos nunca vienen incluidos. Un nodo trae los modelos YOLOX integrados desde el servidor, y los otros modelos van en `C:\ProgramData\LarisVMS\models` en el nodo.
@@ -48,7 +49,7 @@ Cómo encaja el cuadro de una cámara en la entrada cuadrada del modelo:
 
 - **Letterbox** (predeterminado): conserva las proporciones y rellena con barras negras.
 - **Estirar**: aplasta el cuadro para llenar el cuadrado, lo que distorsiona las formas.
-- **Slice**: corta el cuadro en cuadrados superpuestos de resolución completa. Es mejor para objetos pequeños o lejanos en cámaras anchas, pero cuesta unas 2× el trabajo en una cámara 16:9. Necesita preprocesamiento en GPU, y lo activa automáticamente.
+- **Slice**: corta el cuadro en cuadrados superpuestos de resolución completa. Es mejor para objetos pequeños o lejanos en cámaras anchas, pero cuesta unas 2× el trabajo en una cámara 16:9. Necesita preprocesamiento en GPU, y lo activa automáticamente. En una GPU Intel (OpenVINO), usá **Letterbox**: ahí Slice procesa cada recorte por separado y usa mucho más CPU y GPU.
 
 El **preprocesamiento de cuadros en GPU** mueve la conversión de color de la CPU a la GPU, lo que ayuda en nodos con muchas cámaras.
 

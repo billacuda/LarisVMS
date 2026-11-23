@@ -25,6 +25,8 @@
 
   <ItemGroup>
     <PackageReference Include="YoloDotNet" />
+    <!-- libSkiaSharp.so for Linux nodes (YoloDotNet only brings the Windows and macOS natives). -->
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" />
     <!-- Managed ONNX Runtime + the CPU native (onnxruntime.dll) at the app root. The GPU natives are
          staged into onnxruntime-backends\ by LarisVMS.Vision.Service's StageOnnxBackends target. -->
     <PackageReference Include="Microsoft.ML.OnnxRuntime" />

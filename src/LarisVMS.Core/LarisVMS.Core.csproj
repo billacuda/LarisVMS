@@ -10,9 +10,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Domain-only project: IAuthorizationRequirement, HttpContext-adjacent types used by Auth/,
-         no other package dependencies. -->
+    <!-- Domain-only project: IAuthorizationRequirement, HttpContext-adjacent types used by Auth/.
+         The one package is DPAPI, for MachineSecret on Windows. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+    <InternalsVisibleTo Include="LarisVMS.Tests" />
   </ItemGroup>
 
   <ItemGroup>

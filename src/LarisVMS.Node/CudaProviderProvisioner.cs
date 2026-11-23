@@ -14,15 +14,21 @@ namespace LarisVMS.Node;
 /// fetched on demand and cached.
 ///
 /// Only acts on a node that resolved <c>AiAccelerator.Nvidia</c> AND has the CUDA Toolkit installed
-/// (no point pulling 320 MB onto a box that will run DirectML anyway). Until the file lands the Vision
+/// (no point pulling 320 MB onto a box that will run DirectML anyway).
+///
+/// On Linux the file is <c>libonnxruntime_providers_cuda.so</c>, and the CUDA runtime and cuDNN come
+/// from NVIDIA's apt/dnf packages in the system library path, so nothing is copied next to the backend
+/// there; the node only checks they load and says what to install when they don't. The server keeps a
+/// separate copy per platform, signed under a platform-qualified name, and a copy signed for another
+/// platform is refused. Until the file lands the Vision
 /// Service resolves to DirectML; once <see cref="ConsumeJustProvisioned"/> reports a fresh download,
 /// NodeWorker restarts the Vision Service so it switches to CUDA. Every failure is non-fatal and
 /// retried on the next reconcile.
 /// </summary>
 public sealed class CudaProviderProvisioner(string installDirectory, NodeApiClient api, ILogger<CudaProviderProvisioner> logger)
 {
-    private const string ServerName = "cuda-provider";
-    private const string FileName = "onnxruntime_providers_cuda.dll";
+    private const string ServerName = LarisVMS.Core.CudaProviderFiles.RequestName;
+    private static readonly string FileName = LarisVMS.Core.NativeLibraryNames.OnnxRuntimeCudaProvider;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private volatile bool _present;
@@ -67,9 +73,10 @@ public sealed class CudaProviderProvisioner(string installDirectory, NodeApiClie
                 {
                     _warnedNoToolkit = true;
                     logger.LogInformation(
-                        "This node resolved the NVIDIA accelerator but the CUDA Toolkit runtime (cudart64_12.dll) is " +
-                        "not installed — not downloading the ~320 MB CUDA provider library. Install CUDA Toolkit 12.x " +
-                        "+ cuDNN 9.x (see install-node.ps1); it downloads automatically once present. Running DirectML meanwhile.");
+                        "This node resolved the NVIDIA accelerator but the CUDA 12 runtime ({Library}) is not installed — " +
+                        "not downloading the ~300 MB CUDA provider library. Install CUDA 12.x and cuDNN 9.x " +
+                        "(on Linux: NVIDIA's cuda-runtime-12 and libcudnn9-cuda-12 packages); it downloads automatically " +
+                        "once present. Running the fallback backend meanwhile.", LarisVMS.Core.NativeLibraryNames.CudaRuntime);
                 }
                 return;
             }
@@ -92,12 +99,23 @@ public sealed class CudaProviderProvisioner(string installDirectory, NodeApiClie
                 {
                     _warnedNoServerCopy = true;
                     logger.LogWarning(
-                        "The server has no CUDA provider library seeded (deploy.ps1 seeds it from the build's " +
-                        "cuda-provider\\ folder). This node runs DirectML until it's seeded.");
+                        "The server has no CUDA provider library for this node's platform (every Web package " +
+                        "bundles it; upgrade the server). This node runs without CUDA until the server has it.");
                 }
                 return;
             }
             _warnedNoServerCopy = false;
+
+            // The server answers with the copy for this node's platform, signed under that platform's
+            // name. Anything else (a Windows DLL offered to a Linux node, say) is refused before its
+            // signature is even checked.
+            var expectedName = LarisVMS.Core.CudaProviderFiles.SignedName(LarisVMS.Core.PlatformId.Current);
+            if (!string.Equals(info.Name, expectedName, StringComparison.Ordinal))
+            {
+                logger.LogError("Not installing the CUDA provider library: the server offered '{Offered}', but this node needs '{Expected}'.",
+                    info.Name, expectedName);
+                return;
+            }
 
             // This library is loaded by the Vision Service: only a copy signed with the server's key
             // is installed, once the node has that key (registration, or its first signed update).
@@ -182,6 +200,11 @@ public sealed class CudaProviderProvisioner(string installDirectory, NodeApiClie
     {
         if (DateTime.UtcNow < _nextRuntimeCheckUtc) return;
         _nextRuntimeCheckUtc = DateTime.UtcNow.AddMinutes(10);
+        if (!OperatingSystem.IsWindows())
+        {
+            CheckLinuxRuntimeLibraries();
+            return;
+        }
         try
         {
             if (!Directory.Exists(CudaBackendDir)) return;
@@ -205,11 +228,27 @@ public sealed class CudaProviderProvisioner(string installDirectory, NodeApiClie
         }
     }
 
+    /// <summary>Linux: the CUDA runtime and cuDNN are system packages, found through the library path
+    /// (ldconfig, or /usr/local/cuda/lib64, which the Vision Service is started with). Only reports
+    /// what's missing.</summary>
+    private void CheckLinuxRuntimeLibraries()
+    {
+        var stillMissing = new[] { LarisVMS.Core.NativeLibraryNames.CudaRuntime, LarisVMS.Core.NativeLibraryNames.Cudnn }
+            .Where(lib => !Loadable(lib)).ToList();
+        var missing = string.Join(", ", stillMissing);
+        if (stillMissing.Count > 0 && missing != _lastRuntimeMissing)
+            logger.LogWarning(
+                "AI detection can't use CUDA: {Missing} isn't on this node. Install NVIDIA's CUDA 12 runtime and cuDNN 9 for CUDA 12 " +
+                "(cuda-runtime-12-x and libcudnn9-cuda-12 from NVIDIA's apt or dnf repository); it's picked up automatically within " +
+                "10 minutes. Running the fallback backend meanwhile.", missing);
+        _lastRuntimeMissing = stillMissing.Count > 0 ? missing : null;
+    }
+
     private static bool Loadable(string dll)
     {
         try
         {
-            if (!NativeLibrary.TryLoad(Path.GetFileNameWithoutExtension(dll), out var handle)) return false;
+            if (!NativeLibrary.TryLoad(LarisVMS.Core.NativeLibraryNames.LoadName(dll), out var handle)) return false;
             NativeLibrary.Free(handle);
             return true;
         }
@@ -263,12 +302,13 @@ public sealed class CudaProviderProvisioner(string installDirectory, NodeApiClie
 
     private bool CudaToolkitPresent()
     {
-        // install-node.ps1 copies the toolkit's runtime DLLs here when it finds them.
-        if (File.Exists(Path.Combine(CudaBackendDir, "cudart64_12.dll"))) return true;
+        // install-node.ps1 copies the toolkit's runtime DLLs here when it finds them (Windows).
+        if (File.Exists(Path.Combine(CudaBackendDir, LarisVMS.Core.NativeLibraryNames.CudaRuntime))) return true;
+        if (!OperatingSystem.IsWindows() && File.Exists(Path.Combine(LinuxCudaLibDir, LarisVMS.Core.NativeLibraryNames.CudaRuntime))) return true;
 
         try
         {
-            if (NativeLibrary.TryLoad("cudart64_12", out var handle))
+            if (NativeLibrary.TryLoad(LarisVMS.Core.NativeLibraryNames.LoadName(LarisVMS.Core.NativeLibraryNames.CudaRuntime), out var handle))
             {
                 NativeLibrary.Free(handle);
                 return true;
@@ -280,6 +320,9 @@ public sealed class CudaProviderProvisioner(string installDirectory, NodeApiClie
         }
         return false;
     }
+
+    /// <summary>Where NVIDIA's Linux CUDA packages put the toolkit's libraries.</summary>
+    internal const string LinuxCudaLibDir = "/usr/local/cuda/lib64";
 
     private static async Task<string> ComputeSha256Async(string path, CancellationToken ct)
     {

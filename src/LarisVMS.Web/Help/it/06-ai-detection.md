@@ -13,7 +13,8 @@ Un unico pacchetto del nodo copre ogni macchina. All’avvio, il servizio di vis
 | Hardware | Backend | Richiesto sul nodo |
 |---|---|---|
 | GPU NVIDIA | CUDA (ripiega su DirectML) | CUDA Toolkit 12.x e cuDNN 9.x |
-| GPU AMD / Intel | DirectML | Un driver GPU aggiornato |
+| GPU Intel | OpenVINO (ripiega su DirectML) | Un driver grafico Intel aggiornato |
+| GPU AMD | DirectML | Un driver GPU aggiornato |
 | Nessuna GPU | CPU | Nulla |
 
 La pagina di modifica del nodo mostra gli acceleratori rilevati e la sua impostazione **Acceleratore** può forzarne uno. I modelli non sono mai inclusi. Un nodo preleva dal server i modelli YOLOX integrati, e gli altri modelli vanno in `C:\ProgramData\LarisVMS\models` sul nodo.
@@ -48,7 +49,7 @@ Come il fotogramma di una telecamera si adatta all’input quadrato del modello:
 
 - **Letterbox** (predefinito): mantiene le proporzioni e riempie con barre nere.
 - **Stira**: schiaccia il fotogramma per riempire il quadrato, il che deforma le forme.
-- **Slice**: taglia il fotogramma in quadrati sovrapposti a risoluzione piena. È ideale per oggetti piccoli o distanti su telecamere grandangolari, ma costa circa 2× il lavoro su una telecamera 16:9. Richiede la pre-elaborazione su GPU e la attiva automaticamente.
+- **Slice**: taglia il fotogramma in quadrati sovrapposti a risoluzione piena. È ideale per oggetti piccoli o distanti su telecamere grandangolari, ma costa circa 2× il lavoro su una telecamera 16:9. Richiede la pre-elaborazione su GPU e la attiva automaticamente. Su una GPU Intel (OpenVINO) usa invece **Letterbox**: lì Slice elabora ogni riquadro separatamente e usa molta più CPU e GPU.
 
 La **pre-elaborazione dei fotogrammi su GPU** sposta la conversione dei colori dalla CPU alla GPU, il che aiuta sui nodi con molte telecamere.
 

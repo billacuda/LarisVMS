@@ -148,7 +148,8 @@ public sealed class ProxyWorker(ProxyApiClient api, ProxyConfig registration, Pr
             logger.LogError("Not installing update {Version}: this proxy already runs {Running}.", update.Version, ProxyVersion.Current);
             return false;
         }
-        var payload = LarisVMS.Core.Security.UpdateSignature.UpdatePayload("proxy-win-x64", update.Version, update.Sha256, null);
+        var payload = LarisVMS.Core.Security.UpdateSignature.UpdatePayload(
+            LarisVMS.Core.PlatformId.ForProxy(LarisVMS.Core.PlatformId.Current), update.Version, update.Sha256, null);
         if (!LarisVMS.Core.Security.UpdateSignature.Check(_registration.UpdateSigningKeyPem, update.SigningKeyPem, update.Signature,
                 payload, out var keyToPin, out var error))
         {

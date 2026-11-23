@@ -69,7 +69,7 @@ else
 
         <SettingSection Title="@L["admin.nodeEdit.storageRetention"]" Subtitle="@L["admin.nodeEdit.blankFieldsInheritTheGlobal"]">
             <SettingField Label="@L["admin.nodeEdit.storagePath"]" For="storageRoot" Hint="@L["admin.nodeEdit.requiredWhereThisNodeWrites"]">
-                <input id="storageRoot" name="StorageRootPath" class="form-control font-monospace" value="@n.StorageRootPath" placeholder="@L["admin.nodeEdit.eGELarisvmsRecordings"]" required />
+                <input id="storageRoot" name="StorageRootPath" class="form-control font-monospace" value="@n.StorageRootPath" placeholder="@StoragePlaceholder" required />
             </SettingField>
             <SettingField Label="@L["admin.nodeEdit.archivePath"]" For="archiveRoot" Hint="@L["admin.nodeEdit.optionalSecondVolumeForAged"]">
                 <input id="archiveRoot" name="ArchiveRootPath" class="form-control font-monospace" value="@n.ArchiveRootPath" placeholder="@L["admin.nodeEdit.none"]" />
@@ -118,7 +118,7 @@ else
                 </select>
             </SettingField>
             <SettingField Label="@L["admin.nodeEdit.customModel"]" For="localModel" ShowWhen="@FamilyShowWhen("Custom")"
-                          Hint="@L["admin.nodeEdit.modelsDroppedIntoCProgramdata"]">
+                          Hint="@ModelsFolderHint">
                 <div class="input-group">
                     <select id="localModel" name="LocalModelNameOverride" class="form-select" data-local-model-select>
                         <option value="" selected="@string.IsNullOrEmpty(S.LocalModelNameOverride)">@L["admin.nodeEdit.inherit"]</option>
@@ -156,7 +156,7 @@ else
                     <option value="FP16" selected="@(S.DFineTensorRtModeOverride == "FP16")">FP16</option>
                 </select>
             </SettingField>
-            <SettingField Label="@L["admin.nodeEdit.aspectFitting"]" For="aspect" Hint="@L["admin.nodeEdit.sliceNeedsGpuPreprocessing"]" HelpLink="/Help/ai-detection#aspect-fitting">
+            <SettingField Label="@L["admin.nodeEdit.aspectFitting"]" For="aspect" Hint="@AspectHint" HelpLink="/Help/ai-detection#aspect-fitting">
                 <select id="aspect" name="AspectModeOverride" class="form-select">
                     <option value="" selected="@(S.AspectModeOverride == "")">@L["common.inheritValue", new { value = S.EffectiveAspectMode }]</option>
                     <option value="Letterbox" selected="@(S.AspectModeOverride == "Letterbox")">@L["admin.nodeEdit.letterbox"]</option>
@@ -458,9 +458,58 @@ else
     private (string Css, string Text)? FailoverBadge { get; set; }
     private string? ErrorMessage;
 
+    /// <summary>Where custom models go on this node's OS.</summary>
+    private string ModelsFolderHint => LarisVMS.Core.PlatformId.IsWindows(Node?.Platform ?? LarisVMS.Core.PlatformId.Legacy)
+        ? Loc.T("admin.nodeEdit.modelsDroppedIntoCProgramdata")
+        : Loc.T("admin.nodeEdit.modelsDroppedIntoLinux");
+
+    /// <summary>The storage path example in the node's own OS's form: a drive or UNC path on Windows,
+    /// a mount point on Linux.</summary>
+    private string StoragePlaceholder => LarisVMS.Core.PlatformId.IsWindows(Node?.Platform ?? LarisVMS.Core.PlatformId.Legacy)
+        ? Loc.T("admin.nodeEdit.eGELarisvmsRecordings")
+        : Loc.T("admin.nodeEdit.eGLinuxRecordings");
+
+    /// <summary>On a node running OpenVINO (an Intel GPU), Slice runs one tile at a time and costs far
+    /// more than Letterbox, so the aspect-fitting hint says so there.</summary>
+    private string AspectHint => RunsOpenVino
+        ? Loc.T("admin.nodeEdit.sliceNeedsGpuPreprocessing") + " " + Loc.T("admin.nodeEdit.openVinoPreferLetterbox")
+        : Loc.T("admin.nodeEdit.sliceNeedsGpuPreprocessing");
+
+    /// <summary>What the node last reported running, else what it's set to.</summary>
+    private bool RunsOpenVino
+    {
+        get
+        {
+            if (Node is not { } node) return false;
+            if (!string.IsNullOrEmpty(node.VisionBackendJson))
+            {
+                try
+                {
+                    if (System.Text.Json.JsonSerializer.Deserialize<LarisVMS.Core.Dtos.NodeVisionBackendDto>(node.VisionBackendJson) is { } report)
+                        return string.Equals(report.Provider, "OpenVINO", StringComparison.OrdinalIgnoreCase);
+                }
+                catch (System.Text.Json.JsonException)
+                {
+                    // fall through to the setting
+                }
+            }
+            return node.AiAccelerator is AiAccelerator.OpenVino or AiAccelerator.Intel;
+        }
+    }
+
     private string AcceleratorHint => DetectedAccelerators.Count == 0
         ? Loc.T("admin.nodeEdit.acceleratorAuto")
-        : Loc.T("admin.nodeEdit.acceleratorAutoOf", new { options = string.Join(", ", DetectedAccelerators) });
+        : Loc.T("admin.nodeEdit.acceleratorAutoOf", new { options = string.Join(", ", DetectedAccelerators.Select(AutoChoiceLabel)) });
+
+    /// <summary>What Auto runs on a detected GPU vendor, labelled the same way as the dropdown
+    /// ("OpenVINO (Intel)" rather than just "Intel"), so the hint and the options match.</summary>
+    private static string AutoChoiceLabel(string detectedVendor) => detectedVendor switch
+    {
+        nameof(AiAccelerator.Nvidia) => Loc.T("admin.nodeEdit.cuda"),
+        nameof(AiAccelerator.Intel) => Loc.T("admin.nodeEdit.openvino"),
+        nameof(AiAccelerator.Amd) => Loc.T("admin.nodeEdit.directml"),
+        _ => detectedVendor,
+    };
 
     /// <summary>data-show-when spec for a field that only applies to some model families. The inherit
     /// option posts "" — included in the list when the inherited family is one of them.</summary>

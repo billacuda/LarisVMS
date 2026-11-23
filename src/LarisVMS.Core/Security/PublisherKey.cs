@@ -1,4 +1,10 @@
+// LarisVMS.NodeUpdater compiles this same file (it references no other project) under its own
+// namespace, so a project that references both (the tests) doesn't see the type twice.
+#if LARISVMS_NODEUPDATER
+namespace LarisVMS.NodeUpdater.Shared;
+#else
 namespace LarisVMS.Core.Security;
+#endif
 
 /// <summary>
 /// The publisher's update-signing key, kept offline by whoever builds releases. Its public half is

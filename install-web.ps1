@@ -10,15 +10,16 @@
          -SkipVersionSyncCheck.
       3. Stops the existing 'LarisVMSWeb' service, if this is an upgrade (safe to re-run)
       4. Reads the connection string from the install directory's setup-generated.json, falling back
-         to -LegacyIisConfigPath (an old deploy.ps1/IIS deployment's copy, for an in-place migration)
+         to -LegacyIisConfigPath (an old IIS deployment's copy, for an in-place migration)
          if that's missing (or use -ConnectionString to override) — pre-setup, on a genuinely fresh
          install, there is none yet
       5. Guards against a misconfigured storage root — see "Storage root guard" below
       6. Builds and publishes the web project, self-contained win-x64 (skippable with -SkipBuild)
-      7. Builds the recorder node package (build-node.ps1) and, optionally, the media proxy package
-         (build-proxy.ps1) — same as deploy.ps1's own step, skippable with -SkipNodeBuild
-      8. Bundles the node/proxy packages into the web publish (packages\) — the web app registers
-         them as Pending on Admin -> Node Builds at startup
+      7. Builds the recorder node package (build-node.ps1) and, with -BuildProxy, the media proxy
+         package (build-proxy.ps1) for every platform in -Platforms (Windows and Linux by default),
+         all with one build number; skip the node with -SkipNodeBuild
+      8. Bundles them into the web publish (packages\<kind>\<platform>\, as build-installers.ps1
+         does) — the web app registers them as Pending on the Nodes page at startup
       9. Copies published files into $InstallDir via robocopy /MIR, explicitly preserving
          setup-generated.json, appsettings.Production.json, appsettings.Development.json,
          data-protection-keys\, and every recording/spool/export directory — never a blanket copy
@@ -75,8 +76,13 @@ param(
     [switch]$SkipHealthCheck,
     [switch]$SkipVersionSyncCheck,
     [switch]$BuildProxy,
+    # Which platforms' node and proxy builds to build and bundle: the server offers each node and proxy
+    # the build for its own OS.
+    [ValidateSet('win-x64', 'linux-x64')][string[]]$Platforms = @('win-x64', 'linux-x64'),
+    # Optional: the publisher's private key (tools\publisher-key.ps1), passed to build-node.ps1 and build-proxy.ps1.
+    [string]$PublisherKeyPath,
     # Falls back here when $InstallDir has no setup-generated.json of its own yet — the exact gap hit
-    # when migrating an existing IIS deployment to this script: deploy.ps1's own default
+    # when migrating an existing IIS deployment to this script: the old IIS deploy script's default
     # -DestinationPath, where an in-place upgrade's setup-generated.json still lives untouched. Set to
     # '' to disable the fallback entirely.
     [string]$LegacyIisConfigPath   = 'E:\Sites\LarisVMS\setup-generated.json'
@@ -103,7 +109,7 @@ function Invoke-Cmd([string]$Exe, [string[]]$Arguments) {
 }
 
 function Get-SqlClientConnectionString([string]$ConnectionString) {
-    # Same reasoning as deploy.ps1's own copy of this helper: System.Data.SqlClient (used here so this
+    # System.Data.SqlClient (used here so this
     # script has no extra assembly to load) rejects keywords Microsoft.Data.SqlClient writes into
     # setup-generated.json — comparing the whitespace-stripped key is what actually catches
     # "Trust Server Certificate" with the spaces SqlConnectionStringBuilder itself emits.
@@ -186,7 +192,7 @@ if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
     Write-Step "Reading connection string from installed config"
     $configFileRead = $installedConfigFile
     if (-not (Test-Path $installedConfigFile) -and -not [string]::IsNullOrWhiteSpace($LegacyIisConfigPath) -and (Test-Path $LegacyIisConfigPath)) {
-        # An in-place IIS -> Kestrel migration: the old deploy.ps1 site never wrote its
+        # An in-place IIS -> Kestrel migration: the old IIS site never wrote its
         # setup-generated.json into this script's own -InstallDir, and the service needs it there to
         # find its database.
         Write-Host "    Not found at '$installedConfigFile' - falling back to legacy IIS path '$LegacyIisConfigPath'."
@@ -217,7 +223,7 @@ if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
 }
 
 # ── storage root guard ────────────────────────────────────────────────────────
-# Identical reasoning to deploy.ps1's own guard: robocopy /MIR below mirrors the publish output onto
+# robocopy /MIR below mirrors the publish output onto
 # $InstallDir — anything present at the destination that isn't in the publish output is deleted. If
 # any node's storage (or archive) root were configured to a path under the install directory, this
 # would silently delete every recording under it on the next upgrade.
@@ -276,62 +282,59 @@ if (-not $SkipBuild) {
 }
 
 # ── build recorder node package ───────────────────────────────────────────────
-# Same as deploy.ps1's own step — keeps publish\LarisVMS.Node\win current with every web install.
+# Keeps every platform's node (and, with -BuildProxy, proxy) build current with every web install.
 
-if (-not $SkipNodeBuild) {
-    Write-Step "Building recorder node package"
-    $buildNodeScript = Join-Path $PSScriptRoot 'build-node.ps1'
-    $buildNodeArgs = @{ Configuration = $Configuration }
-    if (-not [string]::IsNullOrWhiteSpace($ExtraNodePublishPath)) {
-        $buildNodeArgs['ExtraPublishPath'] = $ExtraNodePublishPath
-    }
-    if ($SkipNodeVision) {
-        $buildNodeArgs['SkipVision'] = $true
-    }
-    & $buildNodeScript @buildNodeArgs
-    Write-Ok "Node package built."
-} else {
-    Write-Host "Node package build skipped (-SkipNodeBuild)."
+# One build number for the run, shared by every platform's node and proxy, as build-installers.ps1 does.
+$buildNumber = 0
+if (-not $SkipNodeBuild -or $BuildProxy) {
+    $buildNumberPath = Join-Path $PSScriptRoot 'build-number.txt'
+    if (-not (Test-Path $buildNumberPath)) { throw "build-number.txt not found at $buildNumberPath." }
+    $buildNumber = [int]((Get-Content $buildNumberPath -Raw).Trim()) + 1
+    Set-Content -Path $buildNumberPath -Value $buildNumber -NoNewline
+    Write-Ok "Node and proxy build number $buildNumber"
 }
 
-if ($BuildProxy) {
-    Write-Step "Building media proxy package"
-    $buildProxyScript = Join-Path $PSScriptRoot 'build-proxy.ps1'
-    $buildProxyArgs = @{ Configuration = $Configuration }
-    if (-not [string]::IsNullOrWhiteSpace($ExtraNodePublishPath)) {
-        $buildProxyArgs['ExtraPublishPath'] = ($ExtraNodePublishPath.TrimEnd('\') + '-proxy')
+foreach ($platform in $Platforms) {
+    # -ExtraNodePublishPath mirrors the Windows build to a share (robocopy), so only that one.
+    $extra = if ($platform -eq 'win-x64' -and -not [string]::IsNullOrWhiteSpace($ExtraNodePublishPath)) { $ExtraNodePublishPath } else { '' }
+
+    if (-not $SkipNodeBuild) {
+        Write-Step "Building recorder node package ($platform)"
+        $buildNodeArgs = @{ Configuration = $Configuration; Platform = $platform; BuildNumber = $buildNumber }
+        if ($extra) { $buildNodeArgs['ExtraPublishPath'] = $extra }
+        if ($SkipNodeVision) { $buildNodeArgs['SkipVision'] = $true }
+        if ($PublisherKeyPath) { $buildNodeArgs['PublisherKeyPath'] = $PublisherKeyPath }
+        & (Join-Path $PSScriptRoot 'build-node.ps1') @buildNodeArgs
+        Write-Ok "Node package built ($platform)."
     }
-    & $buildProxyScript @buildProxyArgs
-    Write-Ok "Media proxy package built (publish\LarisVMS.Proxy\win)."
+
+    if ($BuildProxy) {
+        Write-Step "Building media proxy package ($platform)"
+        $buildProxyArgs = @{ Configuration = $Configuration; Platform = $platform; BuildNumber = $buildNumber }
+        if ($extra) { $buildProxyArgs['ExtraPublishPath'] = ($extra.TrimEnd('\') + '-proxy') }
+        if ($PublisherKeyPath) { $buildProxyArgs['PublisherKeyPath'] = $PublisherKeyPath }
+        & (Join-Path $PSScriptRoot 'build-proxy.ps1') @buildProxyArgs
+        Write-Ok "Media proxy package built ($platform)."
+    }
 }
+if ($SkipNodeBuild) { Write-Host "Node package build skipped (-SkipNodeBuild)." }
 
 # ── bundle node/proxy packages into the web publish ──────────────────────────
-# The web app registers these as Pending on Admin -> Node Builds at startup (IBundledBuildRegistrar).
+# packages\<kind>\<platform>\, the same layout as build-installers.ps1. The web app registers these
+# as Pending on the Nodes page at startup (BundledBuildRegistrar). Cleared first, so a file from an
+# older layout (the flat packages\node\ that's read as win-x64) can't come along.
+. (Join-Path $PSScriptRoot 'tools\BuildPackages.ps1')
 $packagesDir = Join-Path $PublishDir 'packages'
-$bundles = @(
-    @{ Src = 'publish\LarisVMS.Node\win\LarisVMS.Node.exe';             Dest = 'node' },
-    @{ Src = 'publish\LarisVMS.Node\win\LarisVMS.Vision.Service.exe';   Dest = 'node' },
-    @{ Src = 'publish\LarisVMS.Node\node-build-version.txt';            Dest = 'node' },
-    @{ Src = 'publish\LarisVMS.Proxy\win\LarisVMS.Proxy.exe';           Dest = 'proxy' },
-    @{ Src = 'publish\LarisVMS.Proxy\proxy-build-version.txt';          Dest = 'proxy' },
-    @{ Src = 'publish\LarisVMS.Node\cuda-provider\onnxruntime_providers_cuda.dll'; Dest = 'cuda-provider' }
-)
-foreach ($b in $bundles) {
-    $src = Join-Path $PSScriptRoot $b.Src
-    if (Test-Path $src) {
-        $dest = Join-Path $packagesDir $b.Dest
-        New-Item -ItemType Directory -Path $dest -Force | Out-Null
-        Copy-Item $src $dest -Force
-    }
-}
+if (Test-Path $packagesDir) { Remove-Item $packagesDir -Recurse -Force }
+Copy-NodeProxyPackages -RepoRoot $PSScriptRoot -PackagesDir $packagesDir -Platforms $Platforms
 
 # ── copy files, without clobbering machine-specific config ───────────────────
 # /MIR mirrors: anything at the destination not in the publish output is deleted.
 #   - setup-generated.json / appsettings.Production.json / appsettings.Development.json: generated by
 #     the wizard or hand-edited on this machine, hold the connection string and cert password in the
 #     clear, never published.
-#   - data-protection-keys / recordings / spool / exports / logs: same reasoning as deploy.ps1's own
-#     exclusion list.
+#   - data-protection-keys / recordings / spool / exports / logs: machine data, never part of the
+#     publish output.
 
 Write-Step "Copying files to $InstallDir"
 

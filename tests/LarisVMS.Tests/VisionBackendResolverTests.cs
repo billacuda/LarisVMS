@@ -13,11 +13,17 @@ public sealed class VisionBackendResolverTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "larisvms-backends-" + Guid.NewGuid().ToString("N"));
 
-    public VisionBackendResolverTests() => VisionBackendResolver.BackendsRootOverride = _root;
+    public VisionBackendResolverTests()
+    {
+        VisionBackendResolver.BackendsRootOverride = _root;
+        // The test machine's own GPU driver must not decide these tests.
+        VisionBackendResolver.DriverVersionProbe = () => null;
+    }
 
     public void Dispose()
     {
         VisionBackendResolver.BackendsRootOverride = null;
+        VisionBackendResolver.DriverVersionProbe = CudaRequirements.InstalledDriverVersion;
         try { if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
     }
 
@@ -25,9 +31,9 @@ public sealed class VisionBackendResolverTests : IDisposable
     {
         var dir = Path.Combine(_root, name);
         Directory.CreateDirectory(dir);
-        File.WriteAllText(Path.Combine(dir, "onnxruntime.dll"), "");
+        File.WriteAllText(Path.Combine(dir, LarisVMS.Core.NativeLibraryNames.OnnxRuntime), "");
         if (name == "cuda" && withCudaProvider)
-            File.WriteAllText(Path.Combine(dir, "onnxruntime_providers_cuda.dll"), "");
+            File.WriteAllText(Path.Combine(dir, LarisVMS.Core.NativeLibraryNames.OnnxRuntimeCudaProvider), "");
     }
 
     [Fact]
@@ -41,14 +47,74 @@ public sealed class VisionBackendResolverTests : IDisposable
         Assert.False(report.NeedsAttention);
     }
 
+    /// <summary>The OpenVINO folder holds the plugin library, not an onnxruntime build — it loads on
+    /// top of the CPU onnxruntime at the app root.</summary>
+    private void CreateOpenVinoFolder()
+    {
+        var dir = Path.Combine(_root, "openvino");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, VisionBackendResolver.OpenVinoPluginFileName), "");
+    }
+
+    [Theory]
+    [InlineData("Intel")]
+    [InlineData("OpenVino")]
+    public void IntelAndOpenVinoRequestsResolveToTheOpenVinoPlugin(string requested)
+    {
+        CreateOpenVinoFolder();
+        CreateBackendFolder("directml");
+
+        VisionBackendResolver.Resolve(requested, null, NullLogger.Instance);
+
+        var report = VisionBackendResolver.Current;
+        Assert.Equal(VisionBackend.OpenVino, report.ResolvedBackend);
+        Assert.Equal("OpenVINO", report.EffectiveExecutionProvider);
+        Assert.False(report.NeedsAttention);
+    }
+
     [Fact]
-    public void IntelRequestResolvesToDirectMlWhenThatBackendIsPresent()
+    public void IntelFallsBackToDirectMlWhenTheOpenVinoPluginIsMissing()
     {
         CreateBackendFolder("directml");
 
         VisionBackendResolver.Resolve("Intel", null, NullLogger.Instance);
 
+        var report = VisionBackendResolver.Current;
+        Assert.Equal(VisionBackend.DirectMl, report.ResolvedBackend);
+        Assert.Contains(report.Notes, n => n.Contains("OpenVINO", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void IntelFallsBackToCpuWhenNeitherOpenVinoNorDirectMlIsPresent()
+    {
+        // A Linux node: no DirectML folder exists there at all.
+        VisionBackendResolver.Resolve("Intel", null, NullLogger.Instance);
+
+        Assert.Equal(VisionBackend.Cpu, VisionBackendResolver.Current.ResolvedBackend);
+    }
+
+    [Fact]
+    public void AmdStaysOnDirectMlEvenWhenTheOpenVinoPluginIsPresent()
+    {
+        CreateOpenVinoFolder();
+        CreateBackendFolder("directml");
+
+        VisionBackendResolver.Resolve("Amd", null, NullLogger.Instance);
+
         Assert.Equal(VisionBackend.DirectMl, VisionBackendResolver.Current.ResolvedBackend);
+    }
+
+    [Theory]
+    [InlineData(null, "GPU", 0)]
+    [InlineData("", "GPU", 0)]
+    [InlineData("GPU", "GPU", 0)]
+    [InlineData("gpu.1", "GPU", 1)]
+    [InlineData("NPU", "NPU", 0)]
+    [InlineData("CPU", "CPU", 0)]
+    [InlineData("GPU.x", "GPU", 0)]
+    public void ParsesOpenVinoDeviceSettings(string? setting, string type, int index)
+    {
+        Assert.Equal((type, index), OrtSessionFactory.ParseOpenVinoDevice(setting));
     }
 
     [Fact]
@@ -84,6 +150,20 @@ public sealed class VisionBackendResolverTests : IDisposable
         var report = VisionBackendResolver.Current;
         Assert.Equal(VisionBackend.DirectMl, report.ResolvedBackend);
         Assert.Contains(report.Notes, n => n.Contains("provider library", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void AnNvidiaDriverTooOldForThisCudaFallsBackAndSaysSo()
+    {
+        CreateBackendFolder("cuda");
+        CreateBackendFolder("directml");
+        VisionBackendResolver.DriverVersionProbe = () => new Version(535, 104, 5);
+
+        VisionBackendResolver.Resolve("Nvidia", null, NullLogger.Instance);
+
+        var report = VisionBackendResolver.Current;
+        Assert.Equal(VisionBackend.DirectMl, report.ResolvedBackend);
+        Assert.Contains(report.Notes, n => n.Contains("535.104.5", StringComparison.Ordinal) && n.Contains("driver", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

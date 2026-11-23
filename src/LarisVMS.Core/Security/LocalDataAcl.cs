@@ -2,6 +2,8 @@ using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
 
+using LarisVMS.Core;
+
 namespace LarisVMS.Core.Security;
 
 /// <summary>
@@ -12,12 +14,17 @@ namespace LarisVMS.Core.Security;
 /// is kept: a local user who created the folder before LarisVMS was installed, or added themselves
 /// to it, loses that access, and the folder's owner is set to Administrators. (When a domain service
 /// account can't be looked up right then, grants to domain accounts are left in place until it can;
-/// local accounts never are.) No-op off Windows.
+/// local accounts never are.)
+///
+/// Off Windows the equivalent is file modes: the data root and its secret folders become owner-only
+/// (0700) and protected files 0600. Every LarisVMS service on a Linux machine runs as the same
+/// <c>larisvms</c> user, which owns the data folder (the packages create it), so that user is the only
+/// one left with access. A folder or file this process doesn't own is reported, not changed.
 /// </summary>
 public static class LocalDataAcl
 {
-    public static string Root { get; } =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS");
+    /// <summary>The data folder (<see cref="LarisPaths.DataRoot"/>).</summary>
+    public static string Root => LarisPaths.DataRoot;
 
     /// <summary>Protects <see cref="Root"/> (creating it if needed) and resets its contents to inherit
     /// from it. Returns why it couldn't, or null.</summary>
@@ -26,7 +33,19 @@ public static class LocalDataAcl
     /// <summary><see cref="SecureRoot"/> for another folder (tests use a temporary one).</summary>
     public static string? SecureTree(string path)
     {
-        if (!OperatingSystem.IsWindows()) return null;
+        if (!OperatingSystem.IsWindows())
+        {
+            return Posix(() =>
+            {
+                Directory.CreateDirectory(path);
+                OwnerOnly(path, directory: true);
+                foreach (var name in SensitiveFolders)
+                {
+                    var folder = Path.Combine(path, name);
+                    if (Directory.Exists(folder)) OwnerOnly(folder, directory: true);
+                }
+            });
+        }
         try
         {
             ProtectDirectoryTree(path);
@@ -44,7 +63,15 @@ public static class LocalDataAcl
     /// Returns why it couldn't, or null.</summary>
     public static string? SecureFolder(string path)
     {
-        if (!OperatingSystem.IsWindows()) return null;
+        if (!OperatingSystem.IsWindows())
+        {
+            return Posix(() =>
+            {
+                Directory.CreateDirectory(path);
+                OwnerOnly(path, directory: true);
+                foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)) OwnerOnly(file, directory: false);
+            });
+        }
         try
         {
             var dir = new DirectoryInfo(path);
@@ -71,7 +98,8 @@ public static class LocalDataAcl
     /// a password next to the program). Returns why it couldn't, or null.</summary>
     public static string? ProtectFile(string path)
     {
-        if (!OperatingSystem.IsWindows() || !File.Exists(path)) return null;
+        if (!File.Exists(path)) return null;
+        if (!OperatingSystem.IsWindows()) return Posix(() => OwnerOnly(path, directory: false));
         try
         {
             ProtectFileCore(path);
@@ -91,7 +119,7 @@ public static class LocalDataAcl
         if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
         if (!OperatingSystem.IsWindows())
         {
-            Directory.CreateDirectory(path);
+            Directory.CreateDirectory(path, OwnerOnlyDirectory);
             return;
         }
         var security = new DirectorySecurity();
@@ -100,12 +128,39 @@ public static class LocalDataAcl
         new DirectoryInfo(path).Create(security);
     }
 
+    private const UnixFileMode OwnerOnlyDirectory = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+    private const UnixFileMode OwnerOnlyFile = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+    /// <summary>Clears every group and other permission on a folder or file, keeping the owner's own
+    /// bits (a file the owner can execute stays executable). Does nothing on Windows, where the ACL
+    /// code above applies instead.</summary>
+    private static void OwnerOnly(string path, bool directory)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var current = File.GetUnixFileMode(path);
+        var wanted = directory ? OwnerOnlyDirectory : (current & (OwnerOnlyFile | UnixFileMode.UserExecute)) | OwnerOnlyFile;
+        if (current != wanted) File.SetUnixFileMode(path, wanted);
+    }
+
+    private static string? Posix(Action action)
+    {
+        try
+        {
+            action();
+            return null;
+        }
+        catch (Exception ex) when (IsAclFailure(ex))
+        {
+            return ex.Message;
+        }
+    }
+
     private static bool IsAclFailure(Exception ex) =>
         ex is UnauthorizedAccessException or IOException or PrivilegeNotHeldException or InvalidOperationException or ArgumentException;
 
     /// <summary>Small folders holding secrets or files that get trusted later; their whole contents
     /// are reset. Everything else (recordings can live under the root) only has its top level checked.</summary>
-    private static readonly string[] SensitiveFolders = ["keys", "update", "vision-native"];
+    private static readonly string[] SensitiveFolders = ["keys", "update", "update-proxy", "vision-native"];
 
     [SupportedOSPlatform("windows")]
     private static void ProtectDirectoryTree(string path)

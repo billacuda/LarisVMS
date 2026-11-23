@@ -12,7 +12,9 @@ public enum EncoderFamily
     Software,
     IntelQsv,
     NvidiaNvenc,
-    AmdAmf
+    AmdAmf,
+    /// <summary>VAAPI: Intel and AMD GPUs on Linux.</summary>
+    Vaapi
 }
 
 /// <summary>Maps one of <see cref="FfmpegCapabilityProber.KnownEncoders"/> to the family it belongs
@@ -25,6 +27,7 @@ public static class EncoderFamilies
         "h264_qsv" or "hevc_qsv" => EncoderFamily.IntelQsv,
         "h264_nvenc" or "hevc_nvenc" => EncoderFamily.NvidiaNvenc,
         "h264_amf" or "hevc_amf" => EncoderFamily.AmdAmf,
+        "h264_vaapi" or "hevc_vaapi" => EncoderFamily.Vaapi,
         _ => EncoderFamily.Software
     };
 }
@@ -100,6 +103,8 @@ public static class EncodePipeline
         // driver version combinations than guessing which numeric preset a given build maps them to.
         EncoderFamily.NvidiaNvenc => "fast",
         EncoderFamily.AmdAmf => null,
+        // VAAPI encoders take no -preset either (their speed knob is -compression_level).
+        EncoderFamily.Vaapi => null,
         _ => null
     };
 
@@ -107,14 +112,30 @@ public static class EncodePipeline
     /// the encoder's own quality knobs) — deliberately not the whole command line, since where this
     /// slots in (single-output transcode vs. one leg of a tee alongside an unmodified `-c copy` leg,
     /// as privacy masking will need) is a decision each consumer makes for itself.</summary>
-    public static IReadOnlyList<string> BuildArgs(EncodePipelineOptions options)
+    public static IReadOnlyList<string> BuildArgs(EncodePipelineOptions options) => BuildArgs(options, VaapiDevice.Path);
+
+    /// <summary><see cref="BuildArgs(EncodePipelineOptions)"/> with the VAAPI render node given (tests).
+    /// A VAAPI encoder needs the device opened (-vaapi_device, a global option ffmpeg accepts anywhere
+    /// on the command line) and the decoded, filtered frames uploaded to the GPU, so its filter chain
+    /// ends with format=nv12,hwupload: the software filters (a privacy mask's drawbox, a scale) still
+    /// run first on the CPU.</summary>
+    internal static IReadOnlyList<string> BuildArgs(EncodePipelineOptions options, string? vaapiDevice)
     {
         var args = new List<string>();
+        var filters = new List<string>(options.VideoFilters ?? []);
 
-        if (options.VideoFilters is { Count: > 0 })
+        if (EncoderFamilies.For(options.EncoderName) == EncoderFamily.Vaapi)
+        {
+            args.Add("-vaapi_device");
+            args.Add(vaapiDevice ?? "/dev/dri/renderD128");
+            filters.Add("format=nv12");
+            filters.Add("hwupload");
+        }
+
+        if (filters.Count > 0)
         {
             args.Add("-vf");
-            args.Add(string.Join(',', options.VideoFilters));
+            args.Add(string.Join(',', filters));
         }
 
         args.Add("-c:v");
@@ -153,7 +174,9 @@ public static class EncodePipeline
 /// </summary>
 public static class EncoderSelection
 {
-    private static readonly string[] HevcEncoders = ["hevc_nvenc", "hevc_qsv", "hevc_amf", "libx265"];
+    // VAAPI ahead of QSV/AMF: it's how Intel and AMD GPUs encode on Linux, where QSV and AMF are rare.
+    // A Windows node never reports a VAAPI encoder, so its order is unchanged.
+    private static readonly string[] HevcEncoders = ["hevc_nvenc", "hevc_vaapi", "hevc_qsv", "hevc_amf", "libx265"];
 
     /// <summary>An encoder for <paramref name="sourceCodec"/>'s own codec: H.265 for an H.265
     /// camera (hardware first, then libx265), H.264 otherwise. Falls back to H.264 when the node has
@@ -206,7 +229,7 @@ public static class EncoderSelection
     {
         // Hardware first, in the order a real encode is most likely to be both available and fast on
         // typical recorder hardware — NVENC and QSV are both mature/widely deployed, AMF less so.
-        foreach (var candidate in new[] { "h264_nvenc", "h264_qsv", "h264_amf", "libx264" })
+        foreach (var candidate in new[] { "h264_nvenc", "h264_vaapi", "h264_qsv", "h264_amf", "libx264" })
         {
             if (detectedEncoders.Contains(candidate)) return candidate;
         }

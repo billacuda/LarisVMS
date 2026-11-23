@@ -1835,6 +1835,10 @@ namespace LarisVMS.Infrastructure.MariaDb.Migrations
                         .HasMaxLength(4000)
                         .HasColumnType("varchar(4000)");
 
+                    b.Property<string>("Platform")
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
                     b.Property<int>("Port")
                         .HasColumnType("int");
 
@@ -2173,6 +2177,26 @@ namespace LarisVMS.Infrastructure.MariaDb.Migrations
                     b.Property<string>("ApprovedBy")
                         .HasMaxLength(256)
                         .HasColumnType("varchar(256)");
+
+                    b.Property<string>("BackendsFilePath")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<string>("BackendsPublisherSignature")
+                        .HasMaxLength(200)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<string>("BackendsSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<long?>("BackendsSizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("BackendsStamp")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
 
                     b.Property<string>("FilePath")
                         .IsRequired()

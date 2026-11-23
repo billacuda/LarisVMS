@@ -2,9 +2,9 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <!-- Published with -r win-x64. Restoring that target on every restore (the IDE's background
+    <!-- Published with -r win-x64 and -r linux-x64. Restoring those targets on every restore (the IDE's background
          one included) keeps a plain restore from dropping it mid-publish (NETSDK1047). -->
-    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Version>0.222.2</Version>
@@ -36,6 +36,7 @@
     <!-- Microsoft.Extensions.Hosting itself comes transitively via the ASP.NET Core shared
          framework (Sdk.Web) — only the pieces that aren't already part of it need a reference. -->
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" />
     <!-- AccelCapabilityProber's Win32_VideoController query (object detection plan decision 2) —
          Windows-only, matching every other hardware-facing probe in this app. -->

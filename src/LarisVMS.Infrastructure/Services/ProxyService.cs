@@ -39,6 +39,7 @@ public class ProxyService(ApplicationDbContext db, ISettingsResolver settings) :
             Host = request.Hostname,
             ApiKeyHash = SecretHash.Hash(secret),
             Version = request.Version,
+            Platform = LarisVMS.Core.PlatformId.Sanitize(request.Platform),
             // Off until an admin turns it on under Admin → Proxies; until then it may only check in.
             Enabled = false,
             LastSeenAt = DateTime.UtcNow,

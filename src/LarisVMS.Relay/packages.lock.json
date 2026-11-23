@@ -307,6 +307,13 @@
         }
       }
     },
+    "net10.0/linux-x64": {
+      "System.Diagnostics.EventLog": {
+        "type": "Transitive",
+        "resolved": "10.0.15",
+        "contentHash": "d1ynyO/BvCyi8SI1m6/xASazxrZm20V/mTDJay4qmL947RsA5MEiMk1JWvafw6JX005VVBAHvjWQP1dRRBvYKw=="
+      }
+    },
     "net10.0/win-x64": {
       "System.Diagnostics.EventLog": {
         "type": "Transitive",

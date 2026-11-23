@@ -13,7 +13,8 @@ Ein Knotenpaket deckt jeden Rechner ab. Beim Start wählt der Vision-Dienst ein 
 | Hardware | Backend | Benötigt auf dem Knoten |
 |---|---|---|
 | NVIDIA-GPU | CUDA (fällt auf DirectML zurück) | CUDA Toolkit 12.x und cuDNN 9.x |
-| AMD- / Intel-GPU | DirectML | Ein aktueller GPU-Treiber |
+| Intel-GPU | OpenVINO (fällt auf DirectML zurück) | Ein aktueller Intel-Grafiktreiber |
+| AMD-GPU | DirectML | Ein aktueller GPU-Treiber |
 | Keine GPU | CPU | Nichts |
 
 Die Bearbeitungsseite des Knotens zeigt die erkannten Beschleuniger, und seine Einstellung **Beschleuniger** kann einen erzwingen. Modelle werden nie mitgeliefert. Ein Knoten bezieht die integrierten YOLOX-Modelle vom Server, und andere Modelle gehören in `C:\ProgramData\LarisVMS\models` auf dem Knoten.
@@ -48,7 +49,7 @@ Wie das Bild einer Kamera in die quadratische Eingabe des Modells passt:
 
 - **Letterbox** (Standard): behält die Proportionen und füllt mit schwarzen Balken auf.
 - **Strecken**: staucht das Bild, um das Quadrat zu füllen, was Formen verzerrt.
-- **Slice**: zerschneidet das Bild in überlappende Quadrate in voller Auflösung. Am besten für kleine oder weit entfernte Objekte auf Weitwinkelkameras, kostet bei einer 16:9-Kamera aber etwa den doppelten Aufwand. Es erfordert GPU-Vorverarbeitung und aktiviert diese automatisch.
+- **Slice**: zerschneidet das Bild in überlappende Quadrate in voller Auflösung. Am besten für kleine oder weit entfernte Objekte auf Weitwinkelkameras, kostet bei einer 16:9-Kamera aber etwa den doppelten Aufwand. Es erfordert GPU-Vorverarbeitung und aktiviert diese automatisch. Auf einer Intel-GPU (OpenVINO) stattdessen **Letterbox** verwenden: Slice verarbeitet dort jede Kachel einzeln und braucht weit mehr CPU und GPU.
 
 **GPU-Bildvorverarbeitung** verlagert die Farbumwandlung von der CPU auf die GPU, was bei Knoten mit vielen Kameras hilft.
 

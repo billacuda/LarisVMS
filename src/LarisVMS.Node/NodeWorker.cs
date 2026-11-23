@@ -447,7 +447,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         // existed before this fix (not worse than before, just not yet protected this one time).
         try
         {
-            _knownSegmentPaths = new HashSet<string>(await api.GetSegmentFilePathsAsync(stoppingToken), StringComparer.OrdinalIgnoreCase);
+            _knownSegmentPaths = new HashSet<string>(await api.GetSegmentFilePathsAsync(stoppingToken), LarisVMS.Core.PathComparer.Local);
             _logger.LogInformation("Fetched {Count} already-known segment path(s) before starting recording.", _knownSegmentPaths.Count);
         }
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
@@ -459,21 +459,27 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         // M17: best-effort, same reasoning as every other probe on this path — a failed/empty result
         // (FfmpegCapabilityProber never throws) just means this node reports no detected encoders
         // this run rather than blocking startup on it.
-        _detectedEncoders = await FfmpegCapabilityProber.ProbeAsync(ffmpegPath, stoppingToken);
-        _logger.LogInformation("Detected encoder(s): {Encoders}",
-            _detectedEncoders.Count > 0 ? string.Join(", ", _detectedEncoders) : "(none — ffmpeg -encoders probe found nothing recognized, or failed)");
-
-        _webpSupported = await FfmpegCapabilityProber.HasLibWebpAsync(ffmpegPath, stoppingToken);
-        _logger.LogInformation("Cached thumbnail/snapshot image format: {Format}",
-            _webpSupported ? "WebP (ffmpeg has libwebp)" : "JPEG (ffmpeg has no libwebp encoder)");
-
-        // Object detection plan decision 2: probed once, same reasoning as encoders above — this
+        // Object detection plan decision 2: probed once, same reasoning as encoders below — this
         // node's hardware doesn't change while the process is running. AccelSelection combines this
         // with the admin's own AiAccelerator choice (from config, resolved fresh every reconcile)
         // to decide which accelerator to actually use.
         _detectedAccelerators = await AccelCapabilityProber.ProbeAsync();
         _logger.LogInformation("Detected AI accelerator(s): {Accelerators}",
             _detectedAccelerators.Count > 0 ? string.Join(", ", _detectedAccelerators) : "(none detected)");
+
+        // ffmpeg lists hardware encoders it was built with even when the GPU isn't there; only the ones
+        // this machine's GPUs can run are kept (FfmpegCapabilityProber.WithoutMissingHardware).
+        _detectedEncoders = FfmpegCapabilityProber.WithoutMissingHardware(
+            await FfmpegCapabilityProber.ProbeAsync(ffmpegPath, stoppingToken),
+            nvidia: _detectedAccelerators.Contains(AiAccelerator.Nvidia),
+            intel: _detectedAccelerators.Contains(AiAccelerator.Intel),
+            amd: _detectedAccelerators.Contains(AiAccelerator.Amd));
+        _logger.LogInformation("Detected encoder(s): {Encoders}",
+            _detectedEncoders.Count > 0 ? string.Join(", ", _detectedEncoders) : "(none — ffmpeg -encoders probe found nothing recognized, or failed)");
+
+        _webpSupported = await FfmpegCapabilityProber.HasLibWebpAsync(ffmpegPath, stoppingToken);
+        _logger.LogInformation("Cached thumbnail/snapshot image format: {Format}",
+            _webpSupported ? "WebP (ffmpeg has libwebp)" : "JPEG (ffmpeg has no libwebp encoder)");
 
         var reconcileLoop = ReconcileLoopAsync(stoppingToken);
         var segmentReportLoop = SegmentReportLoopAsync(stoppingToken);
@@ -635,7 +641,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 if (heartbeat.UpdateAvailable is { } update && !updateService.IsApplying && TrustUpdate(update))
                 {
                     _logger.LogInformation("Recorder node update available: {Version} — downloading and applying.", update.Version);
-                    await updateService.TryApplyAsync(update, ct);
+                    await updateService.TryApplyAsync(TrustBackends(update) ? update : WithoutBackends(update), ct);
                 }
             }
             catch (Exception ex) when (IsRetryable(ex, ct))
@@ -660,7 +666,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             _logger.LogError("Not installing update {Version}: this node already runs {Running}.", update.Version, NodeVersion.Current);
             return false;
         }
-        var payload = UpdateSignature.UpdatePayload("win-x64", update.Version, update.Sha256, update.VisionSha256);
+        var payload = UpdateSignature.UpdatePayload(LarisVMS.Core.PlatformId.Current, update.Version, update.Sha256, update.VisionSha256);
         if (!UpdateSignature.Check(_registration.UpdateSigningKeyPem, update.SigningKeyPem, update.Signature, payload,
                 out var keyToPin, out var error))
         {
@@ -681,6 +687,40 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
         return true;
     }
+
+    /// <summary>The native backend libraries offered with an update (BackendsBundle) carry their own
+    /// signatures over the unpacked tree's stamp, from the same server key TrustUpdate just accepted
+    /// and, for a node built with the publisher key, the publisher. A bundle that fails is dropped and
+    /// the rest of the update still installs: the Vision Service keeps its current libraries.</summary>
+    private bool TrustBackends(NodeUpdateInfoDto update)
+    {
+        if (update.BackendsDownloadUrl is null) return true;
+        if (update.BackendsStamp is null || update.BackendsSha256 is null)
+        {
+            _logger.LogWarning("Update {Version} offers native backend libraries without their stamp or hash; skipping them.", update.Version);
+            return false;
+        }
+        var payload = UpdateSignature.BackendsPayload(LarisVMS.Core.PlatformId.Current, update.Version, update.BackendsStamp);
+        // TrustUpdate has already pinned this key (or matched the pinned one).
+        var pinned = _registration.UpdateSigningKeyPem ?? update.SigningKeyPem;
+        if (pinned is null || string.IsNullOrEmpty(update.BackendsSignature) || !UpdateSignature.Verify(pinned, payload, update.BackendsSignature))
+        {
+            _logger.LogWarning("Update {Version}'s native backend libraries aren't signed by this server's key; skipping them.", update.Version);
+            return false;
+        }
+        if (!PublisherKey.Check(payload, update.BackendsPublisherSignature, out var publisherError))
+        {
+            _logger.LogWarning("Update {Version}'s native backend libraries: {Reason}; skipping them.", update.Version, publisherError);
+            return false;
+        }
+        return true;
+    }
+
+    internal static NodeUpdateInfoDto WithoutBackends(NodeUpdateInfoDto update) => update with
+    {
+        BackendsDownloadUrl = null, BackendsSha256 = null, BackendsSizeBytes = null,
+        BackendsStamp = null, BackendsSignature = null, BackendsPublisherSignature = null,
+    };
 
     /// <summary>Called only when a GetConfigAsync attempt has just failed. If nothing is recording
     /// yet — the case that matters is a fresh process start (reboot, service restart) while the
@@ -1386,8 +1426,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     try { onDiskNow = Directory.GetFiles(outputDir, "*.mp4", SearchOption.AllDirectories); }
                     catch (IOException) { onDiskNow = []; } // includes DirectoryNotFoundException — a camera's first-ever start has no folder yet
                     var knownPathsForCamera = (_knownSegmentPaths?
-                        .Where(p => p.StartsWith(outputDir, StringComparison.OrdinalIgnoreCase)) ?? [])
-                        .Union(onDiskNow, StringComparer.OrdinalIgnoreCase);
+                        .Where(p => p.StartsWith(outputDir, LarisVMS.Core.PathComparer.LocalComparison)) ?? [])
+                        .Union(onDiskNow, LarisVMS.Core.PathComparer.Local);
 
                     var runTask = session.RunAsync(cts.Token, knownPathsForCamera);
                     _active[camera.CameraId] = new CameraRecorder(cts, runTask, session, rtspUri!, privacySignature, camera.SegmentSeconds, transcodeAudio, streamFormat);

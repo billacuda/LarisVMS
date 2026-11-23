@@ -234,7 +234,6 @@ The PowerShell scripts build from the repository and install on the same machine
 .\build-installers.ps1                  # build all three MSIs into publish\installers\
 ```
 
-`deploy.ps1` (the old IIS-based deploy) is deprecated.
 
 ## 🧠 LarisVision AI detection
 
@@ -345,7 +344,7 @@ update, and commit them with the change.
 **Publisher key.** `.\tools\publisher-key.ps1 -New -PrivateKeyPath <path outside the repo>` makes the
 key that signs node and proxy updates (PowerShell 7). Commit the public key it writes to
 `src\LarisVMS.Core\Security\publisher-key.pem`, and keep the encrypted private key and its password
-offline. Pass `-PublisherKeyPath` to `deploy.ps1`, `build-node.ps1`, or `build-proxy.ps1` to sign a
+offline. Pass `-PublisherKeyPath` to `install-web.ps1`, `build-installers.ps1`, `build-node.ps1`, or `build-proxy.ps1` to sign a
 build: nodes and proxies built that way install only updates the publisher signed, so a compromised
 server can't push its own code to them. It's optional: without `-PublisherKeyPath`, a build is
 unsigned and carries no key, as before, so building from source never needs the private key.

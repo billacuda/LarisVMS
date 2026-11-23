@@ -86,6 +86,42 @@ public sealed class BundledBuildRegistrarTests : IDisposable
         Assert.Equal("cuda-v2", File.ReadAllText(dest));
     }
 
+    [Fact]
+    public async Task RegistersEveryPlatformsBuilds_ForAMixedFleet()
+    {
+        WritePackage(Path.Combine("node", "win-x64"), "LarisVMS.Node.exe", "node-build-version.txt", "0.223.0.500", "LarisVMS.Vision.Service.exe");
+        WritePackage(Path.Combine("node", "linux-x64"), "LarisVMS.Node", "node-build-version.txt", "0.223.0.500", "LarisVMS.Vision.Service");
+        WritePackage(Path.Combine("proxy", "win-x64"), "LarisVMS.Proxy.exe", "proxy-build-version.txt", "0.223.0.500");
+        WritePackage(Path.Combine("proxy", "linux-x64"), "LarisVMS.Proxy", "proxy-build-version.txt", "0.223.0.500");
+
+        await NewRegistrar().RegisterAsync(Packages);
+
+        var platforms = (await _db.NodeBuildVersions.ToListAsync()).Select(b => b.Platform).Order().ToList();
+        Assert.Equal(["linux-x64", "proxy-linux-x64", "proxy-win-x64", "win-x64"], platforms);
+        var linuxNode = await _db.NodeBuildVersions.SingleAsync(b => b.Platform == "linux-x64");
+        Assert.NotNull(linuxNode.VisionFilePath);
+        Assert.False(linuxNode.FilePath.EndsWith(".exe", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SeedsEachPlatformsCudaProviderAndTheManifest()
+    {
+        var linuxSrc = Path.Combine(Packages, "cuda-provider", "linux-x64", "libonnxruntime_providers_cuda.so");
+        Directory.CreateDirectory(Path.GetDirectoryName(linuxSrc)!);
+        File.WriteAllText(linuxSrc, "cuda-linux");
+        File.WriteAllText(linuxSrc + ".publisher.sig", "sig");
+        File.WriteAllText(Path.Combine(Packages, "cuda-provider-manifest.json"), "{}");
+
+        var registrar = NewRegistrar();
+        await registrar.RegisterAsync(Packages);
+
+        var dest = LarisVMS.Core.CudaProviderFiles.ServerPath(registrar.VisionNativeRoot, "linux-x64");
+        Assert.Equal("cuda-linux", File.ReadAllText(dest));
+        Assert.Equal("sig", File.ReadAllText(dest + ".publisher.sig"));
+        Assert.True(File.Exists(Path.Combine(registrar.VisionNativeRoot, "cuda-provider-manifest.json")));
+        Assert.False(File.Exists(LarisVMS.Core.CudaProviderFiles.ServerPath(registrar.VisionNativeRoot, "win-x64")));
+    }
+
     public void Dispose()
     {
         _db.Dispose();

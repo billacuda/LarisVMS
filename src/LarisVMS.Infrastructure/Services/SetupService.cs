@@ -316,7 +316,7 @@ public class SetupService(
 
     private void MergeSetupJson(Action<JsonObject> update)
     {
-        var path = Path.Combine(environment.ContentRootPath, "setup-generated.json");
+        var path = LarisVMS.Core.LarisPaths.ConfigFile(environment.ContentRootPath, "setup-generated.json");
 
         JsonObject root;
         try { root = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path))?.AsObject() ?? new JsonObject() : new JsonObject(); }

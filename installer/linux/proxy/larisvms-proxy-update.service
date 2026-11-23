@@ -1,0 +1,9 @@
+# Run by larisvms-proxy-update.path. Checks the staged files (hashes, and the publisher's signatures
+# in a release build), installs them into /opt/larisvms/proxy, and restarts larisvms-proxy.service.
+# Logs to /var/log/larisvms/updater-*.log.
+[Unit]
+Description=Install a staged LarisVMS proxy update
+
+[Service]
+Type=oneshot
+ExecStart=/opt/larisvms/proxy/LarisVMS.NodeUpdater --linux-apply --service larisvms-proxy

@@ -18,7 +18,17 @@
         {
             <span class="badge text-bg-warning">@L.Plural("admin.nodeBuildsPanel.pendingCount", Pending.Count)</span>
         }
-        <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" data-bs-toggle="modal" data-bs-target="#buildHistoryModal">
+        @if (PurgeableCount > 0)
+        {
+            @* Builds older than each platform's approved one, and their files: nodes never go back to them. *@
+            <EditForm Model="this" FormName="purge-old-builds" OnValidSubmit="HandlePurgeAsync" class="d-inline ms-auto">
+                <button type="submit" class="btn btn-sm btn-outline-danger"
+                        data-confirm="@L.Plural("admin.nodeBuildsPanel.removeOldBuildsConfirm", PurgeableCount)">
+                    @L["admin.nodeBuildsPanel.removeOldBuilds", new { count = PurgeableCount }]
+                </button>
+            </EditForm>
+        }
+        <button type="button" class="btn btn-sm btn-outline-secondary @(PurgeableCount > 0 ? "" : "ms-auto")" data-bs-toggle="modal" data-bs-target="#buildHistoryModal">
             @L["admin.nodeBuildsPanel.buildHistoryCount", new { count = Builds.Count }]
         </button>
     </div>
@@ -64,6 +74,14 @@
                                     <input type="hidden" name="BuildId" value="@b.Id" />
                                     <button type="submit" class="btn btn-sm btn-success">@L["common.approve"]</button>
                                 </EditForm>
+                                @if (SameVersionPending(b) > 0)
+                                {
+                                    @* One release carries a node and a proxy build for each OS; approve them together. *@
+                                    <EditForm Model="this" FormName="@($"approve-all-{b.Id}")" OnValidSubmit="HandleApproveAllAsync" class="d-inline">
+                                        <input type="hidden" name="BuildId" value="@b.Id" />
+                                        <button type="submit" class="btn btn-sm btn-outline-success">@L["admin.nodeBuildsPanel.approveAllPlatforms", new { count = SameVersionPending(b) + 1 }]</button>
+                                    </EditForm>
+                                }
                                 <EditForm Model="this" FormName="@($"reject-build-{b.Id}")" OnValidSubmit="HandleRejectAsync" class="d-inline">
                                     <input type="hidden" name="BuildId" value="@b.Id" />
                                     <button type="submit" class="btn btn-sm btn-outline-danger"
@@ -158,20 +176,27 @@
     [Parameter] public List<NodeBuildVersion> Builds { get; set; } = [];
     private List<NodeBuildVersion> Pending = [];
     private List<string> Platforms = [];
+    private int PurgeableCount;
 
     protected override void OnParametersSet()
     {
         Pending = Builds.Where(b => b.Status == NodeBuildStatus.Pending).OrderByDescending(b => b.UploadedAt).ToList();
         Platforms = Builds.Select(b => b.Platform).Distinct()
             .OrderBy(p => p.StartsWith("proxy", StringComparison.OrdinalIgnoreCase)).ThenBy(p => p).ToList();
+        PurgeableCount = LarisVMS.Infrastructure.Services.NodeBuildService.Purgeable(Builds).Count;
     }
 
     private ClaimsPrincipal User => HttpContext?.User ?? new ClaimsPrincipal(new ClaimsIdentity());
 
     private static string PlatformName(string platform) =>
         platform.StartsWith("proxy-", StringComparison.OrdinalIgnoreCase)
-            ? Loc.T("admin.nodeBuildsPanel.mediaProxyPlatform", new { platform = platform[6..] })
-            : Loc.T("admin.nodeBuildsPanel.recorderNodePlatform", new { platform });
+            ? Loc.T("admin.nodeBuildsPanel.mediaProxyPlatform", new { platform = LarisVMS.Web.Helpers.PlatformLabels.Display(platform) })
+            : Loc.T("admin.nodeBuildsPanel.recorderNodePlatform", new { platform = LarisVMS.Web.Helpers.PlatformLabels.Display(platform) });
+
+    /// <summary>Other builds of the same version still waiting (the same release for the other
+    /// platforms, and the proxy alongside the node).</summary>
+    private int SameVersionPending(NodeBuildVersion build) =>
+        Pending.Count(p => p.Id != build.Id && p.Version == build.Version);
 
     private Guid PostedBuildId() => Guid.TryParse(HttpContext?.Request.Form["BuildId"].ToString(), out var id) ? id : Guid.Empty;
 
@@ -195,6 +220,41 @@
         if (build is null) { Navigate(Loc.T("admin.nodeBuildsPanel.buildApproved")); return; }
         var kind = build.Platform.StartsWith("proxy-", StringComparison.OrdinalIgnoreCase) ? "proxies" : "nodes";
         Navigate(Loc.T("admin.nodeBuildsPanel.approvedUpdateOnTheirNext", new { version = build.Version, kind }));
+    }
+
+    /// <summary>Approves the posted build and every other pending build of the same version, each
+    /// audited on its own.</summary>
+    private async Task HandleApproveAllAsync()
+    {
+        var id = PostedBuildId();
+        var all = await NodeBuildService.ListAsync();
+        if (all.FirstOrDefault(b => b.Id == id) is not { } posted) { Navigate(Loc.T("admin.nodeBuildsPanel.buildApproved")); return; }
+        var batch = all.Where(b => b.Status == NodeBuildStatus.Pending && b.Version == posted.Version).ToList();
+        var approved = 0;
+        foreach (var build in batch)
+        {
+            try
+            {
+                await NodeBuildService.ApproveAsync(build.Id, By);
+                await LogAsync("NodeBuild.Approve", build, build.Id);
+                approved++;
+            }
+            catch (InvalidOperationException)
+            {
+                // Superseded or rejected since the page loaded; the rest still go ahead.
+            }
+        }
+        Navigate(Loc.T("admin.nodeBuildsPanel.approvedOnAllPlatforms", new { version = posted.Version, count = approved }));
+    }
+
+    /// <summary>Deletes every build older than its platform's approved one, and stray files in the
+    /// builds folder. Audited with what it removed.</summary>
+    private async Task HandlePurgeAsync()
+    {
+        var result = await NodeBuildService.PurgeOldBuildsAsync();
+        await AuditService.LogAsync("NodeBuild.Purge", User.FindFirst(ClaimTypes.NameIdentifier)?.Value, User.Identity?.Name,
+            HttpContext?.Connection.RemoteIpAddress?.ToString(), $"{result.Builds} builds, {result.Files} files, {result.Bytes} bytes");
+        Navigate(Loc.Plural("admin.nodeBuildsPanel.removedOldBuilds", result.Builds, new { size = ByteFormat.Format(result.Bytes) }));
     }
 
     private async Task HandleRejectAsync()

@@ -146,7 +146,7 @@
             </SettingField>
         </SettingSection>
         <SettingSection Title="@L["settings.detection.detectionInput"]" Subtitle="@L["settings.detection.detectionInputSubtitle"]">
-            <SettingField For="field-aspectMode" Label="@L["settings.detection.aspectFitting"]" Hint="@L["settings.detection.sliceFindsSmallObjectsOn"]" HelpLink="/Help/ai-detection#aspect-fitting">
+            <SettingField For="field-aspectMode" Label="@L["settings.detection.aspectFitting"]" Hint="@(L["settings.detection.sliceFindsSmallObjectsOn"] + " " + L["settings.detection.openVinoPreferLetterbox"])" HelpLink="/Help/ai-detection#aspect-fitting">
                 <select id="field-aspectMode" name="AspectMode" class="form-select">
                     <option value="Letterbox" selected="@(AspectMode == "Letterbox")">@L["settings.detection.letterboxDefault"]</option>
                     <option value="Stretch" selected="@(AspectMode == "Stretch")">@L["settings.detection.stretch"]</option>

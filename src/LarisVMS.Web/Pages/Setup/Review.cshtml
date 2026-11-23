@@ -5,5 +5,15 @@
     ViewData["Title"] = L["setup.review.review"].Value;
 }
 <h2 class="h5 mb-3">@L["setup.review.6Review"]</h2>
-<p>@L["setup.review.setupIsCompleteSignIn"]</p>
-<a class="btn btn-primary" asp-area="Identity" asp-page="/Account/Login">@L["setup.review.signIn"]</a>
+@* The Admin step signs the new administrator in, so this normally goes straight to the app; sending
+   a signed-in user to the login page showed the full menu above a sign-in form. *@
+@if (User.Identity?.IsAuthenticated == true)
+{
+    <p>@L["setup.review.setupIsComplete"]</p>
+    <a class="btn btn-primary" href="~/">@L["setup.review.open"]</a>
+}
+else
+{
+    <p>@L["setup.review.setupIsCompleteSignIn"]</p>
+    <a class="btn btn-primary" asp-area="Identity" asp-page="/Account/Login">@L["setup.review.signIn"]</a>
+}

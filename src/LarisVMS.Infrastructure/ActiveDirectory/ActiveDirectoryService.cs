@@ -256,11 +256,29 @@ public sealed class ActiveDirectoryService : IActiveDirectoryService
         }
     }
 
-    /// <summary>Opens and binds. A null credential means the process's own identity.</summary>
+    /// <summary>Opens and binds. A null credential means the process's own identity.
+    ///
+    /// On Linux the LDAP client (OpenLDAP underneath) can't sign and seal a plain LDAP connection, and a
+    /// Negotiate bind needs a Kerberos setup on the server. So there it takes LDAPS and an explicit
+    /// account, and binds with a simple bind (DOMAIN\user, which Active Directory accepts) inside the
+    /// TLS session, so the password never crosses the network in the clear and no Kerberos packages or
+    /// configuration are needed.</summary>
     private static LdapConnection Connect(ActiveDirectorySettings settings, NetworkCredential? credential)
     {
         var identifier = new LdapDirectoryIdentifier(RequireDomain(settings), settings.Port);
-        var connection = new LdapConnection(identifier, credential, AuthType.Negotiate) { Timeout = RequestTimeout };
+        var authType = AuthType.Negotiate;
+        if (!OperatingSystem.IsWindows())
+        {
+            if (!settings.UseLdaps)
+                throw new ActiveDirectoryException(Loc.T("server.activeDirectory.linuxNeedsLdaps"));
+            if (credential is null)
+                throw new ActiveDirectoryException(Loc.T("server.activeDirectory.linuxNeedsServiceAccount"));
+            credential = new NetworkCredential(
+                string.IsNullOrEmpty(credential.Domain) ? credential.UserName : $"{credential.Domain}\\{credential.UserName}",
+                credential.Password);
+            authType = AuthType.Basic;
+        }
+        var connection = new LdapConnection(identifier, credential, authType) { Timeout = RequestTimeout };
         try
         {
             connection.SessionOptions.ProtocolVersion = 3;

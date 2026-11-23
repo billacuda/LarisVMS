@@ -4,7 +4,7 @@
     Makes the publisher's offline update-signing key, or signs a build with it.
 
 .DESCRIPTION
-    Nodes and proxies built with -PublisherKeyPath (build-node.ps1, build-proxy.ps1, deploy.ps1) carry
+    Nodes and proxies built with -PublisherKeyPath (build-node.ps1, build-proxy.ps1, install-web.ps1, build-installers.ps1) carry
     the public key in src\LarisVMS.Core\Security\publisher-key.pem and install an update only if
     it's signed with the matching private key, on top of the server's own signature. Builds without
     -PublisherKeyPath are unsigned and carry no key, so it's opt-in.

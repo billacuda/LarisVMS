@@ -1,0 +1,29 @@
+# LarisVMS Web server. Settings: /etc/larisvms/web.env and /etc/larisvms/appsettings.Production.json.
+[Unit]
+Description=LarisVMS Web server
+Documentation=https://github.com/billacuda/LarisVMS
+After=network-online.target mariadb.service mysql.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=larisvms
+Group=larisvms
+WorkingDirectory=/opt/larisvms/web
+ExecStart=/opt/larisvms/web/LarisVMS.Web
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+EnvironmentFile=-/etc/larisvms/web.env
+Restart=always
+RestartSec=60
+# The first start after an upgrade migrates the database, which can take a while.
+TimeoutStartSec=300
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+# The setup wizard writes setup-generated.json to /etc/larisvms.
+ReadWritePaths=/var/lib/larisvms /var/log/larisvms /etc/larisvms
+
+[Install]
+WantedBy=multi-user.target

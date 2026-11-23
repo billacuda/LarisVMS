@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Threading;
+using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using Microsoft.Extensions.Logging;
 
@@ -7,77 +9,171 @@ namespace LarisVMS.Web.Services;
 
 /// <summary>
 /// Serves large Vision Service native dependencies that the node package deliberately doesn't bundle
-/// (<c>GET /api/nodes/vision-native/{name}</c>). Currently just <c>onnxruntime_providers_cuda.dll</c>
-/// (~320 MB) — shipping it in every node package would bloat CPU/DirectML-only installs by that much
-/// for a file only NVIDIA nodes ever load, so a node that resolves the CUDA backend fetches it once
-/// and caches it.
+/// (<c>GET /api/nodes/vision-native/{name}</c>). Currently just the ONNX Runtime CUDA provider
+/// (~300 MB): shipping it in every node package would bloat CPU/DirectML/OpenVINO installs by that
+/// much for a file only NVIDIA nodes ever load, so a node that resolves the CUDA backend fetches it
+/// once and caches it.
 ///
-/// Unlike <see cref="DetectionModelDistributor"/> there is no pinned upstream: the file lives inside
-/// a NuGet package on the build machine, so <c>deploy.ps1</c> copies it straight into this cache
-/// directory (the same <c>%ProgramData%\LarisVMS</c> root as node-builds, chosen so a redeploy's
-/// <c>robocopy /MIR</c> of the IIS site can't wipe it). A node with no seeded file just keeps
-/// running DirectML.
+/// One server serves Windows and Linux nodes, so it keeps one copy per platform (see
+/// <see cref="CudaProviderFiles"/>) and answers each node with its own platform's. A Web package
+/// carries the copy for its own OS; the other OS's copy is downloaded once, in the background, from the
+/// matching GitHub release the first time a node of that OS asks, and only kept if its SHA-256 matches
+/// the one the package pinned (<see cref="CudaProviderFiles.ManifestFileName"/>). Until then — or for
+/// good, on a server with no internet access — that node keeps running its fallback backend, and its
+/// note on the Nodes page says why; copying the file into the cache folder by hand also works.
 /// </summary>
-public sealed class VisionNativeDistributor(ILogger<VisionNativeDistributor> logger)
+public sealed class VisionNativeDistributor(IHttpClientFactory httpFactory, IConfiguration config, ILogger<VisionNativeDistributor> logger)
 {
-    /// <summary>Public request name -> the on-disk filename in the cache directory.</summary>
-    private static readonly Dictionary<string, string> Files = new(StringComparer.OrdinalIgnoreCase)
+    private const string ReleaseDownloadBase = "https://github.com/billacuda/LarisVMS/releases/download";
+    private static readonly TimeSpan RetryAfterFailure = TimeSpan.FromHours(1);
+
+    // SHA-256 is expensive on a ~300 MB file; cache it keyed on the file's path + last-write time so a
+    // reseed invalidates it.
+    private readonly Lock _gate = new();
+    private readonly Dictionary<string, (DateTime WriteUtc, string Sha256, long Size)> _hashes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Task> _fetches = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTime> _lastFailure = new(StringComparer.Ordinal);
+
+    public static bool IsKnown(string name) => string.Equals(name, CudaProviderFiles.RequestName, StringComparison.OrdinalIgnoreCase);
+
+    private static string? ResolvePath(string platform)
     {
-        ["cuda-provider"] = "onnxruntime_providers_cuda.dll",
-    };
-
-    public static string CacheDirectory => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "vision-native");
-
-    // SHA-256 is expensive on a ~320 MB file; cache it keyed on the file's path + last-write time so a
-    // reseed by deploy.ps1 invalidates it.
-    private readonly Lock _hashLock = new();
-    private (string Path, DateTime WriteUtc, VisionNativeInfo Info)? _cachedInfo;
-
-    public static bool IsKnown(string name) => Files.ContainsKey(name);
-
-    private static string? ResolvePath(string name)
-    {
-        if (!Files.TryGetValue(name, out var fileName)) return null;
-        var path = Path.Combine(CacheDirectory, fileName);
+        var path = CudaProviderFiles.ServerPath(platform);
         return File.Exists(path) && new FileInfo(path).Length > 0 ? path : null;
     }
 
-    /// <summary>The publisher's signature for a seeded file, written next to it by deploy.ps1 from a
-    /// publisher-signed build (build-node.ps1 -PublisherKeyPath).</summary>
-    public static string SignaturePath(string filePath) => filePath + ".publisher.sig";
-
-    /// <summary>Size + SHA-256 of the seeded file (and the publisher's signature, when the build was
-    /// signed), or null if the server has no copy.</summary>
-    public VisionNativeInfo? GetInfo(string name)
+    /// <summary>Size, SHA-256, and signed name of the copy for <paramref name="platform"/> (and the
+    /// publisher's signature, when the build was signed), or null if the server has no copy yet — in
+    /// which case it starts fetching one if it can.</summary>
+    public VisionNativeInfo? GetInfo(string name, string platform)
     {
-        if (ResolvePath(name) is not { } path) return null;
-        var info = GetHashedInfo(name, path);
-        var signaturePath = SignaturePath(path);
+        if (!IsKnown(name)) return null;
+        if (ResolvePath(platform) is not { } path)
+        {
+            StartFetch(platform);
+            return null;
+        }
+
+        var (sha, size) = Hash(path);
+        var info = new VisionNativeInfo(CudaProviderFiles.SignedName(platform), sha, size);
         string? publisherSignature = null;
-        try { if (File.Exists(signaturePath)) publisherSignature = File.ReadAllText(signaturePath).Trim(); }
-        catch (IOException) { /* being replaced by a deploy; the next request reads it */ }
+        try
+        {
+            var signaturePath = CudaProviderFiles.SignaturePath(path);
+            if (File.Exists(signaturePath)) publisherSignature = File.ReadAllText(signaturePath).Trim();
+        }
+        catch (IOException) { /* being replaced; the next request reads it */ }
         return string.IsNullOrEmpty(publisherSignature) ? info : info with { PublisherSignature = publisherSignature };
     }
 
-    private VisionNativeInfo GetHashedInfo(string name, string path)
+    /// <summary>An open read stream for the copy for <paramref name="platform"/>, or null if the
+    /// server has none.</summary>
+    public static Stream? Open(string name, string platform)
+        => IsKnown(name) && ResolvePath(platform) is { } path ? File.OpenRead(path) : null;
+
+    private (string Sha256, long Size) Hash(string path)
     {
-
         var writeUtc = File.GetLastWriteTimeUtc(path);
-        lock (_hashLock)
+        lock (_gate)
         {
-            if (_cachedInfo is { } c && c.Path == path && c.WriteUtc == writeUtc) return c.Info;
+            if (_hashes.TryGetValue(path, out var cached) && cached.WriteUtc == writeUtc) return (cached.Sha256, cached.Size);
+        }
 
-            using var stream = File.OpenRead(path);
-            var sha = Convert.ToHexStringLower(SHA256.HashData(stream));
-            var info = new VisionNativeInfo(name, sha, new FileInfo(path).Length);
-            _cachedInfo = (path, writeUtc, info);
-            logger.LogInformation("Vision native '{Name}' available: {Bytes} bytes, sha256 {Sha}.", name, info.SizeBytes, sha);
-            return info;
+        string sha;
+        long size;
+        using (var stream = File.OpenRead(path))
+        {
+            sha = Convert.ToHexStringLower(SHA256.HashData(stream));
+            size = stream.Length;
+        }
+        lock (_gate) _hashes[path] = (writeUtc, sha, size);
+        logger.LogInformation("CUDA provider for {Path} available: {Bytes} bytes, sha256 {Sha}.", path, size, sha);
+        return (sha, size);
+    }
+
+    private sealed record ManifestEntry(string Asset, string Sha256, string? Release, string? PublisherSignature);
+
+    private static ManifestEntry? ReadManifest(string platform)
+    {
+        try
+        {
+            if (!File.Exists(CudaProviderFiles.ManifestPath)) return null;
+            var all = JsonSerializer.Deserialize<Dictionary<string, ManifestEntry>>(
+                File.ReadAllText(CudaProviderFiles.ManifestPath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return all is not null && all.TryGetValue(platform, out var entry)
+                && !string.IsNullOrWhiteSpace(entry.Asset) && entry.Sha256 is { Length: 64 }
+                ? entry
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return null;
         }
     }
 
-    /// <summary>An open read stream for the seeded file, or null if the server has no copy.</summary>
-    public static Stream? Open(string name)
-        => ResolvePath(name) is { } path ? File.OpenRead(path) : null;
+    /// <summary>Starts at most one background download per platform, and not again within an hour of
+    /// a failed one.</summary>
+    private void StartFetch(string platform)
+    {
+        if (ReadManifest(platform) is not { } entry) return;
+        lock (_gate)
+        {
+            if (_fetches.TryGetValue(platform, out var running) && !running.IsCompleted) return;
+            if (_lastFailure.TryGetValue(platform, out var failedAt) && DateTime.UtcNow - failedAt < RetryAfterFailure) return;
+            _fetches[platform] = Task.Run(() => FetchAsync(platform, entry));
+        }
+    }
+
+    private async Task FetchAsync(string platform, ManifestEntry entry)
+    {
+        var dest = CudaProviderFiles.ServerPath(platform);
+        var tmp = dest + ".tmp";
+        // A mirror for servers that can't reach GitHub; must be HTTPS. The pinned SHA-256 still applies.
+        var baseUrl = config["VisionNative:DownloadBaseUrl"] is { Length: > 0 } mirror ? mirror.TrimEnd('/') : null;
+        if (baseUrl is not null && (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var mirrorUri) || mirrorUri.Scheme != Uri.UriSchemeHttps))
+        {
+            logger.LogWarning("VisionNative:DownloadBaseUrl must be an https:// URL; not fetching the {Platform} CUDA provider.", platform);
+            lock (_gate) _lastFailure[platform] = DateTime.UtcNow;
+            return;
+        }
+        var release = entry.Release ?? LarisVMS.Infrastructure.AppRelease.Version;
+        var url = baseUrl is null
+            ? $"{ReleaseDownloadBase}/v{release}/{entry.Asset}"
+            : $"{baseUrl}/{entry.Asset}";
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            logger.LogInformation("Fetching the {Platform} CUDA provider for NVIDIA nodes from {Url} (one-time; about 300 MB).", platform, url);
+            var http = httpFactory.CreateClient();
+            http.Timeout = TimeSpan.FromMinutes(30);
+            await using (var upstream = await http.GetStreamAsync(url))
+            await using (var file = File.Create(tmp))
+                await upstream.CopyToAsync(file);
+
+            string actual;
+            await using (var downloaded = File.OpenRead(tmp))
+                actual = Convert.ToHexStringLower(await SHA256.HashDataAsync(downloaded));
+            if (!string.Equals(actual, entry.Sha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"{url} isn't the file this server's package expects (sha256 {actual}, expected {entry.Sha256}).");
+
+            File.Move(tmp, dest, overwrite: true);
+            if (!string.IsNullOrWhiteSpace(entry.PublisherSignature))
+                await File.WriteAllTextAsync(CudaProviderFiles.SignaturePath(dest), entry.PublisherSignature);
+            logger.LogInformation("Cached the {Platform} CUDA provider at {Path}; NVIDIA nodes on that platform pick it up on their next check.",
+                platform, dest);
+        }
+        catch (Exception ex)
+        {
+            lock (_gate) _lastFailure[platform] = DateTime.UtcNow;
+            logger.LogWarning(ex,
+                "Could not fetch the {Platform} CUDA provider from {Url}; NVIDIA nodes on that platform keep their fallback backend. " +
+                "Retrying in an hour, or copy {Asset} from the release to {Path} by hand.",
+                platform, url, entry.Asset, dest);
+        }
+        finally
+        {
+            if (File.Exists(tmp)) { try { File.Delete(tmp); } catch (IOException) { /* best effort */ } }
+        }
+    }
 }

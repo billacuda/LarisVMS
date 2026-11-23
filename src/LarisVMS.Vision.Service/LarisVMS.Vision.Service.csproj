@@ -2,9 +2,9 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <!-- Published with -r win-x64. Restoring that target on every restore (the IDE's background
+    <!-- Published with -r win-x64 and -r linux-x64. Restoring those targets on every restore (the IDE's background
          one included) keeps a plain restore from dropping it mid-publish (NETSDK1047). -->
-    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <InvariantGlobalization>true</InvariantGlobalization>
@@ -17,20 +17,27 @@
     <ProjectReference Include="..\LarisVMS.Core\LarisVMS.Core.csproj" />
   </ItemGroup>
 
-  <!-- The GPU native ONNX Runtime builds. Referenced only for their files (ExcludeAssets=all) —
-       nothing from them is compiled or auto-copied — and staged into
-       onnxruntime-backends\{cuda,directml}\ by StageOnnxBackends below so all backends ship in one
-       package and VisionBackendResolver can pick one per machine at runtime. The CPU backend is the
-       plain onnxruntime.dll that the base Microsoft.ML.OnnxRuntime package (referenced by
-       LarisVMS.Vision) already drops at the app root. -->
+  <!-- The GPU native ONNX Runtime builds and the OpenVINO plugin. Referenced only for their files
+       (IncludeAssets=none) — nothing from them is compiled or auto-copied — and staged into
+       onnxruntime-backends\{cuda,directml,openvino}\ by StageOnnxBackends below so all backends ship
+       in one package and VisionBackendResolver can pick one per machine at runtime. The CPU backend
+       is the plain onnxruntime native that the base Microsoft.ML.OnnxRuntime package (referenced by
+       LarisVMS.Vision) already drops at the app root. Both GPU packages are restored on every
+       platform; only the one matching the target runtime is staged. -->
   <ItemGroup>
     <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu.Windows" GeneratePathProperty="true">
+      <IncludeAssets>none</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu.Linux" GeneratePathProperty="true">
       <IncludeAssets>none</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" GeneratePathProperty="true">
       <IncludeAssets>none</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.AI.DirectML" GeneratePathProperty="true">
+      <IncludeAssets>none</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Intel.ML.OnnxRuntime.EP.OpenVINO" GeneratePathProperty="true">
       <IncludeAssets>none</IncludeAssets>
     </PackageReference>
   </ItemGroup>
@@ -43,30 +50,54 @@
     <InternalsVisibleTo Include="LarisVMS.Tests" />
   </ItemGroup>
 
-  <!-- Copies each GPU backend's native payload into onnxruntime-backends\<name>\ next to the exe,
-       for both a plain build (bin\...) and a publish (build-node.ps1 then copies the whole publish
+  <!-- Copies each backend's native payload into onnxruntime-backends\<name>\ next to the exe, for
+       both a plain build (bin\...) and a publish (build-node.ps1 then copies the whole publish
        output, this folder included, into the node package). The property names below are MSBuild's
-       GeneratePathProperty form of the package ids (dots/dashes -> underscores). -->
+       GeneratePathProperty form of the package ids (dots/dashes -> underscores). The natives follow
+       the target runtime: -r linux-x64 stages the Linux .so files and no DirectML; a plain build
+       with no runtime identifier stages the host OS's. -->
+  <PropertyGroup>
+    <_OnnxRid>$(RuntimeIdentifier)</_OnnxRid>
+    <_OnnxRid Condition="'$(_OnnxRid)' == '' and $([MSBuild]::IsOSPlatform('Linux'))">linux-x64</_OnnxRid>
+    <_OnnxRid Condition="'$(_OnnxRid)' == ''">win-x64</_OnnxRid>
+    <_OnnxIsWindows>false</_OnnxIsWindows>
+    <_OnnxIsWindows Condition="$(_OnnxRid.StartsWith('win'))">true</_OnnxIsWindows>
+  </PropertyGroup>
+
   <Target Name="_CollectOnnxBackendFiles">
-    <ItemGroup>
-      <OnnxCudaFile Include="$(PkgMicrosoft_ML_OnnxRuntime_Gpu_Windows)\runtimes\win-x64\native\*.dll" />
-      <OnnxDmlFile Include="$(PkgMicrosoft_ML_OnnxRuntime_DirectML)\runtimes\win-x64\native\*.dll" />
+    <ItemGroup Condition="'$(_OnnxIsWindows)' == 'true'">
+      <OnnxCudaFile Include="$(PkgMicrosoft_ML_OnnxRuntime_Gpu_Windows)\runtimes\$(_OnnxRid)\native\*.dll" />
+      <OnnxDmlFile Include="$(PkgMicrosoft_ML_OnnxRuntime_DirectML)\runtimes\$(_OnnxRid)\native\*.dll" />
       <OnnxDmlFile Include="$(PkgMicrosoft_AI_DirectML)\bin\x64-win\DirectML.dll" />
     </ItemGroup>
+    <ItemGroup Condition="'$(_OnnxIsWindows)' != 'true'">
+      <OnnxCudaFile Include="$(PkgMicrosoft_ML_OnnxRuntime_Gpu_Linux)\runtimes\$(_OnnxRid)\native\*.so*" />
+    </ItemGroup>
+    <!-- The NPU device plugin and its compiler (~110 MB on Windows) are left out until NPU inference
+         is offered in the node settings; OpenVINO then simply reports no NPU device. Drop the
+         Exclude to ship them. -->
+    <ItemGroup>
+      <OnnxOpenVinoFile Include="$(PkgIntel_ML_OnnxRuntime_EP_OpenVINO)\runtimes\$(_OnnxRid)\native\*"
+                        Exclude="$(PkgIntel_ML_OnnxRuntime_EP_OpenVINO)\runtimes\$(_OnnxRid)\native\*openvino_intel_npu_*" />
+    </ItemGroup>
     <Error Condition="'@(OnnxCudaFile)' == ''"
-           Text="StageOnnxBackends found no CUDA native files under $(PkgMicrosoft_ML_OnnxRuntime_Gpu_Windows) — check the package restored and the GeneratePathProperty name." />
-    <Error Condition="'@(OnnxDmlFile)' == ''"
+           Text="StageOnnxBackends found no CUDA native files for $(_OnnxRid) — check Microsoft.ML.OnnxRuntime.Gpu.Windows / .Gpu.Linux restored and the GeneratePathProperty name." />
+    <Error Condition="'$(_OnnxIsWindows)' == 'true' and '@(OnnxDmlFile)' == ''"
            Text="StageOnnxBackends found no DirectML native files — check Microsoft.ML.OnnxRuntime.DirectML / Microsoft.AI.DirectML restored." />
+    <Error Condition="'@(OnnxOpenVinoFile)' == ''"
+           Text="StageOnnxBackends found no OpenVINO plugin files for $(_OnnxRid) — check Intel.ML.OnnxRuntime.EP.OpenVINO restored." />
   </Target>
 
   <Target Name="StageOnnxBackendsBuild" AfterTargets="Build" DependsOnTargets="_CollectOnnxBackendFiles">
     <Copy SourceFiles="@(OnnxCudaFile)" DestinationFolder="$(TargetDir)onnxruntime-backends\cuda" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(OnnxDmlFile)" DestinationFolder="$(TargetDir)onnxruntime-backends\directml" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(OnnxDmlFile)" DestinationFolder="$(TargetDir)onnxruntime-backends\directml" SkipUnchangedFiles="true" Condition="'@(OnnxDmlFile)' != ''" />
+    <Copy SourceFiles="@(OnnxOpenVinoFile)" DestinationFolder="$(TargetDir)onnxruntime-backends\openvino" SkipUnchangedFiles="true" />
   </Target>
 
   <Target Name="StageOnnxBackendsPublish" AfterTargets="Publish" DependsOnTargets="_CollectOnnxBackendFiles">
     <Copy SourceFiles="@(OnnxCudaFile)" DestinationFolder="$(PublishDir)onnxruntime-backends\cuda" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(OnnxDmlFile)" DestinationFolder="$(PublishDir)onnxruntime-backends\directml" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(OnnxDmlFile)" DestinationFolder="$(PublishDir)onnxruntime-backends\directml" SkipUnchangedFiles="true" Condition="'@(OnnxDmlFile)' != ''" />
+    <Copy SourceFiles="@(OnnxOpenVinoFile)" DestinationFolder="$(PublishDir)onnxruntime-backends\openvino" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

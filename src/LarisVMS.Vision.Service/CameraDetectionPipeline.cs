@@ -502,6 +502,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             TensorRtMaxWorkspaceBytes = serviceOptions.TensorRtMaxWorkspaceBytes,
             TensorRtBuilderOptimizationLevel = serviceOptions.TensorRtBuilderOptimizationLevel,
             OpenVinoDeviceType = serviceOptions.OpenVinoDeviceType,
+            OpenVinoCachePath = serviceOptions.OpenVinoCachePath,
             GpuPreprocessing = gpuPreprocessing,
             MaxCamerasPerSession = serviceOptions.MaxCamerasPerSession,
         };

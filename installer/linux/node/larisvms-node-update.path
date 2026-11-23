@@ -1,0 +1,12 @@
+# Installs updates the LarisVMS node staged. The node runs as the unprivileged larisvms user and
+# can't write /opt/larisvms/node, so it verifies an update, stages it, and writes ready.json; this
+# unit sees that file and starts larisvms-node-update.service, which installs it as root.
+[Unit]
+Description=Watch for LarisVMS node updates
+
+[Path]
+PathExists=/var/lib/larisvms/update/ready.json
+Unit=larisvms-node-update.service
+
+[Install]
+WantedBy=multi-user.target

@@ -10,10 +10,10 @@ namespace LarisVMS.Infrastructure.Data;
 /// <summary>
 /// The database settings in setup-generated.json: which server type (Database:Provider), the
 /// connection string without its password (ConnectionStrings:DefaultConnection), and the password
-/// itself DPAPI-protected to this machine (Database:ProtectedPassword). Read the connection string
-/// through <see cref="GetConnectionString"/>, never IConfiguration.GetConnectionString — only this
-/// puts the password back. Off Windows there is no DPAPI, and the password stays in the connection
-/// string, protected only by the file's ACL as before.
+/// itself encrypted to this machine (Database:ProtectedPassword, see MachineSecret: DPAPI on Windows,
+/// AES-256-GCM keyed off /etc/machine-id on Linux). Read the connection string through
+/// <see cref="GetConnectionString"/>, never IConfiguration.GetConnectionString — only this puts the
+/// password back.
 /// </summary>
 public static class DatabaseConfig
 {
@@ -50,12 +50,8 @@ public static class DatabaseConfig
     public static void Save(JsonObject root, IConfiguration configuration, DatabaseProvider provider, string connectionString)
     {
         var ops = DatabaseProviderOps.For(provider);
-        string? protectedPassword = null;
-        if (OperatingSystem.IsWindows())
-        {
-            connectionString = ops.WithoutPassword(connectionString, out var password);
-            if (password is not null) protectedPassword = Protect(password);
-        }
+        connectionString = ops.WithoutPassword(connectionString, out var password);
+        var protectedPassword = password is null ? null : Protect(password);
 
         if (root["ConnectionStrings"] is not JsonObject connectionStrings)
             root["ConnectionStrings"] = connectionStrings = new JsonObject();
@@ -76,7 +72,7 @@ public static class DatabaseConfig
     /// out of the connection string in setup-generated.json. True when the file changed.</summary>
     public static bool ProtectPlaintextPassword(string setupJsonPath)
     {
-        if (!OperatingSystem.IsWindows() || !File.Exists(setupJsonPath)) return false;
+        if (!File.Exists(setupJsonPath)) return false;
 
         var root = JsonNode.Parse(File.ReadAllText(setupJsonPath))?.AsObject();
         if (root?["ConnectionStrings"]?["DefaultConnection"]?.GetValue<string>() is not { Length: > 0 } cs) return false;
@@ -92,17 +88,10 @@ public static class DatabaseConfig
         return true;
     }
 
-    private static string Protect(string password)
-    {
-#pragma warning disable CA1416 // callers check OperatingSystem.IsWindows()
-        return Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(password), Entropy, DataProtectionScope.LocalMachine));
-#pragma warning restore CA1416
-    }
+    // MachineSecret: the same DPAPI call as before on Windows, AES-256-GCM elsewhere. Either way a copy
+    // of setup-generated.json taken off this machine doesn't give away the password.
+    private static string Protect(string password) => LarisVMS.Core.Security.MachineSecret.ProtectString(password, Entropy);
 
-    private static string Unprotect(string protectedPassword)
-    {
-        if (!OperatingSystem.IsWindows())
-            throw new PlatformNotSupportedException("Database:ProtectedPassword can only be read on Windows.");
-        return Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(protectedPassword), Entropy, DataProtectionScope.LocalMachine));
-    }
+    private static string Unprotect(string protectedPassword) =>
+        LarisVMS.Core.Security.MachineSecret.UnprotectString(protectedPassword, Entropy);
 }

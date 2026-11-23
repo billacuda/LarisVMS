@@ -117,7 +117,12 @@ public record NodeUpdateInfoDto(string Version, string DownloadUrl, string Sha25
     // UpdateSignature.UpdatePayload signed with the server's key, and that key's public half.
     string? Signature = null, string? SigningKeyPem = null,
     // The same payload signed with the publisher's offline key (PublisherKey), when the build has one.
-    string? PublisherSignature = null);
+    string? PublisherSignature = null,
+    // The build's native backend libraries (BackendsBundle), when it has them: the zip's URL, hash, and
+    // size, the unpacked tree's stamp, and UpdateSignature.BackendsPayload signed by the server (same
+    // key as Signature) and by the publisher. Older nodes ignore these.
+    string? BackendsDownloadUrl = null, string? BackendsSha256 = null, long? BackendsSizeBytes = null,
+    string? BackendsStamp = null, string? BackendsSignature = null, string? BackendsPublisherSignature = null);
 
 /// <summary>NextNonce (failover plan phase 5a): the single-use value the node must echo on its next
 /// heartbeat (NodeHeartbeatRequest.Nonce). Issued fresh every heartbeat that passes validation. Null
@@ -136,7 +141,7 @@ public record NodeHeartbeatResponse(int IntervalSeconds, NodeUpdateInfoDto? Upda
 /// <summary>Metadata for a large Vision Service native dependency the node package doesn't bundle and
 /// fetches from the server on demand — currently only <c>onnxruntime_providers_cuda.dll</c> (~320 MB),
 /// downloaded by a node that resolved the CUDA backend so it isn't shipped to every node. The server
-/// serves the file from a cache directory seeded by <c>deploy.ps1</c>; <see cref="Sha256"/> is
+/// serves the file from a cache directory seeded from the Web package; <see cref="Sha256"/> is
 /// verified by the node before the file is put in place. Null from the endpoint means the server has
 /// no copy seeded.</summary>
 public record VisionNativeInfo(string Name, string Sha256, long SizeBytes, string? Signature = null, string? SigningKeyPem = null,

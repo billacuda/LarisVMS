@@ -1,0 +1,2 @@
+# Shell scripts, systemd units, and env files run on Linux: a CR breaks them.
+* text eol=lf

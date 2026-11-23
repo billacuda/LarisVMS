@@ -13,7 +13,8 @@ Um único pacote de nó atende todas as máquinas. Na inicialização, o serviç
 | Hardware | Backend | Necessário no nó |
 |---|---|---|
 | GPU NVIDIA | CUDA (recua para DirectML) | CUDA Toolkit 12.x e cuDNN 9.x |
-| GPU AMD / Intel | DirectML | Um driver de GPU atual |
+| GPU Intel | OpenVINO (recua para DirectML) | Um driver gráfico Intel atual |
+| GPU AMD | DirectML | Um driver de GPU atual |
 | Sem GPU | CPU | Nada |
 
 A página de edição do nó mostra os aceleradores detectados, e sua configuração **Acelerador** pode forçar um. Os modelos nunca vêm incluídos. Um nó busca os modelos YOLOX integrados do servidor, e outros modelos vão em `C:\ProgramData\LarisVMS\models` no nó.
@@ -48,7 +49,7 @@ Como o quadro de uma câmera se encaixa na entrada quadrada do modelo:
 
 - **Letterbox** (padrão): mantém as proporções e preenche com barras pretas.
 - **Esticar**: amassa o quadro para preencher o quadrado, o que distorce as formas.
-- **Slice**: corta o quadro em quadrados sobrepostos de resolução total. É o melhor para objetos pequenos ou distantes em câmeras grande-angulares, mas custa cerca de 2× o trabalho numa câmera 16:9. Exige pré-processamento por GPU, e o ativa automaticamente.
+- **Slice**: corta o quadro em quadrados sobrepostos de resolução total. É o melhor para objetos pequenos ou distantes em câmeras grande-angulares, mas custa cerca de 2× o trabalho numa câmera 16:9. Exige pré-processamento por GPU, e o ativa automaticamente. Em uma GPU Intel (OpenVINO), use **Letterbox**: ali o Slice processa cada recorte separadamente e usa muito mais CPU e GPU.
 
 O **pré-processamento de quadros por GPU** tira a conversão de cores da CPU e a coloca na GPU, o que ajuda em nós com muitas câmeras.
 

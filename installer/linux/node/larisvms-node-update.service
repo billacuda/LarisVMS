@@ -1,0 +1,9 @@
+# Run by larisvms-node-update.path. Checks the staged files (hashes, and the publisher's signatures
+# in a release build), installs them into /opt/larisvms/node, and restarts larisvms-node.service.
+# Logs to /var/log/larisvms/updater-*.log.
+[Unit]
+Description=Install a staged LarisVMS node update
+
+[Service]
+Type=oneshot
+ExecStart=/opt/larisvms/node/LarisVMS.NodeUpdater --linux-apply --service larisvms-node

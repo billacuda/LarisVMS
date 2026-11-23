@@ -9,10 +9,11 @@ namespace LarisVMS.Core.Enums;
 /// only, since silently burning CPU on real-time inference on a node that wasn't provisioned for it
 /// is worse than just not running it.
 ///
-/// <see cref="Intel"/> is kept only for wire/DB back-compat with an already-persisted node (it used
-/// to silently resolve to DirectML — a bug, since OpenVINO is Intel's own optimized path — see
-/// VisionBackendResolver's history) and is no longer offered in the Admin UI: pick <see cref="Amd"/>
-/// (DirectML, works on any DX12 GPU) or the new explicit <see cref="OpenVino"/> instead.
+/// <see cref="Intel"/> is what Auto resolves to on an Intel GPU, and is kept for wire/DB back-compat
+/// with an already-persisted node. It runs Intel's OpenVINO plugin, the same as <see cref="OpenVino"/>
+/// (it used to silently resolve to DirectML, which is now only its fallback on Windows); it is no
+/// longer offered in the Admin UI: pick <see cref="OpenVino"/> or <see cref="Amd"/> (DirectML, works
+/// on any DX12 GPU on Windows) instead.
 ///
 /// <see cref="TensorRt"/> and <see cref="OpenVino"/> are additive (not renames) so a node running an
 /// older build during a rolling upgrade can't misparse a value it doesn't recognize as anything worse

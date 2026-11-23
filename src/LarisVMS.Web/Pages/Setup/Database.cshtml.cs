@@ -9,7 +9,8 @@ namespace LarisVMS.Web.Pages.Setup;
 
 public class DatabaseModel(ISetupService setupService) : PageModel
 {
-    [BindProperty] public DatabaseProvider Provider { get; set; } = DatabaseProvider.SqlServer;
+    // MariaDB is the natural choice on Linux; SQL Server there needs a SQL login (no Windows auth).
+    [BindProperty] public DatabaseProvider Provider { get; set; } = OperatingSystem.IsWindows() ? DatabaseProvider.SqlServer : DatabaseProvider.MariaDb;
     [BindProperty] public string ServerName { get; set; } = ".";
     [BindProperty] public string DatabaseName { get; set; } = "LarisVMS";
     [BindProperty] public string? Username { get; set; }
@@ -30,6 +31,13 @@ public class DatabaseModel(ISetupService setupService) : PageModel
 
     public async Task<IActionResult> OnPostAsync()
     {
+        // A blank SQL login means Windows Integrated Security, which a Linux server can't use.
+        if (Provider == DatabaseProvider.SqlServer && !OperatingSystem.IsWindows() && string.IsNullOrWhiteSpace(Username))
+        {
+            ErrorMessage = Loc.T("setup.database.sqlLoginRequiredOnLinux");
+            return Page();
+        }
+
         var request = Provider == DatabaseProvider.MariaDb
             ? new DatabaseSetupRequest(DatabaseProvider.MariaDb, MariaDbHost.Trim(), MariaDbDatabaseName.Trim(),
                 MariaDbUsername?.Trim(), MariaDbPassword, MariaDbTrustServerCertificate, MariaDbPort)

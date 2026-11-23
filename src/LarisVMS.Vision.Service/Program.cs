@@ -48,7 +48,7 @@ builder.Services.AddHostedService<InferenceWatchdog>();
 // Initial level from the env var the node's VisionServiceSupervisor passes (the deployment-wide
 // Logging.Level setting); the node also pushes changes to POST /log-level below without a restart.
 var visionFileLogger = new FileLoggerProvider(
-    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs"),
+    LarisVMS.Core.LarisPaths.LogRoot,
     "vision", LogLevels.Parse(builder.Configuration["Vision:LogLevel"]));
 builder.Logging.AddProvider(visionFileLogger);
 

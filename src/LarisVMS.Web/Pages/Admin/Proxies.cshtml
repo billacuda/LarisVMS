@@ -4,6 +4,7 @@
 @{
     var thumbprint = LarisVMS.Web.Services.ServerCertificateSettings.Thumbprint(Certificates);
     var pinArg = thumbprint is null ? "" : $" -ServerCertThumbprint {thumbprint}";
+    var linuxPinArg = thumbprint is null ? "" : $" --server-cert-thumbprint {thumbprint}";
     ViewData["Title"] = L["admin.proxies.mediaProxies"].Value;
     var serverOrigin = $"{Request.Scheme}://{Request.Host}";
     var regKey = string.IsNullOrEmpty(Model.RegistrationKey) ? "<set one on Admin - Settings - Nodes>" : Model.RegistrationKey;
@@ -24,10 +25,17 @@
 <div class="card mb-3" style="max-width: 60rem;">
     <div class="card-body py-2 small">
         @L.Html("admin.proxies.installIntro")
-        <div class="d-flex align-items-start gap-2 mb-0 mt-1">
+        <div class="mt-1">@L["admin.proxies.installWindows"]</div>
+        <div class="d-flex align-items-start gap-2 mb-0">
             <pre id="proxyInstallCmd" class="mb-0 flex-grow-1">.\install-proxy.ps1 -ServerUrl @serverOrigin -RegistrationKey @regKey@pinArg -ClientPort 4443 [-ClientPfxPath C:\certs\proxy.pfx -ClientPfxPassword ...]</pre>
             <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="@L["admin.proxies.copyCommand"]"
                     data-copy-from="#proxyInstallCmd">📋</button>
+        </div>
+        <div class="mt-2">@L["admin.proxies.installLinux"]</div>
+        <div class="d-flex align-items-start gap-2 mb-0">
+            <pre id="proxyInstallCmdLinux" class="mb-0 flex-grow-1">sudo larisvms-proxy setup --server-url @serverOrigin --registration-key @regKey@linuxPinArg --client-port 4443 [--client-pfx-path /etc/larisvms/proxy.pfx --client-pfx-password ...]</pre>
+            <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="@L["admin.proxies.copyCommand"]"
+                    data-copy-from="#proxyInstallCmdLinux">📋</button>
         </div>
         @L.Html("admin.proxies.installAfter")
     </div>
@@ -111,7 +119,7 @@ else
                                 </div>
                             </td>
                             <td class="text-center">@Model.AssignedNodeCount.GetValueOrDefault(p.Id)</td>
-                            <td>@p.Version</td>
+                            <td>@p.Version<div class="small text-muted">@LarisVMS.Web.Helpers.PlatformLabels.Display(p.Platform)</div></td>
                             <td class="text-center"><input type="checkbox" name="enabled" value="true" checked="@p.Enabled" /></td>
                             <td class="text-end"><button type="submit" class="btn btn-sm btn-outline-primary"><span aria-hidden="true">💾</span> @L["common.save"]</button></td>
                         </form>

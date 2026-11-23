@@ -1,0 +1,26 @@
+# LarisVMS recorder node. Pair it with: sudo larisvms-node setup --server-url <url> --registration-key <key>
+# Settings: /etc/larisvms/node.env (written by setup).
+[Unit]
+Description=LarisVMS Node
+Documentation=https://github.com/billacuda/LarisVMS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=larisvms
+Group=larisvms
+WorkingDirectory=/opt/larisvms/node
+ExecStart=/opt/larisvms/node/LarisVMS.Node
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+EnvironmentFile=-/etc/larisvms/node.env
+Restart=always
+RestartSec=60
+# Stops the Vision Service and the ffmpeg processes with the node.
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

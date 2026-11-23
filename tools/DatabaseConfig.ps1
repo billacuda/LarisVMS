@@ -1,5 +1,5 @@
-# Shared reader for the database settings in setup-generated.json, dot-sourced by install-web.ps1 and
-# deploy.ps1. Mirrors LarisVMS.Infrastructure.Data.DatabaseConfig: the connection string is stored
+# Shared reader for the database settings in setup-generated.json, dot-sourced by install-web.ps1.
+# Mirrors LarisVMS.Infrastructure.Data.DatabaseConfig: the connection string is stored
 # without its password, which sits DPAPI-protected (LocalMachine) in Database:ProtectedPassword, and
 # Database:Provider says which server it is (missing = SqlServer).
 

@@ -18,8 +18,13 @@ public static class LogPaths
 {
     public const string ConfigKey = "Logs:Path";
 
+    /// <summary>The configured folder, else <c>logs</c> beside the program on Windows (where it has
+    /// always been) and <see cref="LarisVMS.Core.LarisPaths.LogRoot"/> elsewhere, since a Linux
+    /// install folder is read-only to the service.</summary>
     public static string AppLogsDirectory(IConfiguration configuration)
         => configuration[ConfigKey] is { Length: > 0 } configured
             ? configured
-            : Path.Combine(AppContext.BaseDirectory, "logs");
+            : OperatingSystem.IsWindows()
+                ? Path.Combine(AppContext.BaseDirectory, "logs")
+                : LarisVMS.Core.LarisPaths.LogRoot;
 }

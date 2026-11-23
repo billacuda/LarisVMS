@@ -23,6 +23,20 @@ using LarisVMS.Onvif.Soap;
 // there'd be nothing meaningful to skip regardless.
 const double MinSeekSecondsForPartialFetch = 2.0;
 
+// `larisvms-node --version`: prints the version and exits (the package smoke test runs it).
+if (args is ["--version"])
+{
+    Console.WriteLine(NodeVersion.Current);
+    return;
+}
+
+// `sudo larisvms-node setup ...` on Linux: write the settings, then restart the service (NodeSetupCommand).
+if (args.Length > 0 && args[0] == "setup")
+{
+    Environment.Exit(LarisVMS.Node.NodeSetupCommand.Run(args[1..]));
+    return;
+}
+
 // ── First-run registration ──────────────────────────────────────────────────
 // If node.config doesn't exist yet, this run must be given --server-url and --registration-key
 // (what install-node.ps1 passes) to register once; the assigned NodeId/secret are then persisted
@@ -55,8 +69,10 @@ if (config is null)
         ?? LarisVMS.Core.Security.RegistrationKeyFile.Read(); // left by the installer
     if (serverUrl is null || registrationKey is null)
     {
-        Console.Error.WriteLine("Not yet registered. Run with --server-url <url> --registration-key <key> " +
-            "(or set LARISVMS_SERVER_URL / LARISVMS_REGISTRATION_KEY) the first time.");
+        Console.Error.WriteLine(OperatingSystem.IsWindows()
+            ? "Not yet registered. Run with --server-url <url> --registration-key <key> " +
+              "(or set LARISVMS_SERVER_URL / LARISVMS_REGISTRATION_KEY) the first time."
+            : "Not yet registered. Pair this node with: sudo larisvms-node setup --server-url <url> --registration-key <key>");
         Environment.Exit(1);
         return;
     }
@@ -74,11 +90,9 @@ if (config is null)
     if (pinThumbprint is not null) trust.Pin(pinThumbprint);
 
     var registerClient = new NodeApiClient(serverUrl, trust);
-    // "win-x64" (a RID, not Environment.OSVersion.Platform.ToString()'s "Win32NT") — this is what
-    // LarisVMS.Web's heartbeat handler matches against NodeBuildVersion.Platform to decide whether an
-    // uploaded build applies to this node (see NodeVersionComparer/Program.cs's auto-update check).
-    // LarisVMS.Node is Windows-only and single-RID for now (see NodeConfigStore's doc comment on why
-    // there's no Linux build), so this is a fixed literal rather than something resolved at runtime.
+    // PlatformId.Current ("win-x64", "linux-x64": a RID, not Environment.OSVersion.Platform's
+    // "Win32NT") is what LarisVMS.Web's heartbeat handler matches against NodeBuildVersion.Platform to
+    // decide which approved build applies to this node, so a mixed Windows/Linux fleet each gets its own.
     // Storage config is per-node with no global default — carry the storage path (and optional
     // archive path) install-node.ps1 was given into the register call so the new Node row has them
     // immediately. The full local fallback (ProgramData) is parsed below for the running process;
@@ -87,7 +101,7 @@ if (config is null)
     var registerStorageRoot = GetArg(args, "--storage-root") ?? Environment.GetEnvironmentVariable("LARISVMS_STORAGE_ROOT");
     var registerArchiveRoot = GetArg(args, "--archive-root") ?? Environment.GetEnvironmentVariable("LARISVMS_ARCHIVE_ROOT");
     var response = await registerClient.RegisterAsync(
-        new LarisVMS.Core.Dtos.NodeRegisterRequest(registrationKey, Environment.MachineName, NodeVersion.Current, "win-x64",
+        new LarisVMS.Core.Dtos.NodeRegisterRequest(registrationKey, Environment.MachineName, NodeVersion.Current, LarisVMS.Core.PlatformId.Current,
             registerStorageRoot, registerArchiveRoot),
         CancellationToken.None);
 
@@ -106,16 +120,20 @@ var ffmpegPath = FfmpegPathResolver.Resolve(
     GetArg(args, "--ffmpeg-path") ?? Environment.GetEnvironmentVariable("LARISVMS_FFMPEG_PATH"));
 if (!await FfmpegPathResolver.IsRunnableAsync(ffmpegPath))
 {
-    Console.Error.WriteLine($"ffmpeg could not be run at '{ffmpegPath}'. Install it with " +
-        "'winget install ffmpeg --scope machine' (or any other means), then re-run — the node " +
-        "auto-discovers a PATH or WinGet install. Override with --ffmpeg-path or LARISVMS_FFMPEG_PATH.");
+    Console.Error.WriteLine(OperatingSystem.IsWindows()
+        ? $"ffmpeg could not be run at '{ffmpegPath}'. Install it with " +
+          "'winget install ffmpeg --scope machine' (or any other means), then re-run — the node " +
+          "auto-discovers a PATH or WinGet install. Override with --ffmpeg-path or LARISVMS_FFMPEG_PATH."
+        : $"ffmpeg could not be run at '{ffmpegPath}'. Install it from your distribution (apt install ffmpeg; " +
+          "on RHEL-family systems enable RPM Fusion first, then dnf install ffmpeg), or point " +
+          "sudo larisvms-node setup --ffmpeg-path at it.");
     Environment.Exit(1);
     return;
 }
 Console.WriteLine($"Using ffmpeg: {ffmpegPath}");
 
 var fallbackStorageRoot = GetArg(args, "--storage-root") ?? Environment.GetEnvironmentVariable("LARISVMS_STORAGE_ROOT")
-    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "recordings");
+    ?? Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "recordings");
 
 // M5 live view: this node's own Kestrel port for LarisVMS.Web to proxy live/playback through —
 // plain HTTP, LAN-only. Originally the *only* media path (a browser never dialed a node directly).
@@ -172,7 +190,7 @@ var builder = WebApplication.CreateBuilder(args);
 // already proven writable by this same service account. StorageManager.SweepLogsDirectory (fixed
 // 14-day window) is this tier's retention sweep, run alongside its other periodic disk cleanup.
 var nodeFileLogger = new FileLoggerProvider(
-    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs"),
+    LarisVMS.Core.LarisPaths.LogRoot,
     "node", LogLevel.Information);
 builder.Logging.AddProvider(nodeFileLogger);
 // Kestrel/routing/result request-pipeline noise — the node's own LAN-facing media routes and its
@@ -192,8 +210,7 @@ var clientEndpoint = ClientEndpointConfig.Resolve(config.CachedConfig);
 CertHolder? certHolder = null;
 if (clientEndpoint.Enabled)
 {
-    var selfSignedPfx = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "client-endpoint.selfsigned.pfx");
+    var selfSignedPfx = Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "client-endpoint.selfsigned.pfx");
     certHolder = new CertHolder(
         // Encrypted connections from the server can use the self-signed certificate: the server pins it.
         new CertHolderOptions(clientEndpoint.PfxPath, clientEndpoint.PfxPassword, clientEndpoint.AllowInsecure || clientEndpoint.ServerTls,
@@ -213,7 +230,10 @@ builder.WebHost.ConfigureKestrel(o =>
         o.ListenAnyIP(clientEndpoint.Port, lo => lo.UseHttps(h =>
             h.ServerCertificateSelector = (_, _) => certHolder.Current));
 });
+// Each is a no-op unless the process runs under that service manager: a Windows service, or a
+// systemd unit (Type=notify readiness and journal-friendly console logging).
 builder.Services.AddWindowsService(o => o.ServiceName = "LarisVMS Node");
+builder.Services.AddSystemd();
 builder.Services.AddSingleton(apiClient);
 // Failover plan phase 5c: rejects a second use of a one-shot Web→Node control token (v2 tokens only;
 // v1 and the multi-use live-view token pass a null jti and are unaffected).

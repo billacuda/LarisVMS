@@ -78,6 +78,10 @@ public sealed class VisionServiceOptions
     /// OpenVINO backend is selected.</summary>
     public string OpenVinoDeviceType { get; set; } = "GPU";
 
+    /// <summary>Optional — defaults to the data folder's openvino-cache. See
+    /// Inference.EngineOptions.OpenVinoCachePath.</summary>
+    public string? OpenVinoCachePath { get; set; }
+
     /// <summary>How many cameras may share one model session — see
     /// Inference.EngineOptions.MaxCamerasPerSession. Higher saves memory, lower keeps more cameras'
     /// inferences running in parallel.</summary>

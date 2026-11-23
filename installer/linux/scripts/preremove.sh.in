@@ -1,0 +1,19 @@
+#!/bin/sh
+# LarisVMS @KIND@: before removal or upgrade (deb prerm: remove, upgrade, ...; rpm %preun: 0 is
+# removal, 1 is upgrade). Stops the service only when the package is going away; an upgrade restarts
+# it from the new package's postinstall.
+KIND=@KIND@
+UNIT="larisvms-$KIND"
+
+case "$1" in
+    remove|purge|0)
+        if [ -d /run/systemd/system ]; then
+            systemctl disable --now "$UNIT" >/dev/null 2>&1 || true
+            if [ "$KIND" != web ]; then
+                systemctl disable --now "$UNIT-update.path" >/dev/null 2>&1 || true
+            fi
+        fi
+        ;;
+esac
+
+exit 0

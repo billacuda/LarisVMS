@@ -10,7 +10,7 @@ public class DbHealthCheck(ApplicationDbContext db, IConfiguration configuration
     public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
     {
         // Pre-setup, there is no connection string yet — that's an expected state, not a failed
-        // health check (deploy.ps1's post-deploy probe would otherwise fail on a fresh install
+        // health check (install-web.ps1's post-install probe would otherwise fail on a fresh install
         // before the wizard has run).
         if (!DatabaseConfig.IsConfigured(configuration))
             return HealthCheckResult.Healthy("Database not yet configured (setup pending).");

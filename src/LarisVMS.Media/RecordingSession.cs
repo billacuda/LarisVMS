@@ -244,12 +244,12 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
         // Case-insensitive: Windows paths (local or UNC) are case-insensitive/preserving, and
         // knownPaths comes back from the server exactly as originally reported, which could differ
         // in case from how this run's own Directory.GetFiles happens to return the same path.
-        var reportedPaths = new HashSet<string>(knownPaths ?? [], StringComparer.OrdinalIgnoreCase);
+        var reportedPaths = new HashSet<string>(knownPaths ?? [], LarisVMS.Core.PathComparer.Local);
 
         // Same whole-session scope as reportedPaths, for the same reason: an ffmpeg reconnect mid-way
         // through must not lose track of a still-open file's already-observed first-real-data instant.
         // See PollForCompletedSegments' own comment for what this is for.
-        var firstRealDataObservedUtc = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        var firstRealDataObservedUtc = new Dictionary<string, DateTime>(LarisVMS.Core.PathComparer.Local);
 
         while (!ct.IsCancellationRequested)
         {

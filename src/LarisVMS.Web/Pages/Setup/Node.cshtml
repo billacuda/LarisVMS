@@ -4,13 +4,14 @@
 @{
     var thumbprint = LarisVMS.Web.Services.ServerCertificateSettings.Thumbprint(Certificates);
     var pinArg = thumbprint is null ? "" : $" -ServerCertThumbprint \"{thumbprint}\"";
+    var linuxPinArg = thumbprint is null ? "" : $" --server-cert-thumbprint \"{thumbprint}\"";
     Layout = "_SetupLayout";
     ViewData["Title"] = L["setup.node.recorderNode"].Value;
 }
 <h2 class="h5 mb-3">@L["setup.node.4RecorderNode"]</h2>
 <p class="text-muted small">
-    Recording runs in a separate Windows Service ("node"), not inside this IIS-hosted web app, so it
-    keeps running through app pool recycles and deploys. Install at least one node with the
+    Recording runs in a separate service ("node") on Windows or Linux, not inside this web app, so it
+    keeps running through restarts and updates of the server. Install at least one node with the
     registration key below — this can also be done later from Admin &rarr; Nodes.
 </p>
 <div class="mb-3">
@@ -18,8 +19,12 @@
     <input id="registrationKey" class="form-control" value="@Model.RegistrationKey" readonly />
 </div>
 <div class="mb-3">
-    <label class="form-label" for="installCommand">@L["setup.node.installCommandRunOnThe"]</label>
+    <label class="form-label" for="installCommand">@L["setup.node.installCommandRunOnThe"] · @L["setup.node.installWindows"]</label>
     <textarea id="installCommand" class="form-control font-monospace" rows="2" readonly>.\install-node.ps1 -ServerUrl "@Model.ServerUrl" -RegistrationKey "@Model.RegistrationKey"@pinArg</textarea>
+</div>
+<div class="mb-3">
+    <label class="form-label" for="installCommandLinux">@L["setup.node.installCommandRunOnThe"] · @L["setup.node.installLinux"]</label>
+    <textarea id="installCommandLinux" class="form-control font-monospace" rows="2" readonly>sudo larisvms-node setup --server-url "@Model.ServerUrl" --registration-key "@Model.RegistrationKey"@linuxPinArg</textarea>
 </div>
 <form method="post">
     <button type="submit" class="btn btn-primary">@L["setup.node.continue"]</button>

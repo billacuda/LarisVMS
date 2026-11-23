@@ -10,8 +10,9 @@ namespace LarisVMS.Node;
 /// AccelSelection for how the node's own resolved value actually gets used — always its own
 /// freshest local probe, never a value fetched back from the server).
 ///
-/// GPU vendor is read from Win32_VideoController (WMI) — Windows-only, matching every other
-/// hardware-facing probe in this app (Node itself is Windows-only today). This reports which
+/// GPU vendor is read from Win32_VideoController (WMI) on Windows, and on Linux from the PCI vendor
+/// ID of each display device under /sys/class/drm (plus /proc/driver/nvidia, for an NVIDIA card whose
+/// driver registers no DRM device). This reports which
 /// vendor's display adapter is present, a reasonable proxy for "an execution provider for that
 /// vendor is worth trying," but not a guarantee one will actually bind — Nvidia's CUDA path still
 /// needs cuDNN discoverable, Intel/AMD's OpenVINO/DirectML paths need their own runtime
@@ -27,11 +28,13 @@ public static class AccelCapabilityProber
     /// doc comment already takes.</summary>
     public static Task<IReadOnlyList<AiAccelerator>> ProbeAsync()
     {
-        if (!OperatingSystem.IsWindows()) return Task.FromResult<IReadOnlyList<AiAccelerator>>([]);
-
         try
         {
-            return Task.FromResult(ParseAccelerators(QueryVideoControllerNames()));
+            if (OperatingSystem.IsWindows())
+                return Task.FromResult(ParseAccelerators(QueryVideoControllerNames()));
+            if (OperatingSystem.IsLinux())
+                return Task.FromResult(ParseAccelerators(QueryLinuxGpuVendors("/sys/class/drm", "/proc/driver/nvidia")));
+            return Task.FromResult<IReadOnlyList<AiAccelerator>>([]);
         }
         catch
         {
@@ -50,6 +53,39 @@ public static class AccelCapabilityProber
         }
         return names;
     }
+
+    /// <summary>Vendor names (in the same form WMI gives, so <see cref="ParseAccelerators"/> reads
+    /// them unchanged) for each GPU under <paramref name="drmRoot"/>: every <c>cardN</c> entry's
+    /// <c>device/vendor</c> file holds the PCI vendor ID. Connector entries (<c>card0-HDMI-A-1</c>) are
+    /// skipped. Parameters are folders so tests can point them at a fake tree.</summary>
+    internal static List<string> QueryLinuxGpuVendors(string drmRoot, string nvidiaProcDir)
+    {
+        var names = new List<string>();
+        if (Directory.Exists(drmRoot))
+        {
+            foreach (var card in Directory.EnumerateFileSystemEntries(drmRoot, "card*"))
+            {
+                var name = Path.GetFileName(card);
+                if (name.Contains('-')) continue;
+                var vendorFile = Path.Combine(card, "device", "vendor");
+                string vendor;
+                try { vendor = File.ReadAllText(vendorFile).Trim(); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+                if (VendorName(vendor) is { } vendorName) names.Add(vendorName);
+            }
+        }
+        if (Directory.Exists(nvidiaProcDir) && !names.Contains("NVIDIA")) names.Add("NVIDIA");
+        return names;
+    }
+
+    /// <summary>PCI vendor ID ("0x10de") to the vendor name WMI would report.</summary>
+    internal static string? VendorName(string pciVendorId) => pciVendorId.ToLowerInvariant() switch
+    {
+        "0x10de" => "NVIDIA",
+        "0x8086" => "Intel",
+        "0x1002" or "0x1022" => "AMD",
+        _ => null,
+    };
 
     /// <summary>Pure parsing, extracted so it's testable without touching WMI — same
     /// internal-for-testability pattern FfmpegCapabilityProber.ParseEncodersOutput uses (public

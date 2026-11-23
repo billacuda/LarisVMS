@@ -1,12 +1,15 @@
 // LarisVMS.NodeUpdater.exe — swap the recorder node binary while the Windows Service is stopped.
 //
+// On Linux it's instead run as root by a systemd path unit, with --linux-apply --service <unit>, to
+// install an update the unprivileged node or proxy staged (see LinuxApply.cs); everything below the
+// --linux-apply branch is the Windows path.
+//
 // Usage (launched automatically by LarisVMS.Node, as a detached process, right before it calls
 // IHostApplicationLifetime.StopApplication() on itself — see LarisVMS.Node/Update/UpdateService.cs):
 //   LarisVMS.NodeUpdater.exe --new <staged> --current <running-binary> --service <service-name>
 //
 // Direct port of dploid.AgentUpdater/Program.cs's Windows path — see that file's own doc comment for
-// the shape this mirrors. LarisVMS.Node has no Linux build (see NodeConfigStore's doc comment), so
-// unlike dploid's updater there is no Linux branch to port here at all.
+// the shape this mirrors. Its Linux path is its own (LinuxApply.cs), not dploid's.
 //
 // Steps:
 //   1. Wait until the service reaches Stopped state (max 60s) — LarisVMS.Node.exe holds its own file
@@ -42,7 +45,13 @@ const int StartRetryDelaySeconds = 10;
 const int MaxSwapAttempts = 10;
 const int SwapRetryDelaySeconds = 3;
 
-var logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs");
+var logDir = LarisVMS.NodeUpdater.Shared.LarisPaths.LogRoot;
+
+if (args.Contains("--linux-apply"))
+{
+    var unitIndex = Array.IndexOf(args, "--service");
+    return LinuxApply.Run(unitIndex >= 0 && unitIndex + 1 < args.Length ? args[unitIndex + 1] : null, Log);
+}
 
 var parsed = UpdaterLogic.ParseArgs(args);
 

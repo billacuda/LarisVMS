@@ -91,6 +91,13 @@ public sealed record EngineOptions
     /// <summary>OpenVINO target device, e.g. "GPU" for an Intel iGPU or "CPU". Ignored outside an OpenVINO build.</summary>
     public string OpenVinoDeviceType { get; init; } = "GPU";
 
+    /// <summary>Where OpenVINO keeps the models it has compiled for a device. Leave null for the
+    /// default under the data folder (see OrtSessionFactory.ResolveOpenVinoCachePath). Compiling for an
+    /// Intel GPU takes a minute or more per model; with the cache only the first start pays that, and
+    /// OpenVINO compiles again by itself when the model, the device, its settings, or the OpenVINO
+    /// version change, so an update never runs a stale build.</summary>
+    public string? OpenVinoCachePath { get; init; }
+
     /// <summary>Pass 4a: when set, an nv12 -&gt; normalized-RGB-tensor preprocessing head is merged
     /// into the model at load (<see cref="OnnxPreprocessHead"/>), so colour conversion + normalize
     /// run on the accelerator instead of a CPU pixel loop. The continuous-detection frame then flows

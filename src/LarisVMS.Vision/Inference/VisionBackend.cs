@@ -19,11 +19,14 @@ public enum VisionBackend
     /// on the machine — neither is bundled.</summary>
     Cuda = 1,
 
-    /// <summary>DirectML — any Direct3D 12 GPU (Intel, AMD, NVIDIA). Ships <c>DirectML.dll</c> in the
-    /// package; needs nothing else installed on a current Windows build.</summary>
+    /// <summary>DirectML — any Direct3D 12 GPU (Intel, AMD, NVIDIA), Windows only. Ships
+    /// <c>DirectML.dll</c> in the package; needs nothing else installed on a current Windows build.
+    /// The AMD path on Windows, and the Intel fallback when the OpenVINO plugin can't be used.</summary>
     DirectMl = 2,
 
-    /// <summary>Intel OpenVINO — Intel iGPU/CPU. Opt-in only (<c>Vision:Backend=OpenVino</c>); needs a
-    /// current Intel GPU driver.</summary>
+    /// <summary>Intel OpenVINO — Intel iGPU, Arc, or NPU, on Windows and Linux. Intel's plugin
+    /// execution provider (with the OpenVINO runtime bundled) loaded on top of the CPU onnxruntime
+    /// build; the default for an Intel GPU. Needs a current Intel graphics (or NPU) driver — on Linux
+    /// the Intel compute runtime.</summary>
     OpenVino = 3,
 }

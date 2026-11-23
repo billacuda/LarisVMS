@@ -206,7 +206,7 @@ public class DashboardWidgetService(ApplicationDbContext db, ICameraService came
             n.CpuPercent, n.NetReceiveBytesPerSec, n.NetSendBytesPerSec, n.HostStatsUpdatedAt,
             n.StorageFreeBytes, n.StorageTotalBytes, days.GetValueOrDefault(n.Id),
             n.StoragePressureActive, n.StoragePressureSince, n.ClockSkewSeconds,
-            n.Version, builds.GetValueOrDefault(n.Platform ?? "win-x64"),
+            n.Version, builds.GetValueOrDefault(n.Platform ?? LarisVMS.Core.PlatformId.Legacy),
             n.FailoverState, n.FailoverReason, n.FailoverSinceUtc)).ToList();
 
         var visibleIds = dashCameras.Select(c => c.Id).ToHashSet();
@@ -240,7 +240,7 @@ public class DashboardWidgetService(ApplicationDbContext db, ICameraService came
     private async Task<Dictionary<string, string>> LatestBuildsAsync(List<Node> nodes, CancellationToken ct)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var platform in nodes.Select(n => n.Platform ?? "win-x64").Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var platform in nodes.Select(n => n.Platform ?? LarisVMS.Core.PlatformId.Legacy).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var build = await nodeBuilds.GetLatestForPlatformAsync(platform, ct);
             if (build is not null) result[platform] = build.Version;

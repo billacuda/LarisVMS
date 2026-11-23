@@ -1,5 +1,4 @@
 using LarisVMS.Core.Security;
-using System.Security.Cryptography;
 using System.Text.Json;
 using LarisVMS.Core.Dtos;
 
@@ -25,25 +24,25 @@ public record NodeConfig(string ServerUrl, Guid NodeId, string Secret, string Me
 
 /// <summary>
 /// Persists the node's registration (server URL, assigned NodeId, and secret) to
-/// %ProgramData%\LarisVMS\node.config so a restart doesn't need to re-register. DPAPI-protected to
-/// the local machine on Windows, matching dploid.Agent's config store. Linux support (AES-256-GCM
-/// keyed off /etc/machine-id, per the plan) is not implemented yet — nodes are Windows-only for now.
+/// node.config in the data folder (LarisPaths.DataRoot) so a restart doesn't need to re-register.
+/// Encrypted to this machine with <see cref="MachineSecret"/>: DPAPI on Windows, AES-256-GCM keyed off
+/// /etc/machine-id in an owner-only file on Linux.
 /// Also carries the cached camera config (CachedConfig) — protected the same way since it includes
 /// camera credentials, same sensitivity as the registration secret it travels with.
 /// </summary>
 public static class NodeConfigStore
 {
-    private static readonly string ConfigDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS");
+    private static readonly string ConfigDir = LarisVMS.Core.LarisPaths.DataRoot;
     private static readonly string ConfigPath = Path.Combine(ConfigDir, "node.config");
+
+    /// <summary>Where the registration is kept (setup's --reregister removes it).</summary>
+    internal static string FilePath => ConfigPath;
 
     public static NodeConfig? Load()
     {
         if (!File.Exists(ConfigPath)) return null;
         var protectedBytes = File.ReadAllBytes(ConfigPath);
-        var json = OperatingSystem.IsWindows()
-            ? System.Text.Encoding.UTF8.GetString(ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.LocalMachine))
-            : throw new PlatformNotSupportedException("Node config storage is only implemented for Windows.");
+        var json = System.Text.Encoding.UTF8.GetString(MachineSecret.Unprotect(protectedBytes, null));
         return JsonSerializer.Deserialize<NodeConfig>(json);
     }
 
@@ -80,9 +79,6 @@ public static class NodeConfigStore
         Directory.CreateDirectory(ConfigDir);
         var json = JsonSerializer.Serialize(config);
         var bytes = System.Text.Encoding.UTF8.GetBytes(json);
-        var protectedBytes = OperatingSystem.IsWindows()
-            ? ProtectedData.Protect(bytes, null, DataProtectionScope.LocalMachine)
-            : throw new PlatformNotSupportedException("Node config storage is only implemented for Windows.");
-        File.WriteAllBytes(ConfigPath, protectedBytes);
+        MachineSecret.WriteFile(ConfigPath, MachineSecret.Protect(bytes, null));
     }
 }

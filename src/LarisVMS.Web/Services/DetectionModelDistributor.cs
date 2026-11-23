@@ -48,7 +48,7 @@ public sealed class DetectionModelDistributor(
 
     private readonly SemaphoreSlim _fetchGate = new(1, 1);
 
-    private string CacheDirectory => Path.Combine(env.ContentRootPath, "detection-models");
+    private string CacheDirectory => LarisVMS.Core.LarisPaths.RuntimeFolder(env.ContentRootPath, "detection-models");
 
     public static bool IsKnown(string family, string variant)
         => Sources.TryGetValue(family, out var v) && v.ContainsKey(variant);

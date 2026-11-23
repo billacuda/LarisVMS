@@ -2,13 +2,37 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <!-- Published with -r win-x64. Restoring that target on every restore (the IDE's background
+    <!-- Published with -r win-x64 and -r linux-x64. Restoring those targets on every restore (the IDE's background
          one included) keeps a plain restore from dropping it mid-publish (NETSDK1047). -->
-    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <OutputType>Exe</OutputType>
+    <!-- No culture-aware text: runs on Linux without libicu, like the node and proxy. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
     <Version>0.222.2</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The updater references no other project (it must stay a small, self-contained exe), so it
+         compiles the one shared file it needs — the per-OS data and log folders — directly. -->
+    <Compile Include="..\LarisVMS.Core\LarisPaths.cs" Link="Shared\LarisPaths.cs" />
+    <!-- Linux updates (LinuxApply): the request format, the backend tree's stamp, and the publisher
+         check, so the root helper verifies what the unprivileged node staged. -->
+    <Compile Include="..\LarisVMS.Core\PlatformId.cs" Link="Shared\PlatformId.cs" />
+    <Compile Include="..\LarisVMS.Core\ExecutableName.cs" Link="Shared\ExecutableName.cs" />
+    <Compile Include="..\LarisVMS.Core\Update\BackendsBundle.cs" Link="Shared\BackendsBundle.cs" />
+    <Compile Include="..\LarisVMS.Core\Update\LinuxUpdateRequest.cs" Link="Shared\LinuxUpdateRequest.cs" />
+    <Compile Include="..\LarisVMS.Core\Security\PublisherKey.cs" Link="Shared\PublisherKey.cs" />
+    <Compile Include="..\LarisVMS.Core\Security\UpdateSignature.cs" Link="Shared\UpdateSignature.cs" />
+    <!-- Same condition as LarisVMS.Core: only a publisher-signed build carries the key. -->
+    <EmbeddedResource Include="..\LarisVMS.Core\Security\publisher-key.pem" Link="Shared\publisher-key.pem" LogicalName="LarisVMS.PublisherKey.pem"
+                      Condition="'$(LarisVMSPublisherSigned)' == 'true' And Exists('..\LarisVMS.Core\Security\publisher-key.pem')" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!-- Puts the shared LarisPaths in LarisVMS.NodeUpdater.Shared (see the top of LarisPaths.cs). -->
+    <DefineConstants>$(DefineConstants);LARISVMS_NODEUPDATER</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

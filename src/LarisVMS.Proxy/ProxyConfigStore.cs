@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using LarisVMS.Core.Dtos;
@@ -14,22 +13,22 @@ public record ProxyConfig(string ServerUrl, Guid ProxyId, string Secret, string?
     string? ServerCertThumbprint = null, string? ServerCertificateCheck = null);
 
 /// <summary>
-/// %ProgramData%\LarisVMS\proxy.config — DPAPI-protected (LocalMachine), the same store shape as the
-/// recorder node's node.config. Windows only.
+/// proxy.config in the data folder (LarisPaths.DataRoot), encrypted to this machine with
+/// MachineSecret — the same store shape as the recorder node's node.config.
 /// </summary>
 public static class ProxyConfigStore
 {
-    private static readonly string ConfigDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS");
+    private static readonly string ConfigDir = LarisVMS.Core.LarisPaths.DataRoot;
     private static readonly string ConfigPath = Path.Combine(ConfigDir, "proxy.config");
+
+    /// <summary>Where the registration is kept (setup's --reregister removes it).</summary>
+    internal static string FilePath => ConfigPath;
 
     public static ProxyConfig? Load()
     {
         if (!File.Exists(ConfigPath)) return null;
         var protectedBytes = File.ReadAllBytes(ConfigPath);
-        var json = OperatingSystem.IsWindows()
-            ? Encoding.UTF8.GetString(ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.LocalMachine))
-            : throw new PlatformNotSupportedException("Proxy config storage is only implemented for Windows.");
+        var json = Encoding.UTF8.GetString(LarisVMS.Core.Security.MachineSecret.Unprotect(protectedBytes, null));
         return JsonSerializer.Deserialize<ProxyConfig>(json);
     }
 
@@ -64,9 +63,6 @@ public static class ProxyConfigStore
     {
         Directory.CreateDirectory(ConfigDir);
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(config));
-        var protectedBytes = OperatingSystem.IsWindows()
-            ? ProtectedData.Protect(bytes, null, DataProtectionScope.LocalMachine)
-            : throw new PlatformNotSupportedException("Proxy config storage is only implemented for Windows.");
-        File.WriteAllBytes(ConfigPath, protectedBytes);
+        LarisVMS.Core.Security.MachineSecret.WriteFile(ConfigPath, LarisVMS.Core.Security.MachineSecret.Protect(bytes, null));
     }
 }

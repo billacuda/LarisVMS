@@ -23,8 +23,7 @@ public sealed class ProxyEndpointConfig
     public bool AllowInsecure { get; init; }
     public string Host { get; init; } = Environment.MachineName;
 
-    public static readonly string LocalConfigPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "proxy-endpoint.json");
+    public static readonly string LocalConfigPath = Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "proxy-endpoint.json");
 
     private static readonly JsonSerializerOptions CaseInsensitive = new() { PropertyNameCaseInsensitive = true };
 

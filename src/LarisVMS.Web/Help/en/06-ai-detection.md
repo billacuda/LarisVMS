@@ -13,7 +13,8 @@ One node package covers every machine. At startup, the vision service picks a ba
 | Hardware | Backend | Needs on the node |
 |---|---|---|
 | NVIDIA GPU | CUDA (falls back to DirectML) | CUDA Toolkit 12.x and cuDNN 9.x |
-| AMD / Intel GPU | DirectML | A current GPU driver |
+| Intel GPU | OpenVINO (falls back to DirectML) | A current Intel graphics driver |
+| AMD GPU | DirectML | A current GPU driver |
 | No GPU | CPU | Nothing |
 
 The node's edit page shows the detected accelerators, and its **Accelerator** setting can force one. Models are never bundled. A node fetches the built-in YOLOX models from the server, and other models go in `C:\ProgramData\LarisVMS\models` on the node.
@@ -48,7 +49,7 @@ How a camera's frame fits the model's square input:
 
 - **Letterbox** (default): keeps proportions and pads with black bars.
 - **Stretch**: squashes the frame to fill the square, which distorts shapes.
-- **Slice**: cuts the frame into overlapping full-resolution squares. It's best for small or distant objects on wide cameras, but costs about 2× the work on a 16:9 camera. It needs GPU preprocessing, and turns that on automatically.
+- **Slice**: cuts the frame into overlapping full-resolution squares. It's best for small or distant objects on wide cameras, but costs about 2× the work on a 16:9 camera. It needs GPU preprocessing, and turns that on automatically. On an Intel GPU (OpenVINO), use **Letterbox** instead: Slice runs each tile separately there and uses far more CPU and GPU.
 
 **GPU frame preprocessing** moves colour conversion off the CPU and onto the GPU, which helps on nodes with many cameras.
 

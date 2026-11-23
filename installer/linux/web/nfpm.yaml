@@ -1,0 +1,63 @@
+# nFPM definition for the larisvms-web .deb and .rpm. build-linux-packages.ps1 fills in the ${LARISVMS_*}
+# placeholders below (nFPM won't expand them in contents), and appends the program files (with their modes) to the
+# end of contents, so keep contents last.
+name: larisvms-web
+arch: amd64
+platform: linux
+version: ${LARISVMS_VERSION}
+release: "1"
+section: video
+priority: optional
+maintainer: ${LARISVMS_MAINTAINER}
+vendor: LarisVMS
+homepage: https://github.com/billacuda/LarisVMS
+license: Apache-2.0
+description: |-
+  LarisVMS Web server
+  The LarisVMS server: the web interface, the database, and the control point for recorder
+  nodes and media proxies. After installing, open https://<this machine>:8444 to set it up.
+  It needs a database: MariaDB on this machine or another, or SQL Server.
+
+scripts:
+  preinstall: ${LARISVMS_SCRIPTS}/preinstall.sh
+  postinstall: ${LARISVMS_SCRIPTS}/postinstall.sh
+  preremove: ${LARISVMS_SCRIPTS}/preremove.sh
+  postremove: ${LARISVMS_SCRIPTS}/postremove.sh
+
+overrides:
+  deb:
+    depends:
+      - libc6
+      - libgcc-s1 | libgcc1
+      - libstdc++6
+      - libssl3 | libssl3t64 | libssl1.1
+      - zlib1g
+      - ca-certificates
+    recommends:
+      # Active Directory sign-in (LDAPS).
+      - libldap2 | libldap-2.5-0
+    suggests:
+      - mariadb-server
+  rpm:
+    depends:
+      - glibc
+      - libgcc
+      - libstdc++
+      - openssl-libs
+      - zlib
+      - ca-certificates
+    recommends:
+      - openldap
+    suggests:
+      - mariadb-server
+
+contents:
+  - src: ${LARISVMS_LINUX}/web/larisvms-web.service
+    dst: /usr/lib/systemd/system/larisvms-web.service
+    file_info:
+      mode: 0644
+  - src: ${LARISVMS_LINUX}/web/web.env
+    dst: /etc/larisvms/web.env
+    type: config|noreplace
+    file_info:
+      mode: 0644

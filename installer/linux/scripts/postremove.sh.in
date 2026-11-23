@@ -1,0 +1,38 @@
+#!/bin/sh
+# LarisVMS @KIND@: after removal or upgrade (deb postrm: remove, purge, upgrade, ...; rpm %postun: 0
+# is removal, 1 is upgrade). Closes the firewall ports the package and setup opened. Recordings,
+# settings, and the larisvms account are kept, as on Windows: delete /var/lib/larisvms,
+# /var/log/larisvms, and /etc/larisvms by hand to remove everything.
+KIND=@KIND@
+
+case "$1" in
+    remove|purge|0)
+        record="/etc/larisvms/$KIND.firewall"
+        if [ -f "$record" ]; then
+            firewalld=no
+            ufw=no
+            if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+                firewalld=yes
+            elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+                ufw=yes
+            fi
+            while read -r rule; do
+                [ -n "$rule" ] || continue
+                if [ "$firewalld" = yes ]; then
+                    firewall-cmd --permanent --remove-port="$rule" >/dev/null 2>&1 || true
+                elif [ "$ufw" = yes ]; then
+                    ufw delete allow "$rule" >/dev/null 2>&1 || true
+                fi
+            done < "$record"
+            if [ "$firewalld" = yes ]; then
+                firewall-cmd --reload >/dev/null 2>&1 || true
+            fi
+            rm -f "$record"
+        fi
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+        ;;
+esac
+
+exit 0

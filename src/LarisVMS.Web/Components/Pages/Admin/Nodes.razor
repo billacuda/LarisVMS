@@ -168,7 +168,7 @@ else
                                 <span role="img" title="@L["admin.nodes.encryptedWaiting"]" aria-label="@L["admin.nodes.encryptedWaiting"]">⏳</span>
                             }
                         </td>
-                        <td>@n.Version</td>
+                        <td>@n.Version<div class="small text-muted">@LarisVMS.Web.Helpers.PlatformLabels.Display(n.Platform)</div></td>
                         <td>@cams</td>
                         <td data-sort-value="@((n.StorageTotalBytes is { } t && n.StorageFreeBytes is { } f) ? t - f : -1)">
                             <NodeStorageBar Node="n" DaysRemaining="DaysRemainingMap.GetValueOrDefault(n.Id)" ArchiveDaysRemaining="ArchiveDaysRemainingMap.GetValueOrDefault(n.Id)" />
@@ -320,7 +320,7 @@ else
             NodesBehindCertificateChange = NodeRows.Where(n => n.CreatedAt < changedAt && (n.LastSeenAt is null || n.LastSeenAt < changedAt))
                 .Select(n => n.Name).ToList();
 
-        // deploy.ps1 inserts Pending rows straight into the table, so tidy the queue on every visit.
+        // Tidy the queue on every visit, whatever registered the builds.
         await NodeBuildService.SupersedeOutdatedPendingAsync();
         Builds = await NodeBuildService.ListAsync();
         if (CanEditSettings)
