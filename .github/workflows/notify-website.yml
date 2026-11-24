@@ -1,7 +1,8 @@
 # Tells the website repo (billacuda/larisvms-template) to rebuild and redeploy www.larisvms.com
-# when a release is published or edited, or when README.md, CHANGELOG.md, or the Help pages
-# (src/LarisVMS.Web/Help/en, and each translation in Help/<culture>, published as larisvms.com/docs)
-# change on main.
+# when a release is published or edited, or when README.md, CHANGELOG.md, docker/compose.yml (shown on
+# the Install page), or the Help pages (src/LarisVMS.Web/Help/en, and each translation in
+# Help/<culture>, published as larisvms.com/docs) change on main. Attach a release's files (the MSIs,
+# .deb and .rpm packages, and SHA256SUMS.txt) before publishing it: adding them later sends no event.
 #
 # Required repository secret: SITE_DISPATCH_TOKEN, a fine-grained personal access token with
 # access to billacuda/larisvms-template only, and "Contents: Read and write" permission.
@@ -16,6 +17,7 @@ on:
       - README.md
       - CHANGELOG.md
       - src/LarisVMS.Web/Help/**
+      - docker/compose.yml
   workflow_dispatch:
 
 permissions: {}

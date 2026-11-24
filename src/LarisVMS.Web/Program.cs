@@ -1062,6 +1062,7 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
         request.ClientEndpointReportedPort, request.ClientEndpointCertNotAfterUtc,
         request.ClientEndpointCertIsSelfSigned, request.ClientEndpointLastError, request.PartnerHealthReports,
         request.HostStats, request.StorageBlockedByEvidenceLocks, request.ClientEndpointCertSha256, ct);
+    await nodeService.RecordInContainerAsync(node.Id, request.InContainer, ct);
     // Camera certificates the node refused under pinning: audit log and Super Admins.
     foreach (var refusal in (request.CameraCertificateRefusals ?? []).Take(50))
         if (!string.IsNullOrWhiteSpace(refusal.Host) && refusal.Host.Length <= 255 && refusal.Presented is { Length: 64 } presented
@@ -1080,7 +1081,9 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
     // first pass, unlike Retention/Recording.Mode which do walk Camera -> Node -> Global.
     NodeUpdateInfoDto? updateAvailable = null;
     var autoUpdateEnabled = await settings.GetAsync("NodeAutoUpdate.Enabled", true, ct: ct);
-    if (autoUpdateEnabled && node.Status is not (NodeStatus.Pending or NodeStatus.Disabled))
+    // A node in a Docker container is updated by pulling a new image, never by a pushed build.
+    var nodeInContainer = request.InContainer ?? node.InContainer;
+    if (autoUpdateEnabled && !nodeInContainer && node.Status is not (NodeStatus.Pending or NodeStatus.Disabled))
     {
         // node.Platform is set once at registration (NodeRegisterRequest.Platform) and never
         // updated by a heartbeat — same as dploid's agent.OSPlatform. Each platform has its own
@@ -1369,6 +1372,7 @@ proxiesApi.MapPost("/heartbeat", async (HttpContext ctx, ProxyHeartbeatRequest r
     await proxyService.RecordHeartbeatAsync(proxy.Id, request.Version, request.SentAtUtc, DateTime.UtcNow,
         request.ReportedPort, request.CertNotAfterUtc, request.CertIsSelfSigned, request.LastError,
         request.NodeHealthReports, ct);
+    await proxyService.RecordInContainerAsync(proxy.Id, request.InContainer, ct);
 
     // ── Auto-update check ────────────────────────────────────────────────
     // Same global-only gate (the Nodes page's NodeAutoUpdate.Enabled) and same approval queue as
@@ -1376,7 +1380,8 @@ proxiesApi.MapPost("/heartbeat", async (HttpContext ctx, ProxyHeartbeatRequest r
     // proxy's OS ("proxy-win-x64", "proxy-linux-x64"), registered as Pending and only offered once
     // approved. A proxy registered before platforms were stored is a Windows one.
     ProxyUpdateInfoDto? updateAvailable = null;
-    if (await settings.GetAsync("NodeAutoUpdate.Enabled", true, ct: ct))
+    // A proxy in a Docker container is updated by pulling a new image, never by a pushed build.
+    if (!(request.InContainer ?? proxy.InContainer) && await settings.GetAsync("NodeAutoUpdate.Enabled", true, ct: ct))
     {
         var proxyPlatform = LarisVMS.Core.PlatformId.ForProxy(proxy.Platform ?? LarisVMS.Core.PlatformId.Legacy);
         var latestBuild = await nodeBuildService.GetLatestForPlatformAsync(proxyPlatform, ct);

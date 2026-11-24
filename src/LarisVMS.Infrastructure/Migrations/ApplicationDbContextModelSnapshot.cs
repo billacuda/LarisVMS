@@ -1817,6 +1817,9 @@ namespace LarisVMS.Infrastructure.Migrations
                         .HasMaxLength(253)
                         .HasColumnType("nvarchar(253)");
 
+                    b.Property<bool>("InContainer")
+                        .HasColumnType("bit");
+
                     b.Property<string>("LastError")
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
@@ -2069,6 +2072,9 @@ namespace LarisVMS.Infrastructure.Migrations
 
                     b.Property<DateTime?>("HostStatsUpdatedAt")
                         .HasColumnType("datetime2");
+
+                    b.Property<bool>("InContainer")
+                        .HasColumnType("bit");
 
                     b.Property<string>("LastIpAddress")
                         .HasMaxLength(64)

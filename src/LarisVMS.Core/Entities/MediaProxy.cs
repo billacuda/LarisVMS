@@ -45,6 +45,11 @@ public class MediaProxy
     /// update builds are registered under <c>PlatformId.ForProxy</c> of this. Null for a proxy
     /// registered before platforms were stored, which is a Windows one.</summary>
     public string? Platform { get; set; }
+
+    /// <summary>The proxy runs from a Docker image, as it last reported. It's updated by pulling a new
+    /// image, so the server offers it no build.</summary>
+    public bool InContainer { get; set; }
+
     public DateTime? LastSeenAt { get; set; }
     public string? LastIpAddress { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

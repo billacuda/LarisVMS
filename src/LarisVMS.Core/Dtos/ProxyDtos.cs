@@ -18,7 +18,10 @@ public record ProxyHeartbeatRequest(string? Version, DateTime? SentAtUtc = null,
     /// told to probe (<see cref="ProxyConfigResponse.NodesToProbe"/>) — it is a third quorum voter
     /// alongside the partner node and central for any node it is assigned to. Null/empty from an older
     /// proxy build or one serving no nodes.</summary>
-    List<NodePartnerHealthReport>? NodeHealthReports = null);
+    List<NodePartnerHealthReport>? NodeHealthReports = null,
+    /// <summary>True when the proxy runs from a Docker image (LARISVMS_CONTAINER=1): no update is
+    /// offered to it. Null from an older proxy.</summary>
+    bool? InContainer = null);
 
 /// <summary>NextNonce (phase 5a): the single-use value the proxy must echo on its next heartbeat.
 /// Null only on a 401 replay rejection.

@@ -1,0 +1,95 @@
+# LarisVMS web server, recorder node, and media proxy on one machine, as a Portainer stack or with
+# "docker compose up -d" in this folder.
+#
+# 1. Deploy this file as it is: only the web server starts. It needs a database you run yourself,
+#    MariaDB 10.11 or later, or SQL Server with a SQL login.
+# 2. Open https://<this machine>:8444 and run the setup wizard. Its Node step shows the registration key.
+# 3. Uncomment larisvms-node (and larisvms-proxy, if you want one): remove the first "# " from each of
+#    its lines. Fill in this machine's address, the key, and the recordings folder, then deploy again
+#    (Portainer: "Update the stack").
+# 4. Approve the node under Nodes. A proxy starts turned off: turn on Enabled for it under
+#    Settings > Media proxies.
+#
+# In each volume, change the left side (a folder on this machine) if you like, and leave the right
+# side. Docker makes folders that don't exist. Don't use a .deb or .rpm install's own folders
+# (/var/lib/larisvms, /etc/larisvms): a container takes over the ownership of what's in them.
+#
+# To update: pull the new images and redeploy (Portainer: "Re-pull image and redeploy").
+# For a node or proxy on its own machine, use compose.node.yml or compose.proxy.yml.
+
+services:
+  larisvms-web:
+    image: ghcr.io/billacuda/larisvms-web:latest   # or a version, such as 0.223.0
+    container_name: larisvms-web
+    # Host networking: camera discovery (ONVIF WS-Discovery multicast) only works on the host's network.
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      Kestrel__HttpsPort: '8444'
+      # Your own certificate (.pfx); without it the server makes a self-signed one.
+      # Kestrel__Certificates__Default__Path: '/certs/vms.pfx'
+      # Kestrel__Certificates__Default__Password: 'secret'
+    volumes:
+      - /srv/larisvms/web/data:/var/lib/larisvms     # keys, setup token, machine ID: back this up
+      - /srv/larisvms/web/config:/etc/larisvms       # appsettings.Production.json, setup-generated.json: back this up
+      - /srv/larisvms/web/logs:/var/log/larisvms
+      # - /srv/larisvms/certs:/certs:ro
+
+  # larisvms-node:
+  #   # For NVIDIA GPUs, use the cuda tag (CUDA and cuDNN) or the tensorrt tag (adds TensorRT), with the
+  #   # NVIDIA Container Toolkit installed on this machine and the GPU block below.
+  #   image: ghcr.io/billacuda/larisvms-node:latest   # or 0.223.0, 0.223.0-cuda, 0.223.0-tensorrt, cuda, tensorrt
+  #   container_name: larisvms-node
+  #   hostname: larisvms-node-1   # the name this node shows under Nodes
+  #   network_mode: host
+  #   restart: unless-stopped
+  #   environment:
+  #     LARISVMS_SERVER_URL: 'https://192.168.1.10:8444'   # this machine's address, not localhost
+  #     LARISVMS_REGISTRATION_KEY: 'your-registration-key'   # only used the first time
+  #     # LARISVMS_SERVER_CERT_THUMBPRINT: '...'   # pins the server's certificate from the first connection
+  #     LARISVMS_STORAGE_ROOT: '/recordings'
+  #     # LARISVMS_ARCHIVE_ROOT: '/archive'
+  #     # LARISVMS_LIVE_PORT: '8554'
+  #     # Direct streaming to browsers:
+  #     # LARISVMS_CLIENT_PORT: '8555'
+  #     # LARISVMS_CLIENT_ENDPOINT_HOST: 'nvr1.example.com'
+  #     # LARISVMS_CLIENT_PFX_PATH: '/certs/node.pfx'
+  #     # LARISVMS_CLIENT_PFX_PASSWORD: 'secret'
+  #   volumes:
+  #     - /srv/larisvms/node/data:/var/lib/larisvms    # registration, machine ID, models: back this up
+  #     - /srv/larisvms/node/config:/etc/larisvms
+  #     - /srv/larisvms/node/logs:/var/log/larisvms
+  #     - /srv/larisvms/recordings:/recordings         # a separate disk must be mounted before deploying
+  #     # - /srv/larisvms/archive:/archive
+  #     # - /srv/larisvms/certs:/certs:ro
+  #   # Intel GPU (OpenVINO AI detection) and VAAPI video encoding:
+  #   # devices:
+  #   #   - /dev/dri:/dev/dri
+  #   # NVIDIA GPU, with the cuda or tensorrt tag:
+  #   # deploy:
+  #   #   resources:
+  #   #     reservations:
+  #   #       devices:
+  #   #         - driver: nvidia
+  #   #           count: all
+  #   #           capabilities: [gpu, video]
+
+  # larisvms-proxy:
+  #   image: ghcr.io/billacuda/larisvms-proxy:latest   # or a version, such as 0.223.0
+  #   container_name: larisvms-proxy
+  #   hostname: larisvms-proxy-1   # the name this proxy shows under Media proxies
+  #   network_mode: host
+  #   restart: unless-stopped
+  #   environment:
+  #     LARISVMS_SERVER_URL: 'https://192.168.1.10:8444'   # this machine's address, not localhost
+  #     LARISVMS_REGISTRATION_KEY: 'your-registration-key'   # the same key as the node's
+  #     # LARISVMS_SERVER_CERT_THUMBPRINT: '...'
+  #     LARISVMS_CLIENT_PORT: '4443'
+  #     # LARISVMS_CLIENT_ENDPOINT_HOST: 'proxy.example.com'
+  #     # LARISVMS_CLIENT_PFX_PATH: '/certs/proxy.pfx'
+  #     # LARISVMS_CLIENT_PFX_PASSWORD: 'secret'
+  #   volumes:
+  #     - /srv/larisvms/proxy/data:/var/lib/larisvms   # registration, machine ID: back this up
+  #     - /srv/larisvms/proxy/config:/etc/larisvms
+  #     - /srv/larisvms/proxy/logs:/var/log/larisvms
+  #     # - /srv/larisvms/certs:/certs:ro

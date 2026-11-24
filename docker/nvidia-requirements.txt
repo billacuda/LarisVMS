@@ -1,0 +1,9 @@
+# CUDA and cuDNN libraries for the larisvms-node -cuda and -tensorrt images. Only their .so files are
+# copied into the image. Keep them on the versions ONNX Runtime's CUDA build needs, as listed in
+# src/LarisVMS.Vision/Inference/CudaRequirements.cs (CUDA 12.8, cuDNN 9). cuDNN 9.10.2 is the last
+# release that still supports Pascal and Maxwell GPUs.
+nvidia-cuda-runtime-cu12==12.8.90
+nvidia-cublas-cu12==12.8.4.1
+nvidia-cufft-cu12==11.3.3.83
+nvidia-curand-cu12==10.3.9.90
+nvidia-cudnn-cu12==9.10.2.21

@@ -839,6 +839,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task RecordInContainerAsync(Guid nodeId, bool? inContainer, CancellationToken ct = default)
+    {
+        if (inContainer is not { } value) return;
+        await db.Nodes.Where(n => n.Id == nodeId && n.InContainer != value)
+            .ExecuteUpdateAsync(s => s.SetProperty(n => n.InContainer, value), ct);
+    }
+
     public async Task<bool> RecordVisionBackendAsync(Guid nodeId, NodeVisionBackendDto? backend, CancellationToken ct = default)
     {
         if (backend is null) return false;

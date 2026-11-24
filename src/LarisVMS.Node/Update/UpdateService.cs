@@ -119,8 +119,20 @@ public class UpdateService(NodeConfig config, ILogger log, IHostApplicationLifet
     /// a separate executable), and it's the same literal ApplyWindows already passes as --service.</summary>
     private const string UpdaterLogic_DefaultServiceName = "LarisVMSNode";
 
+    private bool _loggedContainer;
+
     public async Task<bool> TryApplyAsync(NodeUpdateInfoDto update, CancellationToken ct)
     {
+        // The server offers a container nothing (it reports InContainer), but an older server
+        // doesn't know to: replacing the program inside a container would be undone by the next image.
+        if (LarisVMS.Core.RunningInContainer.Value)
+        {
+            if (!_loggedContainer)
+                log.LogInformation("Update {Version} is available. This node runs in a container: update it by pulling the new image.", update.Version);
+            _loggedContainer = true;
+            return false;
+        }
+
         if (IsApplying)
         {
             log.LogInformation("An update is already in progress — ignoring.");

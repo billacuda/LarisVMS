@@ -37,6 +37,12 @@
             <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="@L["admin.proxies.copyCommand"]"
                     data-copy-from="#proxyInstallCmdLinux">📋</button>
         </div>
+        <div class="mt-2">@L["admin.proxies.installDocker"]</div>
+        <div class="d-flex align-items-start gap-2 mb-0">
+            <pre id="proxyInstallCmdDocker" class="mb-0 flex-grow-1">@LarisVMS.Web.Helpers.DockerComposeSnippet.Proxy(serverOrigin, regKey, thumbprint, LarisVMS.Web.Services.ReleaseCheckService.RunningVersion)</pre>
+            <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="@L["admin.proxies.copyCommand"]"
+                    data-copy-from="#proxyInstallCmdDocker">📋</button>
+        </div>
         @L.Html("admin.proxies.installAfter")
     </div>
 </div>
@@ -119,7 +125,12 @@ else
                                 </div>
                             </td>
                             <td class="text-center">@Model.AssignedNodeCount.GetValueOrDefault(p.Id)</td>
-                            <td>@p.Version<div class="small text-muted">@LarisVMS.Web.Helpers.PlatformLabels.Display(p.Platform)</div></td>
+                            <td>@p.Version<div class="small text-muted">@LarisVMS.Web.Helpers.PlatformLabels.Display(p.Platform, p.InContainer)</div>
+                                @if (Model.ContainerBehind(p, out var approvedVersion))
+                                {
+                                    <div class="small text-warning">@L["admin.nodes.pullNewImage", new { version = approvedVersion }]</div>
+                                }
+                            </td>
                             <td class="text-center"><input type="checkbox" name="enabled" value="true" checked="@p.Enabled" /></td>
                             <td class="text-end"><button type="submit" class="btn btn-sm btn-outline-primary"><span aria-hidden="true">💾</span> @L["common.save"]</button></td>
                         </form>

@@ -63,13 +63,13 @@
       "larisvms.media": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.222.2, )"
+          "LarisVMS.Core": "[0.223.0, )"
         }
       },
       "larisvms.onvif": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.222.2, )"
+          "LarisVMS.Core": "[0.223.0, )"
         }
       },
       "larisvms.relay": {

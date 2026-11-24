@@ -13,9 +13,9 @@ namespace LarisVMS.Infrastructure;
 /// </summary>
 public static class AppRelease
 {
-    public const string Version = "0.222.2";
+    public const string Version = "0.223.0";
 
-    public const string Notes = "Security: fixes from an OWASP Top 10 review, including timeline request limits, saved passwords kept with their server, encrypted two-factor secrets, and tighter access checks. Changed: Super Admins without two-factor sign-in are slowed after wrong passwords, and sign-ins last at most a year.";
+    public const string Notes = "Added: Linux packages for the web server, nodes, and media proxies, Docker images, and mixed Windows and Linux fleets. Changed: Intel GPUs use OpenVINO for AI detection, and node updates bring the AI libraries they need. Fixed: video encoding no longer picks a GPU the node does not have.";
 
     /// <summary>Adds this release's AppVersions row unless it's already there. Idempotent.</summary>
     public static async Task EnsureRecordedAsync(ApplicationDbContext db, CancellationToken ct = default)

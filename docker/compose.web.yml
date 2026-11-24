@@ -1,0 +1,25 @@
+# LarisVMS Web server, as a Portainer stack or with "docker compose -f compose.web.yml up -d".
+# It needs a database you run yourself: MariaDB 10.11 or later, or SQL Server with a SQL login.
+# Once it's up, open https://<this machine>:8444 and run the setup wizard.
+# To update: pull the new image and redeploy (Portainer: "Re-pull image and redeploy").
+services:
+  larisvms-web:
+    image: ghcr.io/billacuda/larisvms-web:latest   # or a version, such as 0.223.0
+    container_name: larisvms-web
+    # Host networking: camera discovery (ONVIF WS-Discovery multicast) only works on the host's network.
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      Kestrel__HttpsPort: '8444'
+      # Your own certificate (.pfx); without it the server makes a self-signed one.
+      # Kestrel__Certificates__Default__Path: '/certs/vms.pfx'
+      # Kestrel__Certificates__Default__Password: 'secret'
+    volumes:
+      - larisvms-web-data:/var/lib/larisvms        # keys, setup token, machine ID: back this up
+      - larisvms-web-config:/etc/larisvms          # appsettings.Production.json, setup-generated.json
+      - larisvms-web-logs:/var/log/larisvms
+      # - /srv/larisvms/certs:/certs:ro
+volumes:
+  larisvms-web-data:
+  larisvms-web-config:
+  larisvms-web-logs:

@@ -31,8 +31,8 @@ if (-not $Translation -and -not $Help) {
     exit 1
 }
 # Resolved here rather than as the parameter defaults: Windows PowerShell 5.1 has no $PSScriptRoot there.
-if (-not $English) { $English = Join-Path $PSScriptRoot '..\src\LarisVMS.Core\Localization\en.json' }
-if (-not $EnglishHelp) { $EnglishHelp = Join-Path $PSScriptRoot '..\src\LarisVMS.Web\Help\en' }
+if (-not $English) { $English = Join-Path $PSScriptRoot '../src/LarisVMS.Core/Localization/en.json' }
+if (-not $EnglishHelp) { $EnglishHelp = Join-Path $PSScriptRoot '../src/LarisVMS.Web/Help/en' }
 
 $failed = $false
 

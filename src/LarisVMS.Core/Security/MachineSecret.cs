@@ -22,7 +22,12 @@ public static class MachineSecret
     private const int NonceSize = 12;
     private const int TagSize = 16;
 
-    private static readonly string[] MachineIdPaths = ["/etc/machine-id", "/var/lib/dbus/machine-id"];
+    /// <summary>Where the machine ID is read from, first match wins. The data folder's own
+    /// <c>machine-id</c> comes first: only the Docker images' entrypoint writes it, because a
+    /// recreated container gets a new <c>/etc/machine-id</c> and would lose every saved secret. On a
+    /// normal install the file doesn't exist, so the system's machine ID is used as before.</summary>
+    internal static string[] MachineIdPaths =>
+        [Path.Combine(LarisPaths.DataRoot, "machine-id"), "/etc/machine-id", "/var/lib/dbus/machine-id"];
 
     public static byte[] Protect(byte[] plaintext, byte[]? entropy)
     {

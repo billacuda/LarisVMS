@@ -53,8 +53,19 @@ public class ProxyUpdateService(ProxyConfig config, ILogger log, IHostApplicatio
     /// protect against. Same reasoning as the node's UpdateService.IsApplying.</summary>
     public bool IsApplying { get; private set; }
 
+    private bool _loggedContainer;
+
     public async Task<bool> TryApplyAsync(ProxyUpdateInfoDto update, CancellationToken ct)
     {
+        // Same as the node's UpdateService: a container is updated by pulling the new image.
+        if (LarisVMS.Core.RunningInContainer.Value)
+        {
+            if (!_loggedContainer)
+                log.LogInformation("Update {Version} is available. This proxy runs in a container: update it by pulling the new image.", update.Version);
+            _loggedContainer = true;
+            return false;
+        }
+
         if (IsApplying)
         {
             log.LogInformation("An update is already in progress — ignoring.");

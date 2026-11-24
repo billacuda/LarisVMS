@@ -52,9 +52,10 @@ Microsoft.ML.OnnxRuntime + Microsoft.ML.OnnxRuntime.Gpu.Windows + Microsoft.ML.O
     LarisVMS.Vision references the managed assembly and the CPU native; LarisVMS.Vision.Service also
     stages the CUDA(+TensorRT) native build for the target OS (Gpu.Windows or Gpu.Linux) and, on
     Windows, the DirectML build into onnxruntime-backends/<name>/ so one node package runs on any
-    hardware (VisionBackendResolver picks one at runtime). The ~320 MB
-    onnxruntime_providers_cuda.dll is not shipped in the node package — install-web.ps1 seeds it onto the
-    LarisVMS server and an NVIDIA node downloads it from there once. Used directly from
+    hardware (VisionBackendResolver picks one at runtime). The large CUDA provider library
+    (onnxruntime_providers_cuda.dll on Windows, libonnxruntime_providers_cuda.so on Linux) is not
+    shipped in the node package: every Web package carries it for both platforms, and an NVIDIA node
+    downloads the one for its OS from the server once. Used directly from
     Inference/OrtSessionFactory.cs, DFineEngine.cs, YoloXEngine.cs.
 
 Microsoft.AI.DirectML
@@ -86,6 +87,21 @@ SkiaSharp
     Pulled in transitively by YoloDotNet; used directly in LarisVMS.Vision for detection box geometry,
     for DFineEngine's own frame preprocessing (resize/pixel pack) since the D-FINE integration, and to
     WebP-encode the eager AI-detection snapshot crops.
+
+SkiaSharp.NativeAssets.Linux.NoDependencies 3.119.1
+    MIT (SkiaSharp), with the Skia graphics library under BSD-3-Clause (Copyright (c) Google Inc.)
+    https://github.com/mono/SkiaSharp, https://skia.org
+    Provides libSkiaSharp.so for nodes on Linux (YoloDotNet only brings the Windows and macOS
+    natives). Shipped unmodified; the package's own THIRD-PARTY-NOTICES lists the libraries built
+    into it.
+
+ICU (Microsoft.ICU.ICU4C.Runtime.linux-x64 72.1.0.3)
+    Unicode, Inc. License Agreement - Data Files and Software (the ICU license; its text is the
+    package's LICENSE file)
+    https://github.com/unicode-org/icu
+    Copyright (c) Unicode, Inc. and others
+    Shipped with the Web server on Linux (libicuuc, libicui18n, and libicudata .so.72) so a Linux install needs
+    no libicu package; loaded as app-local ICU. Windows uses the ICU built into Windows.
 
 Markdig
     BSD-2-Clause
@@ -135,7 +151,8 @@ EXTERNAL TOOLS (invoked as subprocesses, not linked)
 FFmpeg
     Invoked as a separate process over a pipe; no FFmpeg code is linked into this project, so its
     license does not propagate here (a GPL build is fine). Not bundled — installed per recorder
-    node; see the README's "Requirements" section.
+    node (winget on Windows; the distro's package, or RPM Fusion's on Rocky Linux, which the Linux
+    node package depends on); see the README's "Requirements" section.
     https://ffmpeg.org
 
 mariadb-dump

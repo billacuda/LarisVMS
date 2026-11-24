@@ -25,14 +25,14 @@ try {
     dotnet tool restore | Out-Null
 
     Write-Host "SQL Server migration '$Name'" -ForegroundColor Cyan
-    dotnet ef migrations add $Name --project src\LarisVMS.Infrastructure --startup-project src\LarisVMS.Web
+    dotnet ef migrations add $Name --project src/LarisVMS.Infrastructure --startup-project src/LarisVMS.Web
     if ($LASTEXITCODE -ne 0) { throw "SQL Server migration failed." }
 
     Write-Host "MariaDB migration '$Name'" -ForegroundColor Cyan
-    dotnet ef migrations add $Name --project src\LarisVMS.Infrastructure.MariaDb --startup-project src\LarisVMS.Infrastructure.MariaDb --output-dir Migrations
+    dotnet ef migrations add $Name --project src/LarisVMS.Infrastructure.MariaDb --startup-project src/LarisVMS.Infrastructure.MariaDb --output-dir Migrations
     if ($LASTEXITCODE -ne 0) {
         throw "MariaDB migration failed. The SQL Server one was added; remove it with " +
-              "'dotnet ef migrations remove --project src\LarisVMS.Infrastructure --startup-project src\LarisVMS.Web' or fix and add the MariaDB one by hand."
+              "'dotnet ef migrations remove --project src/LarisVMS.Infrastructure --startup-project src/LarisVMS.Web' or fix and add the MariaDB one by hand."
     }
 }
 finally {

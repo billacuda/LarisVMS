@@ -21,4 +21,9 @@ public static class PlatformLabels
         };
         return arch.Length == 0 ? osName : $"{osName} {arch}";
     }
+
+    /// <summary>As <see cref="Display(string?)"/>, with " · Docker" for one running from a Docker
+    /// image (updated by pulling a new image instead of by the server).</summary>
+    public static string Display(string? platform, bool inContainer) =>
+        inContainer ? $"{Display(platform)} · Docker" : Display(platform);
 }

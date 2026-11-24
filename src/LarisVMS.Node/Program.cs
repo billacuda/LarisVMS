@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Logging;
 using LarisVMS.Core.Security;
+using LarisVMS.Core.Setup;
 using LarisVMS.Media;
 using LarisVMS.Node;
 using LarisVMS.Node.Update;
@@ -67,13 +68,15 @@ if (config is null)
     var serverUrl = GetArg(args, "--server-url") ?? Environment.GetEnvironmentVariable("LARISVMS_SERVER_URL");
     var registrationKey = GetArg(args, "--registration-key") ?? Environment.GetEnvironmentVariable("LARISVMS_REGISTRATION_KEY")
         ?? LarisVMS.Core.Security.RegistrationKeyFile.Read(); // left by the installer
-    if (serverUrl is null || registrationKey is null)
+    if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(registrationKey))
     {
-        Console.Error.WriteLine(OperatingSystem.IsWindows()
-            ? "Not yet registered. Run with --server-url <url> --registration-key <key> " +
-              "(or set LARISVMS_SERVER_URL / LARISVMS_REGISTRATION_KEY) the first time."
-            : "Not yet registered. Pair this node with: sudo larisvms-node setup --server-url <url> --registration-key <key>");
-        Environment.Exit(1);
+        RegistrationFailure.Exit(RegistrationFailure.NotRegistered("node", OperatingSystem.IsWindows(), LarisVMS.Core.RunningInContainer.Value), "node");
+        return;
+    }
+    serverUrl = serverUrl.Trim();
+    if (RegistrationFailure.CheckServerUrl(serverUrl) is { } urlError)
+    {
+        RegistrationFailure.Exit(urlError, "node");
         return;
     }
 
@@ -100,10 +103,19 @@ if (config is null)
     // the "no storage path" state on the server rather than silently registering ProgramData.
     var registerStorageRoot = GetArg(args, "--storage-root") ?? Environment.GetEnvironmentVariable("LARISVMS_STORAGE_ROOT");
     var registerArchiveRoot = GetArg(args, "--archive-root") ?? Environment.GetEnvironmentVariable("LARISVMS_ARCHIVE_ROOT");
-    var response = await registerClient.RegisterAsync(
-        new LarisVMS.Core.Dtos.NodeRegisterRequest(registrationKey, Environment.MachineName, NodeVersion.Current, LarisVMS.Core.PlatformId.Current,
-            registerStorageRoot, registerArchiveRoot),
-        CancellationToken.None);
+    LarisVMS.Core.Dtos.NodeRegisterResponse response;
+    try
+    {
+        response = await registerClient.RegisterAsync(
+            new LarisVMS.Core.Dtos.NodeRegisterRequest(registrationKey, Environment.MachineName, NodeVersion.Current, LarisVMS.Core.PlatformId.Current,
+                registerStorageRoot, registerArchiveRoot),
+            CancellationToken.None);
+    }
+    catch (Exception ex) when (RegistrationFailure.Describe(ex, serverUrl) is { } reason)
+    {
+        RegistrationFailure.Exit(reason, "node");
+        return;
+    }
 
     config = new NodeConfig(serverUrl, response.NodeId, response.Secret, response.MediaSigningKey,
         UpdateSigningKeyPem: response.UpdateSigningKeyPem);

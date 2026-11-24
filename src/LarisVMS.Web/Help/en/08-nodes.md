@@ -2,9 +2,9 @@
 
 Recorder nodes: status, streaming paths, media proxies, failover, maintenance, and updates.
 
-**Nodes** in the sidebar lists every node with its status, address, version, camera count, and disk usage. Click a node to edit its settings. The **⋯** menu has these actions:
+**Nodes** in the sidebar lists every node with its status, address, version, camera count, and disk usage. Under each version is the node's platform (Windows or Linux): one server can run nodes on both. **Docker** after it means the node runs from a Docker image. The server doesn't send it builds: when a newer build is approved, the page says which image to pull. Click a node to edit its settings. The **⋯** menu has these actions:
 
-- **Restart service**: restarts the node's Windows service, not the machine. Recording pauses for a few seconds.
+- **Restart service**: restarts the node's service (a Windows service, or a systemd service on Linux), not the machine. Recording pauses for a few seconds.
 - **Reset auth**: clears the node's check-in token, for a node stuck failing authentication after a missed heartbeat. It has no effect on a healthy node.
 - **Maintenance**: moves the node's cameras to its backup node until you turn maintenance off.
 - **Delete**: removes the node. Its cameras become unassigned. Recordings are not deleted.
@@ -37,7 +37,7 @@ The node page warns when the backup has different AI hardware, or is recording-o
 
 Nodes and proxies update themselves from approved builds (see [Installation](/Help/installation#updates)). **Nodes → Updates and registration → Auto-update** turns this on or off for every node.
 
-The **Builds** section of the Nodes page shows the build each kind of node is running toward and any build waiting for approval, with **Approve** and **Reject**. **Build history** lists every build, including approved, superseded, and rejected ones.
+The **Builds** section of the Nodes page shows the build each kind of node is running toward and any build waiting for approval, with **Approve** and **Reject**. Builds are kept per platform: a Windows node only ever gets a Windows build, and a Linux node a Linux one. Every web install carries both, and **Approve all** approves a version for every platform at once. **Build history** lists every build, including approved, superseded, and rejected ones. **Remove old builds** deletes every build older than the approved one for its platform, with its files.
 
 ## Server certificate
 
@@ -47,9 +47,9 @@ The **Builds** section of the Nodes page shows the build each kind of node is ru
 - **Trusted certificate only**: only a certificate from a trusted CA that matches the server's name. Install one before choosing this.
 - **Don't check**: any certificate. Not safe: anyone on the network path could pose as the server.
 
-With trust on first use, a node trusts whatever certificate it sees the first time it connects. To have it check from the very first connection, pass the thumbprint shown under **Server certificate check** to the installer: `-ServerCertThumbprint` for `install-node.ps1` and `install-proxy.ps1`, or `SERVERCERTTHUMBPRINT=` for the MSI. The install commands on the Setup and Media proxies pages already include it. Behind a reverse proxy, use the thumbprint of the certificate the reverse proxy presents instead.
+With trust on first use, a node trusts whatever certificate it sees the first time it connects. To have it check from the very first connection, pass the thumbprint shown under **Server certificate check** to the installer: `-ServerCertThumbprint` for `install-node.ps1` and `install-proxy.ps1`, `SERVERCERTTHUMBPRINT=` for the MSI, or `--server-cert-thumbprint` for `larisvms-node setup` and `larisvms-proxy setup` on Linux. The install commands on the Setup and Media proxies pages already include it. Behind a reverse proxy, use the thumbprint of the certificate the reverse proxy presents instead.
 
-The self-signed certificate the server makes for itself lasts 10 years and isn't replaced on its own. **Regenerate self-signed certificate** replaces it; every node and proxy then has to be re-registered, and the Nodes page lists the ones that haven't checked in since. To re-register a node, run the node installer again, or run `LarisVMS.Node.exe --reset-server-pin` on it and restart its service (proxies have the same option).
+The self-signed certificate the server makes for itself lasts 10 years and isn't replaced on its own. **Regenerate self-signed certificate** replaces it; every node and proxy then has to be re-registered, and the Nodes page lists the ones that haven't checked in since. To re-register a node, run the node installer again, or run `LarisVMS.Node.exe --reset-server-pin` on it and restart its service (proxies have the same option). On Linux, run `sudo larisvms-node setup --reregister --server-url <url> --registration-key <key>` (or `larisvms-proxy`).
 
 ## One-time registration codes
 

@@ -54,9 +54,34 @@ public sealed class ClientEndpointConfig
 
     /// <summary><paramref name="serverCached"/> is <c>NodeConfig.CachedConfig</c> — null on a first
     /// run before any successful poll, in which case only the local json can enable the endpoint.</summary>
+    /// <summary>Overlays the <c>LARISVMS_CLIENT_*</c> environment variables on the local file, so a
+    /// Docker container can be set up from its compose file alone. A set port also turns the endpoint
+    /// on, as <c>larisvms-node setup --client-port</c> does. Unset variables leave the file's values.</summary>
+    internal static ClientEndpointLocalConfig? WithEnvironment(ClientEndpointLocalConfig? local, Func<string, string?> env)
+    {
+        var port = int.TryParse(env("LARISVMS_CLIENT_PORT"), out var p) && p is > 0 and <= 65535 ? p : (int?)null;
+        var pfxPath = env("LARISVMS_CLIENT_PFX_PATH");
+        var pfxPassword = env("LARISVMS_CLIENT_PFX_PASSWORD");
+        var insecure = env("LARISVMS_CLIENT_ALLOW_INSECURE") is { Length: > 0 } i ? i is "1" or "true" or "True" : (bool?)null;
+        var host = env("LARISVMS_CLIENT_ENDPOINT_HOST");
+        if (port is null && string.IsNullOrEmpty(pfxPath) && string.IsNullOrEmpty(pfxPassword) && insecure is null && string.IsNullOrEmpty(host))
+            return local;
+
+        local ??= new ClientEndpointLocalConfig();
+        return local with
+        {
+            Enabled = local.Enabled || port is not null,
+            Port = port ?? local.Port,
+            PfxPath = string.IsNullOrEmpty(pfxPath) ? local.PfxPath : pfxPath,
+            PfxPassword = string.IsNullOrEmpty(pfxPassword) ? local.PfxPassword : pfxPassword,
+            AllowInsecure = insecure ?? local.AllowInsecure,
+            Host = string.IsNullOrEmpty(host) ? local.Host : host,
+        };
+    }
+
     public static ClientEndpointConfig Resolve(NodeConfigResponse? serverCached)
     {
-        var local = ReadLocal();
+        var local = WithEnvironment(ReadLocal(), Environment.GetEnvironmentVariable);
 
         var serverTls = serverCached?.EncryptServerConnection == true;
         var enabled = local?.Enabled == true || serverCached?.ClientEndpointEnabled == true || serverTls;

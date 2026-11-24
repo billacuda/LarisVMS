@@ -57,15 +57,31 @@ public static class SecretProtection
         if (!stored.StartsWith(Prefix, StringComparison.Ordinal))
             throw new System.Security.Cryptography.CryptographicException(
                 "A key stored in the database isn't encrypted, so it was changed outside LarisVMS; it isn't used.");
-        return protector.Unprotect(stored[Prefix.Length..]);
+        return Decrypt(stored, protector);
     }
 
-    public static string? Unprotect(string? stored)
+    /// <summary>Throws <see cref="SecretUnreadableException"/> when the value was encrypted with a key
+    /// this server doesn't have.</summary>
+    public static string? Unprotect(string? stored) => Unprotect(stored, _protector);
+
+    internal static string? Unprotect(string? stored, IDataProtector? protector)
     {
         if (string.IsNullOrEmpty(stored)) return stored;
         if (!stored.StartsWith(Prefix, StringComparison.Ordinal)) return stored;       // legacy plaintext
-        if (_protector is null) return stored;
-        return _protector.Unprotect(stored[Prefix.Length..]);
+        if (protector is null) return stored;
+        return Decrypt(stored, protector);
+    }
+
+    private static string Decrypt(string stored, IDataProtector protector)
+    {
+        try
+        {
+            return protector.Unprotect(stored[Prefix.Length..]);
+        }
+        catch (System.Security.Cryptography.CryptographicException ex)
+        {
+            throw new SecretUnreadableException(ex);
+        }
     }
 }
 

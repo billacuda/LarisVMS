@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using LarisVMS.Infrastructure.Security;
 
 namespace LarisVMS.Web.Pages;
 
@@ -15,6 +17,10 @@ public class ErrorModel : PageModel
 {
     public string? RequestId { get; set; }
     public bool ShowRequestId => !string.IsNullOrEmpty(RequestId);
+
+    /// <summary>The page failed on a password or key in the database that this server can't decrypt.</summary>
+    public bool SecretsUnreadable =>
+        SecretUnreadableException.IsIn(HttpContext.Features.Get<IExceptionHandlerFeature>()?.Error);
 
     public void OnGet()
     {

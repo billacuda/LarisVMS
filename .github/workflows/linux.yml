@@ -1,16 +1,16 @@
 name: Linux
 
-# Runs the tests on Linux, builds the .deb and .rpm packages, and installs them on every supported
-# distro. Packages only build for pushes to main, pull requests, and manual runs: they take a while.
+# Runs the tests on Linux, builds the .deb and .rpm packages, installs them on every supported
+# distro, and builds the Docker images from them (without pushing; docker.yml pushes on release). Packages only build for pushes to main, pull requests, and manual runs: they take a while.
 
 on:
   push:
     branches: [ "main" ]
-    paths: [ 'src/**', 'tests/**', 'installer/linux/**', 'tools/**', '*.ps1', 'build-number.txt',
+    paths: [ 'src/**', 'tests/**', 'installer/linux/**', 'docker/**', 'tools/**', '*.ps1', 'build-number.txt',
              '**.csproj', '**.props', '**.slnx', 'global.json', 'CHANGELOG.md', '.github/workflows/linux.yml' ]
   pull_request:
     branches: [ "main" ]
-    paths: [ 'src/**', 'tests/**', 'installer/linux/**', 'tools/**', '*.ps1', 'build-number.txt',
+    paths: [ 'src/**', 'tests/**', 'installer/linux/**', 'docker/**', 'tools/**', '*.ps1', 'build-number.txt',
              '**.csproj', '**.props', '**.slnx', 'global.json', 'CHANGELOG.md', '.github/workflows/linux.yml' ]
   workflow_dispatch:
 
@@ -187,3 +187,50 @@ jobs:
           # rpm removes an unchanged config file, dpkg keeps it until a purge; the data stays on both.
           test -d /var/lib/larisvms/models
           id larisvms
+
+  docker:
+    # Builds the web, proxy, and base node images from these packages, the way docker.yml does for a
+    # release, without pushing, so a broken Dockerfile shows up before a release needs it. The -cuda
+    # and -tensorrt images are only built on release (docker.yml): they're several GB.
+    name: Docker images
+    needs: packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check the compose files
+        # As published, and compose.yml with its node and proxy uncommented.
+        run: |
+          set -eu
+          for file in docker/compose*.yml; do
+            echo "$file"
+            docker compose -f "$file" config --quiet
+          done
+          sed 's/^  # /  /' docker/compose.yml > /tmp/compose.yml
+          docker compose -f /tmp/compose.yml config --quiet
+          test "$(docker compose -f /tmp/compose.yml config --services | sort | xargs)" = "larisvms-node larisvms-proxy larisvms-web"
+
+      - name: Download packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-packages
+          path: pkgs
+
+      - name: Build and check
+        run: |
+          set -eu
+          mkdir -p ctx
+          cp docker/Dockerfile docker/entrypoint.sh docker/nvidia-requirements.txt docker/tensorrt-requirements.txt ctx/
+          find pkgs -name 'larisvms-*_amd64.deb' -exec cp {} ctx/ \;
+          for kind in web proxy node; do
+            echo "::group::larisvms-$kind"
+            DOCKER_BUILDKIT=1 docker build ctx -f ctx/Dockerfile --build-arg KIND=$kind -t larisvms-$kind:ci
+            reported=$(docker run --rm larisvms-$kind:ci --version)
+            echo "larisvms-$kind reports $reported"
+            test -n "$reported"
+            # A new ID would lose access to existing recordings.
+            test "$(docker run --rm --entrypoint id larisvms-$kind:ci -u larisvms)" = 8444
+            docker image ls larisvms-$kind:ci
+            echo "::endgroup::"
+          done

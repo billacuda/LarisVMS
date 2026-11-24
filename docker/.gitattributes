@@ -1,0 +1,2 @@
+# The entrypoint, Dockerfile, and compose files run on Linux: a CR breaks them.
+* text eol=lf

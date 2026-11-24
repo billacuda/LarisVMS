@@ -26,6 +26,9 @@ public interface IProxyService
         int? reportedPort, DateTime? certNotAfter, bool? certIsSelfSigned, string? lastError,
         List<NodePartnerHealthReport>? nodeHealthReports = null, CancellationToken ct = default);
 
+    /// <summary>Stores whether the proxy runs from a Docker image. Null (an older proxy) leaves it as it is.</summary>
+    Task RecordInContainerAsync(Guid proxyId, bool? inContainer, CancellationToken ct = default);
+
     /// <summary>ProxyHealthMonitor's per-probe write of the /health result.</summary>
     Task UpdateHealthAsync(Guid id, bool healthy, string? error, CancellationToken ct = default);
 

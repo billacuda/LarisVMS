@@ -121,6 +121,9 @@ public interface INodeService
     /// stored report as it is.</summary>
     Task<bool> RecordVisionBackendAsync(Guid nodeId, NodeVisionBackendDto? backend, CancellationToken ct = default);
 
+    /// <summary>Stores whether the node runs from a Docker image. Null (an older node) leaves it as it is.</summary>
+    Task RecordInContainerAsync(Guid nodeId, bool? inContainer, CancellationToken ct = default);
+
     /// <summary>Stores grid-mode motion heat a node reported for its own cameras: each report replaces
     /// that node run's earlier one for the camera and hour.</summary>
     Task RecordMotionHeatAsync(Guid nodeId, IReadOnlyList<NodeMotionHeatReport> reports, CancellationToken ct = default);

@@ -14,9 +14,22 @@ namespace LarisVMS.Web.Pages.Admin;
 /// lives on <c>Admin/Nodes</c>. Gated by <c>Nodes.Edit</c>, same as the Nodes page.</summary>
 [Authorize("Nodes.Edit")]
 public class ProxiesModel(IProxyService proxyService, INodeService nodeService, ISettingsResolver settings,
-    IAuditService auditService) : PageModel
+    IAuditService auditService, INodeBuildService nodeBuildService) : PageModel
 {
     public List<MediaProxy> Proxies { get; set; } = [];
+
+    /// <summary>For proxies in Docker (never sent builds): the approved build for each one's platform,
+    /// to tell when to pull a new image.</summary>
+    public Dictionary<string, string> ApprovedVersionByPlatform { get; set; } = [];
+
+    public bool ContainerBehind(MediaProxy p, out string approved)
+    {
+        approved = p.InContainer ? ApprovedVersionByPlatform.GetValueOrDefault(PlatformKey(p)) ?? "" : "";
+        return approved.Length > 0 && LarisVMS.Core.NodeVersionComparer.IsNewer(approved, p.Version);
+    }
+
+    private static string PlatformKey(MediaProxy p) =>
+        LarisVMS.Core.PlatformId.ForProxy(p.Platform ?? LarisVMS.Core.PlatformId.Legacy);
     public Dictionary<System.Guid, int> AssignedNodeCount { get; set; } = [];
     public string? RegistrationKey { get; set; }
     public string? ErrorMessage { get; set; }
@@ -26,6 +39,9 @@ public class ProxiesModel(IProxyService proxyService, INodeService nodeService, 
     public async Task OnGetAsync()
     {
         Proxies = await proxyService.ListAsync();
+        foreach (var platform in Proxies.Where(p => p.InContainer).Select(PlatformKey).Distinct())
+            if (await nodeBuildService.GetLatestForPlatformAsync(platform) is { } latest)
+                ApprovedVersionByPlatform[platform] = latest.Version;
         RegistrationKey = LarisVMS.Infrastructure.Security.SecretProtection.Unprotect(await settings.GetRawAsync("Node.RegistrationKey"));
 
         var nodes = await nodeService.ListAsync();

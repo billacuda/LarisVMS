@@ -104,6 +104,11 @@ public class SetupService(
         // refused when it holds anything else, before its connection string is saved anywhere.
         var adopted = existed && await IsLarisDatabaseAsync(ops, migrateCtx, request.DatabaseName, ct);
 
+        // Its passwords and node keys are encrypted with its old server's data-protection keys. Without
+        // them, every page that reads one fails, so that's said here, before anything is saved.
+        if (adopted && !request.AcceptUnreadableSecrets)
+            await EnsureSecretsReadableAsync(migrateCtx, ct);
+
         MergeSetupJson(root => DatabaseConfig.Save(root, configuration, request.Provider, appCs));
 
         await migrateCtx.Database.MigrateAsync(ct);
@@ -120,6 +125,24 @@ public class SetupService(
         if (flag?.Value != "true" && !await migrateCtx.Users.AnyAsync(ct)) return false;
         await UpsertSettingAsync(migrateCtx, "Setup.IsComplete", "true", "Set once the setup wizard completes.", ct);
         return true;
+    }
+
+    /// <summary>Throws <see cref="LarisVMS.Infrastructure.Security.SecretUnreadableException"/> when the
+    /// database holds secrets this server can't decrypt. Reads single columns that every version has,
+    /// since the database isn't migrated yet.</summary>
+    private static async Task EnsureSecretsReadableAsync(ApplicationDbContext ctx, CancellationToken ct)
+    {
+        try
+        {
+            foreach (var value in await ctx.Settings.AsNoTracking().Select(s => s.Value).ToListAsync(ct))
+                LarisVMS.Infrastructure.Security.SecretProtection.Unprotect(value);
+            await ctx.Nodes.IgnoreQueryFilters().AsNoTracking().Select(n => n.MediaSigningKey).ToListAsync(ct);
+            await ctx.Cameras.IgnoreQueryFilters().AsNoTracking().Select(c => c.Password).ToListAsync(ct);
+        }
+        catch (System.Data.Common.DbException)
+        {
+            // A schema too old to have one of these: the migration that follows reports real problems.
+        }
     }
 
     /// <summary>True when the database already holds LarisVMS migrations; false when it's empty;

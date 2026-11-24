@@ -10,20 +10,34 @@ Turn it on per camera with **Watch this camera for objects**. Only **5–7 fps p
 
 One node package covers every machine. At startup, the vision service picks a backend for the hardware it finds:
 
-| Hardware | Backend | Needs on the node |
-|---|---|---|
-| NVIDIA GPU | CUDA (falls back to DirectML) | CUDA Toolkit 12.x and cuDNN 9.x |
-| Intel GPU | OpenVINO (falls back to DirectML) | A current Intel graphics driver |
-| AMD GPU | DirectML | A current GPU driver |
-| No GPU | CPU | Nothing |
+| Hardware | Windows | Linux | Needs on the node |
+|---|---|---|---|
+| NVIDIA GPU | CUDA (falls back to DirectML) | CUDA (falls back to CPU) | CUDA 12 and cuDNN 9 (see the requirements below) |
+| Intel GPU | OpenVINO (falls back to DirectML) | OpenVINO (falls back to CPU) | A current Intel graphics driver; on Linux, Intel's compute runtime (`intel-opencl-icd`) |
+| AMD GPU | DirectML | CPU | A current GPU driver |
+| No GPU | CPU | CPU | Nothing |
 
-The node's edit page shows the detected accelerators, and its **Accelerator** setting can force one. Models are never bundled. A node fetches the built-in YOLOX models from the server, and other models go in `C:\ProgramData\LarisVMS\models` on the node.
+The node's edit page shows the detected accelerators, and its **Accelerator** setting can force one. Models are never bundled. A node fetches the built-in YOLOX models from the server, and other models go in `C:\ProgramData\LarisVMS\models` (Windows) or `/var/lib/larisvms/models` (Linux) on the node.
+
+Debian 13 has no `intel-opencl-icd` package. Install the one from Intel's releases, with the steps on the release's page: [26.27.39122.11](https://github.com/intel/compute-runtime/releases/tag/26.27.39122.11) for 11th-gen Core (Tiger Lake), Arc, and newer, or [24.35.30872.36](https://github.com/intel/compute-runtime/releases/tag/24.35.30872.36) for older graphics. The Docker node image already has both.
+
+NVIDIA requirements for the CUDA backend (ONNX Runtime 1.24, built with CUDA 12.8):
+
+| | Linux | Windows |
+|---|---|---|
+| NVIDIA driver | 570.26 or newer | 570.65 or newer |
+| CUDA | 12.8 or a newer 12.x | 12.8 or a newer 12.x |
+| cuDNN | 9.x | 9.x |
+| GPU | Turing (RTX 20 series, GTX 16 series) or newer; Pascal and Maxwell need cuDNN 9.10.2 or earlier | same |
+| TensorRT (optional) | 10.x | 10.x |
+
+The **Nodes** page warns when a node's NVIDIA driver is too old for CUDA. On Linux, install CUDA and cuDNN from NVIDIA's apt or dnf repository (`cuda-libraries-12-8` and `libcudnn9-cuda-12`); the node finds them through the system library path or `/usr/local/cuda/lib64`. GPU acceleration on Linux hasn't been tested on real hardware yet.
 
 ## Slow backend
 
-If an NVIDIA node can't use CUDA, AI detection falls back to DirectML, which runs several times slower. Fewer frames get analysed, the GPU runs hot, and fast objects such as passing cars can go undetected. The **Nodes** page then shows **⚠️ AI on DirectML** next to the node, with the reason, and Super Admins get a notification.
+If an NVIDIA node can't use CUDA, AI detection falls back to DirectML (the CPU on Linux), which runs several times slower. Fewer frames get analysed, the GPU runs hot, and fast objects such as passing cars can go undetected. The **Nodes** page then shows **⚠️ AI on DirectML** next to the node, with the reason, and Super Admins get a notification.
 
-The usual cause is a missing cuDNN. Install the CUDA Toolkit 12.x and cuDNN 9.x for CUDA 12 on the node, from NVIDIA's cuDNN download or with `pip install nvidia-cudnn-cu12`. The node finds them within 10 minutes, copies them next to its AI backend, and restarts detection on CUDA.
+The usual cause is a missing cuDNN, or an NVIDIA driver older than CUDA 12.8 needs. On Windows, install the CUDA Toolkit 12.x and cuDNN 9.x for CUDA 12 on the node, from NVIDIA's cuDNN download or with `pip install nvidia-cudnn-cu12`. On Linux, install `cuda-libraries-12-8` and `libcudnn9-cuda-12` from NVIDIA's repository. The node finds them within 10 minutes (on Windows it copies them next to its AI backend) and restarts detection on CUDA.
 
 ## Model families
 
@@ -41,7 +55,7 @@ Changing the model restarts each camera's detection.
 
 ## Custom models
 
-Drop an `.onnx` file into `C:\ProgramData\LarisVMS\models` on the node. If the model's own metadata describes its decoder, input size, and labels, it just works. Otherwise add a `.json` file with the same name that supplies what's missing. **Refresh** lists every model the nodes found, and flags any whose metadata is incomplete. A model with a warning can be selected but won't run until the warning is fixed.
+Drop an `.onnx` file into `C:\ProgramData\LarisVMS\models` (Windows) or `/var/lib/larisvms/models` (Linux) on the node; on Linux, make sure the larisvms account can read it. If the model's own metadata describes its decoder, input size, and labels, it just works. Otherwise add a `.json` file with the same name that supplies what's missing. **Refresh** lists every model the nodes found, and flags any whose metadata is incomplete. A model with a warning can be selected but won't run until the warning is fixed.
 
 ## Aspect fitting
 

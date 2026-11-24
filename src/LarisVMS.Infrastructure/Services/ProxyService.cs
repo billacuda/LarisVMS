@@ -93,6 +93,13 @@ public class ProxyService(ApplicationDbContext db, ISettingsResolver settings) :
         return new NodeCheckInSecurity(false, next, null);
     }
 
+    public async Task RecordInContainerAsync(Guid proxyId, bool? inContainer, CancellationToken ct = default)
+    {
+        if (inContainer is not { } value) return;
+        await db.MediaProxies.Where(p => p.Id == proxyId && p.InContainer != value)
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.InContainer, value), ct);
+    }
+
     public async Task RecordHeartbeatAsync(Guid proxyId, string? version, DateTime? sentAtUtc, DateTime serverReceivedUtc,
         int? reportedPort, DateTime? certNotAfter, bool? certIsSelfSigned, string? lastError,
         List<NodePartnerHealthReport>? nodeHealthReports = null, CancellationToken ct = default)

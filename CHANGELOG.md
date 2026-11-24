@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.223.0] - 2026-11-23
+
 ### ➕ Added
 
 - **Linux packages.** The Web server, node, and media proxy now come as .deb and .rpm packages for
@@ -15,9 +17,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Web package now carries node and proxy builds for both Windows and Linux, plus the CUDA library that
   NVIDIA nodes on either system download from it, and all of a release's installers share one
   version number.
+- **Docker images.** Every published release is also built as Docker images on GitHub's container
+  registry (`ghcr.io/billacuda/larisvms-web`, `-node`, and `-proxy`), from that release's own Linux
+  packages. The node comes in three tags: the base image (Intel GPU or CPU, with Intel's GPU drivers for
+  5th-gen Core graphics and newer), `-cuda` (adds CUDA and cuDNN for NVIDIA GPUs), and `-tensorrt`
+  (adds TensorRT). The setup wizard and the Media proxies page show a compose stack with your server,
+  key, and certificate filled in, and `docker/compose.yml` has all three parts for one machine. The
+  README and Help cover installing with Docker Compose, a Portainer stack, and plain Docker, and moving
+  a Linux install to Docker. Containers are updated by pulling the new image: the Nodes and Media
+  proxies pages mark them **Docker** and say when a newer one is approved, and the server doesn't send
+  them builds.
 - **Linux CI.** A new workflow runs the tests on Linux, builds the .deb and .rpm packages, and
   installs them on Ubuntu 22.04, 24.04, and 26.04, Debian 12 and 13, and Rocky Linux 9 and 10.
 - **`--version`.** The node, proxy, and Web server print their version with `--version`.
+- **Linux documentation.** The README covers installing, upgrading, and building on Linux, mixed
+  fleets, and a GPU requirements table with the NVIDIA driver, CUDA, cuDNN, and TensorRT versions
+  for each OS and links to their sources. CONTRIBUTING.md gives the build and tool commands for
+  PowerShell and bash, and THIRD_PARTY_NOTICES.txt lists the ICU and SkiaSharp libraries the Linux
+  packages ship. tools/add-migration.ps1 and tools/locale-check.ps1 now also run on Linux. Help
+  covers Linux too: installing and pairing, the Linux folders, CUDA and cuDNN requirements for each
+  OS, Intel GPU drivers on Debian 13, Active Directory and backups on a Linux server, and
+  `journalctl` for troubleshooting.
 - **Remove old builds.** The Builds section of the Nodes page has a **Remove old builds** button that
   deletes every node and proxy build older than the approved one for its platform, with its files,
   plus any stray file in the server's node-builds folder. The approved build and newer ones waiting
@@ -28,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **deploy.ps1.** The old IIS deploy script is gone; install-web.ps1 replaced it. The Nodes and
   Proxies pages no longer tell you to run it: installing or upgrading the Web server registers the
   builds it carries.
+- **Old tools.** fix-legacy-segments.ps1, which repaired recordings made before 0.21.1, and the two
+  camera probe scripts are gone from `tools/`.
 
 ### ⚙️ Changed
 
@@ -59,6 +81,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installer run again to get them. Nodes check them against the build's signatures before using them.
 - **Updates on Linux.** Linux nodes and proxies take pushed updates: they check and stage the update
   themselves, and a small root helper installs it and restarts the service.
+- **Clearer registration errors.** A node or proxy that can't register says why (a mistyped server
+  address, a server that can't be reached, or a refused key) instead of stopping with a stack trace.
+- **Databases from another server.** The setup wizard warns when an existing database's saved passwords
+  and keys can't be read because the old server's data-protection keys are missing, and changes nothing.
+  Pages that fail for that reason, such as Nodes, say how to fix it.
+- **Release checks.** The Docker workflow checks a release's .deb packages against its SHA256SUMS.txt
+  and warns about missing MSIs or .rpm packages, Linux CI checks the compose files, and a change to
+  `docker/compose.yml` updates the website.
+- **Docker account ID.** The images' `larisvms` account always has the ID 8444, so a new image keeps
+  access to existing recordings.
 
 ### 🛠️ Fixed
 
@@ -2161,7 +2193,9 @@ Only the 10 most recent versions are kept in this file. Older entries are archiv
 - [v0.21.1 – v0.40.0](changelog-archive/v0.21.1-to-v0.40.0.md) (2026-08-09 – 2026-08-11)
 - [v0.1.0 – v0.21.0](changelog-archive/v0.1.0-to-v0.21.0.md) (2026-08-08 – 2026-08-09)
 
-[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.222.1...HEAD
+[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.223.0...HEAD
+[0.223.0]: https://github.com/billacuda/LarisVMS/compare/v0.222.2...v0.223.0
+[0.222.2]: https://github.com/billacuda/LarisVMS/compare/v0.222.1...v0.222.2
 [0.222.1]: https://github.com/billacuda/LarisVMS/compare/v0.222.0...v0.222.1
 [0.222.0]: https://github.com/billacuda/LarisVMS/compare/v0.221.4...v0.222.0
 [0.221.4]: https://github.com/billacuda/LarisVMS/compare/v0.221.3...v0.221.4

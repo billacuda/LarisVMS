@@ -1,0 +1,25 @@
+# LarisVMS media proxy, as a Portainer stack or with "docker compose -f compose.proxy.yml up -d".
+# The Media proxies page shows this stack with your server, key, and certificate filled in.
+# A new proxy starts turned off: turn on Enabled for it under Settings → Media proxies.
+# To update: pull the new image and redeploy.
+services:
+  larisvms-proxy:
+    image: ghcr.io/billacuda/larisvms-proxy:latest   # or a version, such as 0.223.0
+    hostname: larisvms-proxy-1
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      LARISVMS_SERVER_URL: 'https://vms.example.com:8444'
+      LARISVMS_REGISTRATION_KEY: 'your-registration-key'   # only used the first time
+      # LARISVMS_SERVER_CERT_THUMBPRINT: '...'
+      LARISVMS_CLIENT_PORT: '4443'
+      # LARISVMS_CLIENT_ENDPOINT_HOST: 'proxy.example.com'
+      # LARISVMS_CLIENT_PFX_PATH: '/certs/proxy.pfx'
+      # LARISVMS_CLIENT_PFX_PASSWORD: 'secret'
+    volumes:
+      - larisvms-proxy-data:/var/lib/larisvms
+      - larisvms-proxy-logs:/var/log/larisvms
+      # - /srv/larisvms/certs:/certs:ro
+volumes:
+  larisvms-proxy-data:
+  larisvms-proxy-logs:

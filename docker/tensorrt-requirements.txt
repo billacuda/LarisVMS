@@ -1,0 +1,4 @@
+# TensorRT libraries for the larisvms-node -tensorrt image, on top of nvidia-requirements.txt.
+# ONNX Runtime's TensorRT build uses TensorRT 10.9. The package installs from NVIDIA's index
+# (https://pypi.nvidia.com).
+tensorrt-cu12-libs==10.9.0.34

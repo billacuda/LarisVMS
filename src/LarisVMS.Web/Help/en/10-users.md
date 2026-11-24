@@ -73,6 +73,7 @@ A role is a named set of permissions, managed under **Settings → Roles**. Each
 - **Domain:** just the domain name, like `corp.example.com`.
 - **Encryption:** LDAPS on port 636 is the default and needs a certificate on your domain controllers that this server trusts. Plain LDAP on port 389 works without one, but it's insecure and not recommended.
 - **Lookup account:** integrated security (the default) uses the LarisVMS Web service's own account. When the service runs as LocalSystem on a domain-joined server, that's the computer account. Or enter a service account as `DOMAIN\username` with its password.
+- **On a Linux server**, Active Directory needs LDAPS and a service account: the server has no domain account of its own, and plain LDAP can't be signed and sealed there.
 - **Signing in:** a name with an `@` is a local account. Anything else is an AD username, typed without the domain.
 
 **Group → role links:** start typing a group name and pick from the list (Tab takes the first match). Members of the group get the role, including members of nested groups. Accounts are created the first time they're needed, as soon as a group is linked or when the user first signs in. Groups and users are tracked by SID, so renaming either in AD carries over at the next sync. Roles for AD accounts come only from group links and can't be edited on the Users page.

@@ -27,6 +27,9 @@ temp/
 
 # Generated / secrets
 setup-generated.json
+# Local Docker publish scripts; publish-docker.ps1 can hold a registry token.
+/publish-docker.ps1
+/docker/build-and-push.sh
 appsettings.*.json
 !appsettings.Development.json.example
 !appsettings.Production.json.example

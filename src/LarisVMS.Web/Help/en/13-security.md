@@ -11,11 +11,11 @@ IP allow lists, a separate live/playback port, the strict script policy, certifi
 
 ## Separate port
 
-**Settings → Live view → Custom port** moves live and playback traffic onto its own HTTPS port, using the same certificate. This lets you firewall it separately, or expose only it outside the LAN. It takes effect after `Restart-Service LarisVMSWeb`. After that, video only answers on the new port and everything else only on the main port. Clear the field to go back to one port.
+**Settings → Live view → Custom port** moves live and playback traffic onto its own HTTPS port, using the same certificate. This lets you firewall it separately, or expose only it outside the LAN. It takes effect after `Restart-Service LarisVMSWeb` (on Linux, `sudo systemctl restart larisvms-web`). After that, video only answers on the new port and everything else only on the main port. Clear the field to go back to one port.
 
 ## HTTP/3
 
-The server uses HTTP/2, and adds HTTP/3 on Windows 11, Windows Server 2022, or later. Browsers start on HTTP/2 and move to HTTP/3 on their own when they can reach it. HTTP/3 uses UDP on the HTTPS port (and the custom port, if set). The installer opens both TCP and UDP; on an older install, add a UDP rule for the port or run the current installer again. Until then, everything keeps working over HTTP/2. To turn HTTP/3 off, clear **Settings → Security → HTTP/3**, then `Restart-Service LarisVMSWeb`.
+The server uses HTTP/2, and adds HTTP/3 on Windows 11, Windows Server 2022, or later, and on Linux when Microsoft's `libmsquic` package is installed. Browsers start on HTTP/2 and move to HTTP/3 on their own when they can reach it. HTTP/3 uses UDP on the HTTPS port (and the custom port, if set). The installer (and the Linux package) opens both TCP and UDP; on an older install, add a UDP rule for the port or run the current installer again. Until then, everything keeps working over HTTP/2. To turn HTTP/3 off, clear **Settings → Security → HTTP/3**, then `Restart-Service LarisVMSWeb` (or `sudo systemctl restart larisvms-web`).
 
 ## Strict script policy
 
@@ -48,7 +48,7 @@ These checks stand between a download and a running install:
 
 ## Encrypted secrets
 
-Camera credentials, SMB credentials, node keys, email secrets, the Entra and Google client secrets, and the Active Directory service-account password are encrypted in the database, using the data-protection keys in `%ProgramData%\LarisVMS\keys`. Only SYSTEM, Administrators, and the LarisVMS services' accounts can open `%ProgramData%\LarisVMS`: any other access found there, such as a folder a local user created before LarisVMS was installed, is removed when a service starts. Back up that folder, and never delete it during a deploy.
+Camera credentials, SMB credentials, node keys, email secrets, the Entra and Google client secrets, and the Active Directory service-account password are encrypted in the database, using the data-protection keys in `%ProgramData%\LarisVMS\keys`. Only SYSTEM, Administrators, and the LarisVMS services' accounts can open `%ProgramData%\LarisVMS`: any other access found there, such as a folder a local user created before LarisVMS was installed, is removed when a service starts. Back up that folder, and never delete it during a deploy. On Linux the keys are in `/var/lib/larisvms/keys`, and `/var/lib/larisvms` belongs to the larisvms account with no access for anyone else.
 
 ## Extra protection for businesses
 
@@ -66,4 +66,4 @@ Out of the box, LarisVMS is set up so a home install just works. Everything belo
 - **Encrypted connections from the server to nodes**: on each node's page (see [Encrypted connections from the server](/Help/nodes#encrypted-connections-from-the-server)).
 - **Forward the audit log to syslog**: Settings → Logs (see [Audit log](/Help/users#audit-log)).
 - **Publisher-signed updates**, for builds you make yourself (see [Updates](#updates)).
-- **A less privileged service account.** The LarisVMS services run as LocalSystem. You can run them under another account (`services.msc`, or `sc.exe config`), but it's then up to you to give that account what the service needs: the install folder, every storage and archive folder or share, and the certificate files. `%ProgramData%\LarisVMS` is handled for you: each LarisVMS service, at startup, limits it to SYSTEM, Administrators, and the accounts the LarisVMS services run as, and removes any other access there. Check the service's log after the change.
+- **A less privileged service account.** The LarisVMS services run as LocalSystem. You can run them under another account (`services.msc`, or `sc.exe config`), but it's then up to you to give that account what the service needs: the install folder, every storage and archive folder or share, and the certificate files. `%ProgramData%\LarisVMS` is handled for you: each LarisVMS service, at startup, limits it to SYSTEM, Administrators, and the accounts the LarisVMS services run as, and removes any other access there. Check the service's log after the change. On Linux the services already run as their own unprivileged `larisvms` account; only the small update helper that installs approved node and proxy updates runs as root.

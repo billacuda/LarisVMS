@@ -26,6 +26,10 @@
     <label class="form-label" for="installCommandLinux">@L["setup.node.installCommandRunOnThe"] · @L["setup.node.installLinux"]</label>
     <textarea id="installCommandLinux" class="form-control font-monospace" rows="2" readonly>sudo larisvms-node setup --server-url "@Model.ServerUrl" --registration-key "@Model.RegistrationKey"@linuxPinArg</textarea>
 </div>
+<div class="mb-3">
+    <label class="form-label" for="installCommandDocker">@L["setup.node.installDocker"]</label>
+    <textarea id="installCommandDocker" class="form-control font-monospace" rows="18" readonly>@LarisVMS.Web.Helpers.DockerComposeSnippet.Node(Model.ServerUrl, Model.RegistrationKey, thumbprint, LarisVMS.Web.Services.ReleaseCheckService.RunningVersion)</textarea>
+</div>
 <form method="post">
     <button type="submit" class="btn btn-primary">@L["setup.node.continue"]</button>
 </form>

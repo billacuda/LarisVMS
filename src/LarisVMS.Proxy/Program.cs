@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using LarisVMS.Core.Dtos;
+using LarisVMS.Core.Setup;
 using LarisVMS.Proxy;
 using LarisVMS.Relay;
 
@@ -52,13 +53,15 @@ if (config is null)
     var serverUrl = GetArg(args, "--server-url") ?? Environment.GetEnvironmentVariable("LARISVMS_SERVER_URL");
     var registrationKey = GetArg(args, "--registration-key") ?? Environment.GetEnvironmentVariable("LARISVMS_REGISTRATION_KEY")
         ?? LarisVMS.Core.Security.RegistrationKeyFile.Read(); // left by the installer
-    if (serverUrl is null || registrationKey is null)
+    if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(registrationKey))
     {
-        Console.Error.WriteLine(OperatingSystem.IsWindows()
-            ? "Not yet registered. Run with --server-url <url> --registration-key <key> " +
-              "(or set LARISVMS_SERVER_URL / LARISVMS_REGISTRATION_KEY) the first time."
-            : "Not yet registered. Pair this proxy with: sudo larisvms-proxy setup --server-url <url> --registration-key <key>");
-        Environment.Exit(1);
+        RegistrationFailure.Exit(RegistrationFailure.NotRegistered("proxy", OperatingSystem.IsWindows(), LarisVMS.Core.RunningInContainer.Value), "proxy");
+        return;
+    }
+    serverUrl = serverUrl.Trim();
+    if (RegistrationFailure.CheckServerUrl(serverUrl) is { } urlError)
+    {
+        RegistrationFailure.Exit(urlError, "proxy");
         return;
     }
 
@@ -74,9 +77,18 @@ if (config is null)
     if (pinThumbprint is not null) trust.Pin(pinThumbprint);
 
     var registerClient = new ProxyApiClient(serverUrl, trust);
-    var response = await registerClient.RegisterAsync(
-        new ProxyRegisterRequest(registrationKey, Environment.MachineName, ProxyVersion.Current, LarisVMS.Core.PlatformId.Current),
-        CancellationToken.None);
+    ProxyRegisterResponse response;
+    try
+    {
+        response = await registerClient.RegisterAsync(
+            new ProxyRegisterRequest(registrationKey, Environment.MachineName, ProxyVersion.Current, LarisVMS.Core.PlatformId.Current),
+            CancellationToken.None);
+    }
+    catch (Exception ex) when (RegistrationFailure.Describe(ex, serverUrl) is { } reason)
+    {
+        RegistrationFailure.Exit(reason, "proxy");
+        return;
+    }
     config = new ProxyConfig(serverUrl, response.ProxyId, response.Secret, UpdateSigningKeyPem: response.UpdateSigningKeyPem);
     ProxyConfigStore.Save(config);
     Console.WriteLine($"Registered as proxy {response.ProxyId}.");

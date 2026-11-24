@@ -5,6 +5,10 @@
 }
 <h1 class="text-danger">@L["error.error"]</h1>
 <h2 class="text-danger">@L["error.anErrorOccurredWhileProcessing"]</h2>
+@if (Model.SecretsUnreadable)
+{
+    <div class="alert alert-warning" role="alert">@L["error.secretsUnreadable", new { folder = LarisVMS.Infrastructure.Security.SecretUnreadableException.KeysFolder }]</div>
+}
 @if (Model.ShowRequestId)
 {
     <p><strong>@L["error.requestId"]</strong> <code>@Model.RequestId</code></p>

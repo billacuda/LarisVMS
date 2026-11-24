@@ -1,0 +1,44 @@
+# LarisVMS recorder node, as a Portainer stack or with "docker compose -f compose.node.yml up -d".
+# The setup wizard's Node step shows this stack with your server, key, and certificate filled in.
+# The node appears under Nodes and records nothing until you approve it there.
+# To update: pull the new image and redeploy. The server doesn't push builds to a container.
+services:
+  larisvms-node:
+    # The base image runs AI detection on an Intel GPU or the CPU. For NVIDIA GPUs, use the -cuda tag
+    # (CUDA and cuDNN) or the -tensorrt tag (adds TensorRT), with the NVIDIA Container Toolkit
+    # installed on this machine and the GPU block below.
+    image: ghcr.io/billacuda/larisvms-node:latest   # or 0.223.0, 0.223.0-cuda, 0.223.0-tensorrt, cuda, tensorrt
+    hostname: larisvms-node-1   # the name this node shows under Nodes
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      LARISVMS_SERVER_URL: 'https://vms.example.com:8444'
+      LARISVMS_REGISTRATION_KEY: 'your-registration-key'   # only used the first time
+      # LARISVMS_SERVER_CERT_THUMBPRINT: '...'   # pins the server's certificate from the first connection
+      LARISVMS_STORAGE_ROOT: '/recordings'
+      # LARISVMS_ARCHIVE_ROOT: '/archive'
+      # LARISVMS_LIVE_PORT: '8554'
+      # Direct streaming to browsers:
+      # LARISVMS_CLIENT_PORT: '8555'
+      # LARISVMS_CLIENT_ENDPOINT_HOST: 'nvr1.example.com'
+      # LARISVMS_CLIENT_PFX_PATH: '/certs/node.pfx'
+      # LARISVMS_CLIENT_PFX_PASSWORD: 'secret'
+    volumes:
+      - larisvms-node-data:/var/lib/larisvms   # registration, machine ID, models
+      - larisvms-node-logs:/var/log/larisvms
+      - /srv/larisvms/recordings:/recordings   # where recordings go on this machine
+      # - /mnt/archive:/archive
+    # Intel GPU (OpenVINO AI detection) and VAAPI video encoding:
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # NVIDIA GPU, with the -cuda or -tensorrt tag:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu, video]
+volumes:
+  larisvms-node-data:
+  larisvms-node-logs:

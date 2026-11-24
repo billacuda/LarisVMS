@@ -4,6 +4,7 @@ using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Core.Localization;
+using LarisVMS.Infrastructure.Security;
 
 namespace LarisVMS.Web.Pages.Setup;
 
@@ -25,6 +26,11 @@ public class DatabaseModel(ISetupService setupService) : PageModel
     [BindProperty] public string? MariaDbPassword { get; set; }
     [BindProperty] public bool MariaDbTrustServerCertificate { get; set; }
 
+    /// <summary>Go on with an existing database whose secrets can't be read here. Offered only after
+    /// the first try said so.</summary>
+    [BindProperty] public bool AcceptUnreadableSecrets { get; set; }
+
+    public bool SecretsUnreadable { get; set; }
     public string? ErrorMessage { get; set; }
 
     public void OnGet() { /* The form starts with its defaults. */ }
@@ -40,8 +46,9 @@ public class DatabaseModel(ISetupService setupService) : PageModel
 
         var request = Provider == DatabaseProvider.MariaDb
             ? new DatabaseSetupRequest(DatabaseProvider.MariaDb, MariaDbHost.Trim(), MariaDbDatabaseName.Trim(),
-                MariaDbUsername?.Trim(), MariaDbPassword, MariaDbTrustServerCertificate, MariaDbPort)
-            : new DatabaseSetupRequest(DatabaseProvider.SqlServer, ServerName, DatabaseName, Username, Password, TrustServerCertificate);
+                MariaDbUsername?.Trim(), MariaDbPassword, MariaDbTrustServerCertificate, MariaDbPort, AcceptUnreadableSecrets)
+            : new DatabaseSetupRequest(DatabaseProvider.SqlServer, ServerName, DatabaseName, Username, Password, TrustServerCertificate,
+                AcceptUnreadableSecrets: AcceptUnreadableSecrets);
         try
         {
             // Once an admin exists, the site's database isn't changed from here.
@@ -55,6 +62,12 @@ public class DatabaseModel(ISetupService setupService) : PageModel
             if (await setupService.SetupDatabaseAsync(request))
                 return Redirect("~/");
             return RedirectToPage("Admin");
+        }
+        catch (Exception ex) when (SecretUnreadableException.IsIn(ex))
+        {
+            SecretsUnreadable = true;
+            ErrorMessage = Loc.T("setup.database.secretsUnreadable", new { folder = SecretUnreadableException.KeysFolder });
+            return Page();
         }
         catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Number is 26 or -1 or 2 or 53 && !ServerName.Contains('\\'))
         {

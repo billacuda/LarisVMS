@@ -1812,6 +1812,9 @@ namespace LarisVMS.Infrastructure.MariaDb.Migrations
                         .HasMaxLength(253)
                         .HasColumnType("varchar(253)");
 
+                    b.Property<bool>("InContainer")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<string>("LastError")
                         .HasMaxLength(500)
                         .HasColumnType("varchar(500)");
@@ -2059,6 +2062,9 @@ namespace LarisVMS.Infrastructure.MariaDb.Migrations
 
                     b.Property<DateTime?>("HostStatsUpdatedAt")
                         .HasColumnType("datetime(6)");
+
+                    b.Property<bool>("InContainer")
+                        .HasColumnType("tinyint(1)");
 
                     b.Property<string>("LastIpAddress")
                         .HasMaxLength(64)

@@ -15,4 +15,5 @@ public record DatabaseSetupRequest(
     string? Username,
     string? Password,
     bool TrustServerCertificate = false,
-    int? Port = null);
+    int? Port = null,
+    bool AcceptUnreadableSecrets = false);

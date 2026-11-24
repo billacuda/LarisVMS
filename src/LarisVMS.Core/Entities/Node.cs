@@ -80,6 +80,11 @@ public class Node
 
     public string? Version { get; set; }
     public string? Platform { get; set; }
+
+    /// <summary>The node runs from a Docker image, as it last reported. It's updated by pulling a new
+    /// image, so the server offers it no build.</summary>
+    public bool InContainer { get; set; }
+
     public NodeStatus Status { get; set; } = NodeStatus.Pending;
     public DateTime? LastSeenAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

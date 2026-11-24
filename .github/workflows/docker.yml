@@ -1,0 +1,154 @@
+name: Docker
+
+# Builds the LarisVMS Docker images from a published release's own .deb packages and pushes them to
+# GitHub's container registry:
+#   ghcr.io/billacuda/larisvms-web     :<version> :<major.minor> :latest
+#   ghcr.io/billacuda/larisvms-proxy   :<version> :<major.minor> :latest
+#   ghcr.io/billacuda/larisvms-node    :<version> :<major.minor> :latest
+#                                      :<version>-cuda :<major.minor>-cuda :cuda
+#                                      :<version>-tensorrt :<major.minor>-tensorrt :tensorrt
+# "latest", "cuda", and "tensorrt" move only for a release that isn't a pre-release.
+#
+# Publish the release with its .deb files attached: the images are built from them. To rebuild a
+# release's images (or try this on a pre-release), run the workflow by hand with its tag.
+# The first push creates the three packages as private; make each one public once in its settings.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build images for (for example v0.223.0)'
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  images:
+    name: Build and push images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      REGISTRY: ghcr.io/billacuda
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Free disk space
+        # The -tensorrt image alone is several GB, and five images are built in turn.
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/dotnet
+          df -h /
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download the release's packages
+        run: |
+          set -eu
+          mkdir -p ctx
+          cp docker/Dockerfile docker/entrypoint.sh docker/nvidia-requirements.txt docker/tensorrt-requirements.txt ctx/
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'larisvms-*_amd64.deb' --dir ctx
+          for kind in web node proxy; do
+            found=$(find ctx -maxdepth 1 -name "larisvms-${kind}_*_amd64.deb" | wc -l)
+            if [ "$found" -eq 0 ]; then
+              echo "::error::Release $TAG has no larisvms-${kind}_*_amd64.deb. Attach the Linux packages to the release, then run this workflow again with the tag."
+              exit 1
+            fi
+            if [ "$found" -gt 1 ]; then
+              echo "::error::Release $TAG has $found larisvms-${kind} .deb packages. Keep only this release's build, then run this workflow again with the tag."
+              exit 1
+            fi
+          done
+          ls -la ctx
+
+      - name: Check the release's files
+        # The images are made from exactly the packages SHA256SUMS.txt lists. The other files aren't
+        # needed here, but a release without them is missing a download on the website.
+        run: |
+          set -eu
+          mkdir -p /tmp/sums
+          if ! gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir /tmp/sums; then
+            echo "::error::Release $TAG has no SHA256SUMS.txt. Attach it to the release, then run this workflow again with the tag."
+            exit 1
+          fi
+          # Written on Windows: CRLF.
+          tr -d '\r' < /tmp/sums/SHA256SUMS.txt > /tmp/sums/all
+          for deb in ctx/larisvms-*_amd64.deb; do
+            name=$(basename "$deb")
+            if ! grep -E "^[0-9a-f]{64}  " /tmp/sums/all | grep -F "  $name" > /tmp/sums/one; then
+              echo "::error::SHA256SUMS.txt doesn't list $name."
+              exit 1
+            fi
+            (cd ctx && sha256sum -c /tmp/sums/one)
+          done
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' > /tmp/sums/assets
+          for pattern in '^LarisVMS-Web-.*\.msi$' '^LarisVMS-Node-.*\.msi$' '^LarisVMS-Proxy-.*\.msi$' \
+                         '^larisvms-web-.*\.x86_64\.rpm$' '^larisvms-node-.*\.x86_64\.rpm$' '^larisvms-proxy-.*\.x86_64\.rpm$'; do
+            if ! grep -qE "$pattern" /tmp/sums/assets; then
+              echo "::warning::Release $TAG has no file matching $pattern."
+            fi
+          done
+
+      - name: Work out the tags
+        run: |
+          set -eu
+          version="${TAG#v}"
+          version="${version%%-*}"
+          minor="${version%.*}"
+          prerelease=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "MINOR=$minor" >> "$GITHUB_ENV"
+          echo "PRERELEASE=$prerelease" >> "$GITHUB_ENV"
+          echo "Version $version (minor $minor), pre-release: $prerelease"
+
+      - name: Take the CUDA provider from the web package
+        # The -cuda and -tensorrt node images carry it, so a container never downloads it from the server.
+        run: |
+          set -eu
+          mkdir -p /tmp/web ctx/cuda-provider
+          dpkg-deb -x ctx/larisvms-web_*_amd64.deb /tmp/web
+          find /tmp/web -path '*/cuda-provider/linux-x64/*' -type f -exec cp {} ctx/cuda-provider/ \;
+          rm -rf /tmp/web
+          ls -la ctx/cuda-provider
+          test -s ctx/cuda-provider/libonnxruntime_providers_cuda.so
+
+      - name: Sign in to ghcr.io
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build, check, and push
+        run: |
+          set -eu
+          # build <kind> <variant> <suffix> <floating tag for a full release>
+          build() {
+            kind=$1; variant=$2; suffix=$3; floating=$4
+            image="$REGISTRY/larisvms-$kind"
+            tags="-t $image:$VERSION$suffix -t $image:$MINOR$suffix"
+            if [ "$PRERELEASE" != true ]; then tags="$tags -t $image:$floating"; fi
+            echo "::group::$image:$VERSION$suffix"
+            DOCKER_BUILDKIT=1 docker build ctx -f ctx/Dockerfile \
+              --build-arg KIND="$kind" --build-arg VARIANT="$variant" --build-arg VERSION="$VERSION" $tags
+            # The program inside must report this release's version.
+            reported=$(docker run --rm "$image:$VERSION$suffix" --version)
+            echo "$image:$VERSION$suffix reports $reported"
+            case "$reported" in "$VERSION"*) ;; *) echo "::error::$image:$VERSION$suffix reports $reported, not $VERSION"; exit 1 ;; esac
+            docker image ls "$image"
+            docker push --all-tags "$image"
+            docker image rm $(docker image ls -q "$image" | sort -u) || true
+            docker builder prune -af > /dev/null
+            echo "::endgroup::"
+          }
+          build web base "" latest
+          build proxy base "" latest
+          build node base "" latest
+          build node cuda -cuda cuda
+          build node tensorrt -tensorrt tensorrt
+
+      - name: Sign out
+        if: always()
+        run: docker logout ghcr.io

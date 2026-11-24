@@ -53,7 +53,9 @@ public sealed class ProxyWorker(ProxyApiClient api, ProxyConfig registration, Pr
                     certHolder is { Current: not null } ? endpoint.Port : null,
                     certHolder?.Current?.NotAfter.ToUniversalTime(),
                     certHolder is not null ? certHolder.IsSelfSigned : null,
-                    certHolder?.LastError, nodeHealthReports), stoppingToken);
+                    certHolder?.LastError, nodeHealthReports,
+                    // A Docker image is updated by pulling a new one, so the server offers it no build.
+                    InContainer: LarisVMS.Core.RunningInContainer.Value), stoppingToken);
 
                 // Received over a connection that passed the current check (see NodeWorker).
                 if (heartbeat.ServerCertificateCheck is { } certificateCheck)

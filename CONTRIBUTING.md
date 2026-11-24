@@ -80,16 +80,41 @@ Translated Help ships with the app. It's also published on
 ### Building and testing
 
 See [Building from source](README.md#-building-from-source) in the README. You need the .NET SDK
-version in `global.json` (the one releases are built with) or a newer .NET 10 SDK. In short:
+version in `global.json` (the one releases are built with) or a newer .NET 10 SDK, on Windows or
+Linux. The `dotnet` commands are the same in PowerShell and bash:
 
-```powershell
+```bash
 dotnet tool restore
 dotnet build
 dotnet test --filter "FullyQualifiedName~<area you changed>"
 ```
 
+The build scripts and tools are PowerShell 7 scripts. On Linux, run them with `pwsh`, using forward
+slashes:
+
+```powershell
+.\tools\add-migration.ps1 <Name>                 # Windows
+.\tools\locale-check.ps1 es-AR.json
+.\build-installers.ps1
+```
+
+```bash
+pwsh ./tools/add-migration.ps1 <Name>            # Linux
+pwsh ./tools/locale-check.ps1 es-AR.json
+pwsh ./build-installers.ps1 -Platforms linux-x64
+```
+
+On Linux, the tests and from-source runs can't write to `/var/lib/larisvms`, `/var/log/larisvms`, or
+`/etc/larisvms` without root. Point them somewhere else first:
+
+```bash
+export LARISVMS_DATA_DIR=$HOME/larisvms/data LARISVMS_LOG_DIR=$HOME/larisvms/log LARISVMS_CONFIG_DIR=$HOME/larisvms/config
+```
+
 The full test suite is large. While you work, run the tests for the area you changed, and say which
-tests you ran when you send the change.
+tests you ran when you send the change. The whole suite also runs on Linux in CI, so write paths
+with `Path.Combine` rather than `\`, and use `TestPaths.Native` for test data written as Windows
+paths.
 
 ### Pull requests
 

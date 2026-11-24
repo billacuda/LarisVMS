@@ -16,6 +16,16 @@ public sealed class MachineSecretTests
     private static readonly byte[] Entropy = "LarisVMS.Test"u8.ToArray();
 
     [Fact]
+    public void TheDataFoldersMachineIdComesFirst()
+    {
+        // The Docker images keep their machine ID in the data volume, so a recreated container can
+        // still read its secrets; on a normal install that file doesn't exist and /etc/machine-id is used.
+        var paths = MachineSecret.MachineIdPaths;
+        Assert.Equal(Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "machine-id"), paths[0]);
+        Assert.Contains("/etc/machine-id", paths);
+    }
+
+    [Fact]
     public void RoundTripsOnThisMachine()
     {
         var data = Encoding.UTF8.GetBytes("{\"secret\":\"x\"}");

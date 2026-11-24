@@ -168,7 +168,12 @@ else
                                 <span role="img" title="@L["admin.nodes.encryptedWaiting"]" aria-label="@L["admin.nodes.encryptedWaiting"]">⏳</span>
                             }
                         </td>
-                        <td>@n.Version<div class="small text-muted">@LarisVMS.Web.Helpers.PlatformLabels.Display(n.Platform)</div></td>
+                        <td>@n.Version<div class="small text-muted">@LarisVMS.Web.Helpers.PlatformLabels.Display(n.Platform, n.InContainer)</div>
+                            @if (ContainerBehind(n))
+                            {
+                                <div class="small text-warning">@L["admin.nodes.pullNewImage", new { version = ApprovedVersionByPlatform[n.Platform ?? LarisVMS.Core.PlatformId.Legacy] }]</div>
+                            }
+                        </td>
                         <td>@cams</td>
                         <td data-sort-value="@((n.StorageTotalBytes is { } t && n.StorageFreeBytes is { } f) ? t - f : -1)">
                             <NodeStorageBar Node="n" DaysRemaining="DaysRemainingMap.GetValueOrDefault(n.Id)" ArchiveDaysRemaining="ArchiveDaysRemainingMap.GetValueOrDefault(n.Id)" />
@@ -291,6 +296,12 @@ else
     private static Guid FormGuid(Microsoft.Extensions.Primitives.StringValues v) => Guid.TryParse(v.ToString(), out var g) ? g : Guid.Empty;
 
     private List<Node> NodeRows { get; set; } = [];
+    private Dictionary<string, string> ApprovedVersionByPlatform { get; set; } = [];
+
+    /// <summary>A node in Docker running an older version than the approved build for its platform.</summary>
+    private bool ContainerBehind(Node n) =>
+        n.InContainer && ApprovedVersionByPlatform.TryGetValue(n.Platform ?? LarisVMS.Core.PlatformId.Legacy, out var approved)
+        && LarisVMS.Core.NodeVersionComparer.IsNewer(approved, n.Version);
     private Dictionary<Guid, int> CameraCountByNode { get; set; } = [];
     private Dictionary<Guid, double?> DaysRemainingMap { get; set; } = [];
     private Dictionary<Guid, double?> ArchiveDaysRemainingMap { get; set; } = [];
@@ -343,6 +354,11 @@ else
     private async Task LoadAsync()
     {
         NodeRows = await NodeService.ListAsync();
+        // Nodes in Docker aren't sent builds; this is what each would get, to tell when to pull a new image.
+        ApprovedVersionByPlatform = [];
+        foreach (var platform in NodeRows.Where(n => n.InContainer).Select(n => n.Platform ?? LarisVMS.Core.PlatformId.Legacy).Distinct())
+            if (await NodeBuildService.GetLatestForPlatformAsync(platform) is { } latest)
+                ApprovedVersionByPlatform[platform] = latest.Version;
         var cameras = await CameraService.ListAsync();
         CameraCountByNode = cameras
             .Where(c => c.NodeId is not null)

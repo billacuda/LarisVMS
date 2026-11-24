@@ -616,7 +616,9 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     ClientEndpointCertSha256: clientEndpoint.Enabled && certHolder?.Current is { } served
                         ? CameraCertificatePins.Thumbprint(served) : null,
                     // Camera certificates refused under pinning, for the server's audit log.
-                    CameraCertificateRefusals: refusals), ct);
+                    CameraCertificateRefusals: refusals,
+                    // A Docker image is updated by pulling a new one, so the server offers it no build.
+                    InContainer: LarisVMS.Core.RunningInContainer.Value), ct);
                 }
                 catch
                 {

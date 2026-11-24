@@ -10,6 +10,7 @@ Common problems, and where to look.
 - **Nodes**: `%ProgramData%\LarisVMS\logs\node-*.log` on each node.
 - **AI detection**: `%ProgramData%\LarisVMS\logs\vision-*.log` on each node.
 - **Auto-update**: `%ProgramData%\LarisVMS\logs\updater-*.log` on each node or proxy.
+- **On Linux**, the same files are in `/var/log/larisvms`. Each service's own output, including why it didn't start, is in the systemd journal: `journalctl -u larisvms-node` (or `larisvms-web`, `larisvms-proxy`; add `-f` to follow it), and `systemctl status larisvms-node` shows whether it's running. An update is installed by `larisvms-node-update.service`: `journalctl -u larisvms-node-update`.
 
 ## A camera isn't recording
 
@@ -48,7 +49,7 @@ The node stalled, not the browser or the network. Look in the node log for `Node
 
 ## AI detection stops but recording carries on
 
-Usually the GPU driver was reset. The Windows System event log shows `nvlddmkm` event 153 or `Display` event 4101 at that moment. The vision service restarts itself after 60 seconds without a result. Repeated resets point at the GPU, its driver, cooling, or power.
+Usually the GPU driver was reset. The Windows System event log shows `nvlddmkm` event 153 or `Display` event 4101 at that moment; on Linux, `journalctl -k` shows an `NVRM: Xid` line. The vision service restarts itself after 60 seconds without a result. Repeated resets point at the GPU, its driver, cooling, or power.
 
 ## A node or proxy didn't come back after an update
 

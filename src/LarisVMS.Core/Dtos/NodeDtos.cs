@@ -66,7 +66,10 @@ public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long
     string? ClientEndpointCertSha256 = null,
     /// <summary>Camera certificates this node refused under pinning since the last heartbeat (at
     /// most one per address an hour). Null when there were none, or from an older node.</summary>
-    List<NodeCameraCertificateRefusal>? CameraCertificateRefusals = null);
+    List<NodeCameraCertificateRefusal>? CameraCertificateRefusals = null,
+    /// <summary>True when the node runs from a Docker image (LARISVMS_CONTAINER=1): the server then
+    /// offers it no update, since it's updated by pulling a new image. Null from an older node.</summary>
+    bool? InContainer = null);
 
 /// <summary>A camera certificate a node refused: the camera's address, the SHA-256 of the
 /// certificate it presented, and when.</summary>

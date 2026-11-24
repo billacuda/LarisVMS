@@ -40,9 +40,33 @@ public sealed class ProxyEndpointConfig
         }
     }
 
+    /// <summary>Overlays the <c>LARISVMS_CLIENT_*</c> environment variables on the local file, so a
+    /// Docker container can be set up from its compose file alone. A variable that's set wins over the
+    /// file; unset ones leave the file's value.</summary>
+    internal static ProxyEndpointLocalConfig? WithEnvironment(ProxyEndpointLocalConfig? local, Func<string, string?> env)
+    {
+        var port = int.TryParse(env("LARISVMS_CLIENT_PORT"), out var p) && p is > 0 and <= 65535 ? p : (int?)null;
+        var pfxPath = env("LARISVMS_CLIENT_PFX_PATH");
+        var pfxPassword = env("LARISVMS_CLIENT_PFX_PASSWORD");
+        var insecure = env("LARISVMS_CLIENT_ALLOW_INSECURE") is { Length: > 0 } i ? i is "1" or "true" or "True" : (bool?)null;
+        var host = env("LARISVMS_CLIENT_ENDPOINT_HOST");
+        if (port is null && string.IsNullOrEmpty(pfxPath) && string.IsNullOrEmpty(pfxPassword) && insecure is null && string.IsNullOrEmpty(host))
+            return local;
+
+        local ??= new ProxyEndpointLocalConfig();
+        return local with
+        {
+            Port = port ?? local.Port,
+            PfxPath = string.IsNullOrEmpty(pfxPath) ? local.PfxPath : pfxPath,
+            PfxPassword = string.IsNullOrEmpty(pfxPassword) ? local.PfxPassword : pfxPassword,
+            AllowInsecure = insecure ?? local.AllowInsecure,
+            Host = string.IsNullOrEmpty(host) ? local.Host : host,
+        };
+    }
+
     public static ProxyEndpointConfig Resolve(ProxyConfigResponse? serverCached)
     {
-        var local = ReadLocal();
+        var local = WithEnvironment(ReadLocal(), Environment.GetEnvironmentVariable);
 
         var port = local is { Port: > 0 } ? local.Port : DefaultPort;
         var pfxPath = !string.IsNullOrWhiteSpace(local?.PfxPath) ? local!.PfxPath : serverCached?.CertPfxPath;

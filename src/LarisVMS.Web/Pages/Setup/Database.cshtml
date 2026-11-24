@@ -84,6 +84,15 @@
         </div>
     </div>
 
+    @if (Model.SecretsUnreadable)
+    {
+        <div class="form-check mb-3">
+            <input asp-for="AcceptUnreadableSecrets" class="form-check-input" />
+            <label class="form-check-label" asp-for="AcceptUnreadableSecrets">@L["setup.database.useItAnyway"]</label>
+            <div class="form-text">@L["setup.database.useItAnywayHint"]</div>
+        </div>
+    }
+
     <button type="submit" class="btn btn-primary">@L["setup.database.createDatabaseContinue"]</button>
 </form>
 <script nonce="@Csp.Value">
