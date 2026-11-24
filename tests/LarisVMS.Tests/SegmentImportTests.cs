@@ -27,12 +27,13 @@ public class SegmentImportTests
         try
         {
             var cameraId = Guid.NewGuid();
-            // Linux can't set a creation time (it is the real birth time there), so the start is
-            // whatever the file system recorded, and the end is a minute after it.
+            // Linux can't set a creation time, and where the file system has no birth time .NET
+            // reports the change time, which setting the write time moves. So set the write time
+            // first, then read back whatever start the file system reports.
             var file = WriteFile(dir, "a.mp4", "data");
-            var start = file.CreationTimeUtc;
-            file.LastWriteTimeUtc = start.AddMinutes(1);
+            file.LastWriteTimeUtc = DateTime.UtcNow.AddMinutes(5);
             file.Refresh();
+            var start = file.CreationTimeUtc;
 
             var result = StorageManager.SelectImportableSegments(cameraId, [file], []);
 
@@ -40,7 +41,7 @@ public class SegmentImportTests
             Assert.Equal(cameraId, item.CameraId);
             Assert.Equal("Main", item.StreamRole);
             Assert.Equal(start, item.StartUtc);
-            Assert.Equal(start.AddMinutes(1), item.EndUtc);
+            Assert.Equal(file.LastWriteTimeUtc, item.EndUtc);
             Assert.Equal(file.FullName, item.FilePath);
             Assert.Equal(4, item.SizeBytes);
         }

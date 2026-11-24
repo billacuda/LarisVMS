@@ -153,7 +153,11 @@ public sealed class LatestFrameSlot : IDisposable
 
             lock (_gate)
             {
-                if (_disposed) return null;
+                if (_disposed)
+                {
+                    TryRelease(); // pass Dispose's wake-up on to any other taker
+                    return null;
+                }
                 if (!_hasFrame) continue; // a concurrent Resize discarded the frame that woke us
 
                 if (destination.Length < FrameBytes)
@@ -178,6 +182,15 @@ public sealed class LatestFrameSlot : IDisposable
             _disposed = true;
         }
 
-        _available.Dispose();
+        // Wake a TakeAsync that is waiting, which then sees _disposed and returns null. Disposing the
+        // semaphore instead never wakes an async waiter: it waited forever. The semaphore is left
+        // undisposed; nothing uses its wait handle, so there is nothing to free.
+        TryRelease();
+    }
+
+    private void TryRelease()
+    {
+        try { _available.Release(); }
+        catch (SemaphoreFullException) { /* already signalled */ }
     }
 }
