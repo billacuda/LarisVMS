@@ -1,0 +1,159 @@
+@page "/Exports"
+@attribute [Authorize("Exports.View")]
+@using LarisVMS.Core.Enums
+@using LarisVMS.Core.Interfaces
+@inject IExportService ExportService
+@inject ICameraService CameraService
+@inject INodeService NodeService
+@inject ICameraAccessService CameraAccess
+@inject IPermissionService Permissions
+
+<PageTitle>@L["nav.exports"] - @AppName</PageTitle>
+
+<div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
+    <h1>@L["nav.exports"]</h1>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary" href="/Exports/Verify"><span aria-hidden="true">🔏</span> @L["exports.verifyAnExport"]</a>
+        <button type="button" class="btn btn-outline-secondary" data-action="reload">@L["common.refresh"]</button>
+    </div>
+</div>
+
+@if (Jobs.Count == 0)
+{
+    <p class="text-muted" id="exportsEmptyMessage">@L.Markup("exports.noExportsYet")</p>
+}
+<div class="table-responsive" id="exportsTableWrap" style="@(Jobs.Count == 0 ? "display:none" : "")">
+    <table class="table table-hover align-middle" id="exportsTable">
+        <thead>
+            <tr>
+                <th>@L["exports.requested"]</th>
+                <th>@L["exports.range"]</th>
+                <th>@L["common.status"]</th>
+                <th>@L["nav.cameras"]</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody id="exportsTableBody">
+            @foreach (var job in Jobs)
+            {
+                var jobBadgeClass = job.Status switch
+                {
+                    ExportJobStatus.Queued => "text-bg-secondary",
+                    ExportJobStatus.Running => "text-bg-primary",
+                    ExportJobStatus.Done => "text-bg-success",
+                    ExportJobStatus.Failed => "text-bg-danger",
+                    _ => "text-bg-secondary"
+                };
+                var jobInProgress = job.Status is ExportJobStatus.Queued or ExportJobStatus.Running;
+                <tr data-job-id="@job.Id">
+                    <td>
+                        <time datetime="@job.CreatedUtc.ToUtcIso()" data-local="g">@job.CreatedUtc.ToLocalTime().ToString("g")</time>
+                        <div class="text-muted small">@L["exports.byUser", new { user = job.RequestedByUserName ?? L["exports.unknownUser"].Value }]</div>
+                    </td>
+                    <td class="small"><time datetime="@job.FromUtc.ToUtcIso()" data-local="g">@job.FromUtc.ToLocalTime().ToString("g")</time> &ndash; <time datetime="@job.ToUtc.ToUtcIso()" data-local="g">@job.ToUtc.ToLocalTime().ToString("g")</time></td>
+                    <td><span class="badge @jobBadgeClass">@StatusLabel(job.Status.ToString())</span></td>
+                    <td>
+                        <ul class="list-unstyled mb-0 small export-items">
+                            @foreach (var item in job.Items)
+                            {
+                                var itemBadgeClass = item.Status switch
+                                {
+                                    ExportItemStatus.Queued => "text-bg-secondary",
+                                    ExportItemStatus.Running => "text-bg-primary",
+                                    ExportItemStatus.Done => "text-bg-success",
+                                    ExportItemStatus.Failed => "text-bg-danger",
+                                    _ => "text-bg-secondary"
+                                };
+                                <li>
+                                    <span>
+                                    @(CameraNames.GetValueOrDefault(item.CameraId) ?? L["common.deletedCamera"].Value)
+                                    @if (item.NodeId is { } itemNodeId && NodeNames.TryGetValue(itemNodeId, out var itemNodeName))
+                                    {
+                                        <span class="text-muted">(@itemNodeName)</span>
+                                    }
+                                    </span>
+                                    <span>
+                                    <span class="badge @itemBadgeClass">@StatusLabel(item.Status.ToString())</span>
+                                    @if (item.RedactionJson is not null)
+                                    {
+                                        <span class="badge text-bg-dark" title="@L["exports.areasWereBlackedOutIn"]">@L["exports.redacted"]</span>
+                                    }
+                                    @if (item.ConvertedFilePath is not null)
+                                    {
+                                        <span class="badge text-bg-info" title="@L["js.exports.h264CopyTitle"]">@L["js.exports.h264Copy"]</span>
+                                    }
+                                    </span>
+                                    <span>
+                                    @if (item.Status == ExportItemStatus.Done)
+                                    {
+                                        <a class="btn btn-sm btn-outline-primary ms-1" href="/export-download/@item.Id">
+                                            <span aria-hidden="true">⬇️</span> @L["js.exports.download"]@(item.OutputSizeBytes.HasValue ? $" ({ByteFormat.Format(item.OutputSizeBytes.Value)})" : "")
+                                        </a>
+                                        @if (item.ManifestSignedUtc is not null)
+                                        {
+                                            <a class="btn btn-sm btn-outline-secondary ms-1" href="/api/exports/items/@item.Id/manifest"
+                                               title="@L["exports.signedManifestProvesThisFile"]">
+                                                <span aria-hidden="true">🔏</span> @L["exports.manifest"]
+                                            </a>
+                                        }
+                                    }
+                                    else if (item.Status == ExportItemStatus.Failed && item.ErrorMessage is not null)
+                                    {
+                                        <span class="text-danger ms-1" title="@item.ErrorMessage">&#9888; @item.ErrorMessage</span>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary ms-1 js-retry-export" data-item-id="@item.Id">@L["common.retry"]</button>
+                                    }
+                                    </span>
+                                </li>
+                            }
+                        </ul>
+                    </td>
+                    <td class="text-nowrap">
+                        @if (job.IncludePlayer && !jobInProgress && job.Items.Any(i => i.Status == ExportItemStatus.Done))
+                        {
+                            <a class="btn btn-sm btn-primary" href="/api/exports/@job.Id/package" title="@L["js.exports.packageTitle"]">
+                                <span aria-hidden="true">📦</span> @L["js.exports.downloadPackage"]
+                            </a>
+                        }
+                        @if (!jobInProgress)
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-danger js-delete-export" data-job-id="@job.Id" title="@L["exports.deleteThisExport"]">&#128465;</button>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+<SectionContent SectionName="PageScripts">
+    <PageScript Src="/js/exports.js" />
+</SectionContent>
+
+@code {
+    private string StatusLabel(string status) => status switch
+    {
+        "Queued" => L["exports.statusQueued"],
+        "Running" => L["exports.statusRunning"],
+        "Done" => L["exports.statusDone"],
+        "Failed" => L["exports.statusFailed"],
+        _ => status
+    };
+
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    private List<LarisVMS.Core.Entities.ExportJob> Jobs { get; set; } = [];
+    private Dictionary<Guid, string> CameraNames { get; set; } = [];
+    private Dictionary<Guid, string> NodeNames { get; set; } = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity());
+        var access = await LarisVMS.Web.Services.ExportAccess.ForAsync(user, CameraAccess, Permissions);
+        Jobs = (await ExportService.ListJobsAsync()).Where(access.CanSee).ToList();
+        CameraNames = (await CameraService.ListAsync()).ToDictionary(c => c.Id, c => c.Name);
+        NodeNames = (await NodeService.ListAsync()).ToDictionary(n => n.Id, n => n.Name);
+    }
+}
