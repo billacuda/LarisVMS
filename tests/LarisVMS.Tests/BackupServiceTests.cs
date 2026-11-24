@@ -30,7 +30,10 @@ public class BackupServiceTests
     [Fact]
     public void ValidateDirectoryAcceptsAnOrdinaryAbsolutePath()
     {
+        // Windows shapes on any OS: the database server can be Windows while this one runs Linux.
         Assert.Null(BackupService.ValidateDirectory(@"D:\Backups\LarisVMS"));
+        Assert.Null(BackupService.ValidateDirectory(@"\\files1\backups\LarisVMS"));
+        Assert.Null(BackupService.ValidateDirectory("/var/backups/larisvms"));
     }
 
     [Theory]

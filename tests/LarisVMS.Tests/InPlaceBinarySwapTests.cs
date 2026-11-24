@@ -62,7 +62,9 @@ public sealed class InPlaceBinarySwapTests : IDisposable
     public void CleanUpRemovesOnlyOldExes()
     {
         File.WriteAllText(Current + InPlaceBinarySwap.OldSuffix, "x");
-        var other = Path.Combine(_dir, "notes.old");
+        // On Linux programs have no extension, so any "X.old" is an old program there: keep a
+        // non-matching name instead.
+        var other = Path.Combine(_dir, OperatingSystem.IsWindows() ? "notes.old" : "notes.old.txt");
         File.WriteAllText(other, "keep");
 
         InPlaceBinarySwap.CleanUp(_dir);

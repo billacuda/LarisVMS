@@ -27,8 +27,12 @@ public class SegmentImportTests
         try
         {
             var cameraId = Guid.NewGuid();
-            var start = new DateTime(2026, 8, 21, 17, 0, 0, DateTimeKind.Utc);
-            var file = WriteFile(dir, "a.mp4", "data", created: start, written: start.AddMinutes(1));
+            // Linux can't set a creation time (it is the real birth time there), so the start is
+            // whatever the file system recorded, and the end is a minute after it.
+            var file = WriteFile(dir, "a.mp4", "data");
+            var start = file.CreationTimeUtc;
+            file.LastWriteTimeUtc = start.AddMinutes(1);
+            file.Refresh();
 
             var result = StorageManager.SelectImportableSegments(cameraId, [file], []);
 

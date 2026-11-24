@@ -313,12 +313,19 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
             return Loc.T("server.backup.noBackupDirectoryIsConfigured");
         if (directory.IndexOfAny(['\'', ';', '[', ']', '\"']) >= 0)
             return Loc.T("server.backup.theBackupDirectoryContainsInvalid");
-        if (!Path.IsPathRooted(directory))
+        if (!IsAbsolutePath(directory))
             return Loc.T("server.backup.theBackupDirectoryMustBe");
         if (allowedRoots is { Count: > 0 } && !IsUnderAny(directory, allowedRoots))
             return Loc.T("server.backup.folderNotAllowed");
         return null;
     }
+
+    /// <summary>Rooted on this OS, or a Windows drive or UNC path whatever this OS is: SQL Server writes
+    /// the backup on its own machine, which can be Windows while this server runs on Linux.</summary>
+    private static bool IsAbsolutePath(string path) =>
+        Path.IsPathRooted(path)
+        || (path.Length >= 3 && char.IsAsciiLetter(path[0]) && path[1] == ':' && path[2] is '\\' or '/')
+        || path.StartsWith(@"\\", StringComparison.Ordinal);
 
     /// <summary>Whether <paramref name="directory"/> is one of <paramref name="roots"/> or below one.</summary>
     public static bool IsUnderAny(string directory, IReadOnlyList<string> roots)

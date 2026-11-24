@@ -296,7 +296,7 @@ public class ExportPlayerTests
     [Fact]
     public void TheCopySitsBesideTheExportAndIsReEncodedToH264()
     {
-        Assert.Equal(Path.Combine(@"D:\rec\exports", "cam_x.h264.mp4"), ExportRunner.ConvertedPath(@"D:\rec\exports\cam_x.mp4"));
+        Assert.Equal(Path.Combine(TestPaths.Native(@"D:\rec\exports"), "cam_x.h264.mp4"), ExportRunner.ConvertedPath(TestPaths.Native(@"D:\rec\exports\cam_x.mp4")));
         var args = ExportRunner.BuildConvertArgs("in.mp4", "out.h264.mp4", null);
         Assert.Contains("libx264", args);
         Assert.Contains("+faststart", args);

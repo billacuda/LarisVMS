@@ -25,11 +25,11 @@ public sealed class StorageManagerExpiredSegmentTests : IDisposable
         @"D:\Video", @"D:\Video\cam-858a905f-17b4-4f94-9296-2cc03ebd9780\sub")]
     public void AcceptsTheRecordersOwnLayoutOnAnyRoot(string path, string expectedRoot, string expectedStreamDir)
     {
-        var layout = StorageManager.TryGetSegmentLayout(path, Camera);
+        var layout = StorageManager.TryGetSegmentLayout(TestPaths.Native(path), Camera);
 
         Assert.NotNull(layout);
-        Assert.Equal(expectedRoot, layout.Value.RootDir, ignoreCase: true);
-        Assert.Equal(expectedStreamDir, layout.Value.StreamDir, ignoreCase: true);
+        Assert.Equal(TestPaths.Native(expectedRoot), layout.Value.RootDir, ignoreCase: true);
+        Assert.Equal(TestPaths.Native(expectedStreamDir), layout.Value.StreamDir, ignoreCase: true);
     }
 
     [Theory]
@@ -42,14 +42,14 @@ public sealed class StorageManagerExpiredSegmentTests : IDisposable
     [InlineData("")]
     public void RefusesAnythingElse(string path)
     {
-        Assert.Null(StorageManager.TryGetSegmentLayout(path, Camera));
+        Assert.Null(StorageManager.TryGetSegmentLayout(TestPaths.Native(path), Camera));
     }
 
     [Fact]
     public void PendingDeletionsSurviveARestartAndClearWhenEmpty()
     {
         var path = Path.Combine(_dir, "pending.json");
-        List<string> pending = [@"D:\Video\cam-x\main\a.mp4", @"\\nas\share\cam-x\main\b.mp4"];
+        List<string> pending = [TestPaths.Native(@"D:\Video\cam-x\main\a.mp4"), TestPaths.Native(@"\\nas\share\cam-x\main\b.mp4")];
 
         StorageManager.SavePendingDeletions(path, pending);
         Assert.Equal(pending, StorageManager.LoadPendingDeletions(path));

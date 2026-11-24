@@ -2,3 +2,8 @@
 # unlike the old export.py (see git history), this is a plain download, not an export step, so it
 # needs nothing beyond the Hugging Face Hub client.
 huggingface-hub==1.28.0
+# Raised past the versions huggingface-hub would otherwise resolve, for security fixes
+# (OSV-Scanner: PYSEC-2026-4024/4025, PYSEC-2026-4320, PYSEC-2026-215).
+anyio==4.14.2
+certifi==2026.10.18
+idna==3.15

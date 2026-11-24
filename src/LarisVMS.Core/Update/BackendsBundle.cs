@@ -62,7 +62,8 @@ public static class BackendsBundle
     {
         try
         {
-            var path = Path.Combine(installDirectory, FolderName, StampFileName);
+            // installDirectory is the program's own folder (AppContext.BaseDirectory), never user input.
+            var path = Path.Combine(installDirectory, FolderName, StampFileName); // nosemgrep: csharp.lang.security.filesystem.unsafe-path-combine.unsafe-path-combine
             return File.Exists(path) ? File.ReadAllText(path).Trim().ToLowerInvariant() : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

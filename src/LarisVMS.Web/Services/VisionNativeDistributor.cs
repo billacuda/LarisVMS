@@ -26,6 +26,7 @@ public sealed class VisionNativeDistributor(IHttpClientFactory httpFactory, ICon
 {
     private const string ReleaseDownloadBase = "https://github.com/billacuda/LarisVMS/releases/download";
     private static readonly TimeSpan RetryAfterFailure = TimeSpan.FromHours(1);
+    private static readonly JsonSerializerOptions ManifestJson = new() { PropertyNameCaseInsensitive = true };
 
     // SHA-256 is expensive on a ~300 MB file; cache it keyed on the file's path + last-write time so a
     // reseed invalidates it.
@@ -99,7 +100,7 @@ public sealed class VisionNativeDistributor(IHttpClientFactory httpFactory, ICon
         {
             if (!File.Exists(CudaProviderFiles.ManifestPath)) return null;
             var all = JsonSerializer.Deserialize<Dictionary<string, ManifestEntry>>(
-                File.ReadAllText(CudaProviderFiles.ManifestPath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                File.ReadAllText(CudaProviderFiles.ManifestPath), ManifestJson);
             return all is not null && all.TryGetValue(platform, out var entry)
                 && !string.IsNullOrWhiteSpace(entry.Asset) && entry.Sha256 is { Length: 64 }
                 ? entry

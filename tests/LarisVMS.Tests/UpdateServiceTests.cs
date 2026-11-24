@@ -125,6 +125,9 @@ public class UpdateServiceTests
     {
         var content = "fake LarisVMS.Vision.Service.exe bytes"u8.ToArray();
         var expectedSha = await Sha256Async(content);
+        // TryApplyAsync creates the update folder before staging in real use; a fresh data folder
+        // (CI's LARISVMS_DATA_DIR) doesn't have one yet.
+        Directory.CreateDirectory(Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "update"));
         using var http = new HttpClient(new StubHandler(content));
         var service = new UpdateService(NewConfig(), NullLogger.Instance, new FakeLifetime());
 

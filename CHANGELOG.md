@@ -76,6 +76,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Installer checksums.** build-installers.ps1 no longer fails while writing SHA256SUMS.txt after
   building the Linux packages, because nFPM's progress output no longer gets mixed into the list of
   built files.
+- **Exports page missing from fresh clones.** The `exports/` rule in .gitignore also matched the
+  Exports page's folder, because Git on Windows ignores case, so builds from a fresh clone (including
+  CI's Linux packages) had no Exports page. The media-folder rules now match only at the repo root.
+- **Backup folder with a Linux server.** A Web server on Linux now accepts a Windows backup folder
+  such as `D:\Backups`, since SQL Server writes the backup on its own machine, which can be Windows.
+- **Linux CI tests.** Tests no longer assume Windows paths or a writable `/var/lib/larisvms`. A test
+  that hangs is stopped after 5 minutes and named in the log instead of using up the hour.
 - **OSV-Scanner.** The scan no longer passes `--skip-git`, which OSV-Scanner 2 removed, and it now
   grants the `actions: read` permission that version 2 needs to start, so it runs again after the
   Dependabot update.
@@ -87,6 +94,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Semgrep findings.** The SQL Server "database exists" check uses a query parameter, Dependabot
   waits a week after a release before proposing it, and a live view log line no longer builds its
   format string from a variable. The other findings were reviewed and dismissed.
+- **Model download tool dependencies.** tools/export-models now pins anyio 4.14.2, certifi
+  2026.10.18, and idna 3.15, which fix the advisories OSV-Scanner reported in the versions
+  huggingface-hub pulled in.
 
 ## [0.222.2] - 2026-11-21
 

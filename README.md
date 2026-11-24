@@ -103,7 +103,7 @@ Settings are inherited **global → node → camera**, and the most specific val
 ## 📋 Requirements
 
 - **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
-- **Server:** SQL Server (Express works) using SQL or Integrated authentication. For SQL Server Express, the server name is `.\SQLEXPRESS`. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
+- **Server:** SQL Server (Express works) using SQL or Integrated authentication. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
 - **MariaDB:** MariaDB 10.11 or later can be used instead of SQL Server, with a MariaDB user and password. Built-in backups need the MariaDB client tools (`mariadb-dump`) on the LarisVMS server.
 - **.NET version:** developed with the .NET SDK 10.0.404. The 0.222.2 installers were built with it and include the .NET 10.0.15 runtime (ASP.NET Core 10.0.15).
 - **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).

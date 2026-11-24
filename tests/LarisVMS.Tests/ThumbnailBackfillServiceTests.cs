@@ -24,7 +24,7 @@ public sealed class ThumbnailBackfillServiceTests : IDisposable
 
     private string WriteSegment(string relativePath, DateTime lastWriteUtc)
     {
-        var path = Path.Combine(_mainDir, relativePath);
+        var path = Path.Combine(_mainDir, relativePath.Replace('\\', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, [1, 2, 3]);
         File.SetLastWriteTimeUtc(path, lastWriteUtc);
@@ -33,7 +33,7 @@ public sealed class ThumbnailBackfillServiceTests : IDisposable
 
     private void WriteThumbnail(string relativePathUnderThumbs)
     {
-        var path = Path.Combine(_thumbsDir, relativePathUnderThumbs);
+        var path = Path.Combine(_thumbsDir, relativePathUnderThumbs.Replace('\\', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, [4, 5, 6]);
     }

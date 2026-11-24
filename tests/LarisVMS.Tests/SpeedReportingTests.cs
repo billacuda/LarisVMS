@@ -155,7 +155,7 @@ public class SpeedReportingTests
         var m = Assert.Single(markers);
         Assert.Equal("50 mph", m.SpeedText);
         Assert.True(m.OverLimit);
-        Assert.Equal("blue", m.Color);
+        Assert.Equal(LarisVMS.Core.ObjectColors.Display("blue"), m.Color);   // shown as a display name
         Assert.Equal("Street", m.TrapName);
         Assert.Equal(T0, m.AtUtc);
     }

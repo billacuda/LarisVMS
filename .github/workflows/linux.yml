@@ -25,13 +25,13 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
   DOTNET_NOLOGO: '1'
   NFPM_VERSION: '2.48.0'
-  NFPM_SHA256: '6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750'
+  NFPM_SHA256: '6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750' # DevSkim: ignore DS173237 (a public release checksum, not a secret)
 
 jobs:
   test:
     name: Tests (Linux)
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -42,12 +42,20 @@ jobs:
 
       - name: Test
         # The full suite: fine on a runner (the local rule against it is about VS Code's memory).
+        # A test stuck for 5 minutes is killed and named in the log, instead of using up the job.
+        # The runner user can't write /var/lib, /var/log, or /etc: move LarisPaths' folders to temp.
+        env:
+          LARISVMS_DATA_DIR: ${{ runner.temp }}/larisvms/data
+          LARISVMS_LOG_DIR: ${{ runner.temp }}/larisvms/log
+          LARISVMS_CONFIG_DIR: ${{ runner.temp }}/larisvms/config
         run: >-
           dotnet test tests/LarisVMS.Tests/LarisVMS.Tests.csproj --configuration Release
           --logger "trx;LogFileName=linux.trx" --results-directory TestResults
+          --blame-hang-timeout 5m --blame-hang-dump-type none
 
       - name: Upload test results
-        if: failure()
+        # always(): a timeout cancels the job, and failure() is false then.
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-results-linux

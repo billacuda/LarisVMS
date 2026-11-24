@@ -29,6 +29,7 @@ internal static class ProxySetupCommand
         Run again with any of these to change them; the service restarts with the new settings.
         """;
 
+    private static readonly JsonSerializerOptions EndpointJson = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private static readonly HashSet<string> Flags = ["--reregister", "--client-allow-insecure"];
 
     private static readonly HashSet<string> Options =
@@ -120,7 +121,7 @@ internal static class ProxySetupCommand
             Host = parsed.Value("--client-endpoint-host") ?? current.Host,
         };
         LinuxSetup.WriteServiceFile(ProxyEndpointConfig.LocalConfigPath,
-            JsonSerializer.Serialize(endpoint, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            JsonSerializer.Serialize(endpoint, EndpointJson));
         Log($"Wrote {ProxyEndpointConfig.LocalConfigPath} (port {endpoint.Port}).");
         if (endpoint.PfxPath is { } pfx) Log($"The larisvms user must be able to read {pfx}.");
 

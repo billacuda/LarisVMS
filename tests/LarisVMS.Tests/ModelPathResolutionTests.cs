@@ -165,7 +165,7 @@ public class ModelPathResolutionTests : IDisposable
         var ex = Assert.Throws<FileNotFoundException>(() => Resolve(Path.Combine(dir, "model.onnx")));
         Assert.Contains(dir, ex.Message);
         Assert.Contains("dfine_s_obj2coco.onnx", ex.Message);
-        Assert.Contains("fetch_dfine", ex.Message);
+        Assert.Contains("tools/export-models", ex.Message);
     }
 
     [Fact]
@@ -174,27 +174,24 @@ public class ModelPathResolutionTests : IDisposable
         var missing = Path.Combine(_root, "nonexistent", "model.onnx");
 
         var ex = Assert.Throws<FileNotFoundException>(() => Resolve(missing));
-        Assert.Contains("fetch_dfine", ex.Message);
+        Assert.Contains("tools/export-models", ex.Message);
     }
 
     [Fact]
-    public void ResolvesARelativeConfiguredPathAgainstTheApplicationDirectory()
+    public void ResolvesARelativeConfiguredPathAgainstTheSharedModelsDirectory()
     {
         // Relative paths must not depend on the current working directory: this process is launched
-        // by NodeWorker's supervisor, not from a shell whose cwd means anything.
-        var appModels = Path.Combine(AppContext.BaseDirectory, "models");
-        var created = !Directory.Exists(appModels);
-        Directory.CreateDirectory(appModels);
-        var bundled = Path.Combine(appModels, "relative-probe.onnx");
-        File.WriteAllText(bundled, "");
-        try
+        // by NodeWorker's supervisor, not from a shell whose cwd means anything. They resolve against
+        // the shared models folder (LARISVMS_DATA_DIR moves it), which on a dev machine may already
+        // hold models: then the glob fallback picks one from there, which proves the same thing.
+        var expected = CameraPipelineManager.DefaultModelsDirectory;
+        string resolved;
+        try { resolved = Resolve("models/relative-probe-" + Guid.NewGuid().ToString("N") + ".onnx"); }
+        catch (FileNotFoundException ex)
         {
-            Assert.Equal(bundled, Resolve("models/relative-probe.onnx"));
+            Assert.Contains(expected, ex.Message);
+            return;
         }
-        finally
-        {
-            File.Delete(bundled);
-            if (created) Directory.Delete(appModels, recursive: true);
-        }
+        Assert.Equal(expected, Path.GetDirectoryName(resolved));
     }
 }

@@ -36,9 +36,11 @@ node.config
 
 # Recordings and media working directories — never meant to be in source control,
 # and install-web.ps1's /MIR must never see them either (see its /XD list).
-recordings/
-spool/
-exports/
+# Repo-root only: a bare "exports/" also matched src/LarisVMS.Web/Components/Pages/Exports/ because
+# Git on Windows ignores case, which kept the Exports page out of the repo (same trap as /models/ below).
+/recordings/
+/spool/
+/exports/
 data-protection-keys/
 
 # Object detection: exported models (large binaries, machine/site-specific — see build-node.ps1's

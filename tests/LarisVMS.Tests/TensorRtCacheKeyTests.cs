@@ -16,6 +16,9 @@ namespace LarisVMS.Tests;
 /// </summary>
 public class TensorRtCacheKeyTests
 {
+    // This OS's own path shape: on Linux a Windows path is one file name, not folders and a file.
+    private static string Model(string file) => Path.Combine(Path.GetTempPath(), "models", file);
+
     private static InferenceProfile Square(int size) =>
         InferenceProfile.Create(size, size, AspectMode.Stretch, size);
 
@@ -29,8 +32,8 @@ public class TensorRtCacheKeyTests
         Assert.Equal(a.Slices.Count, b.Slices.Count);
         Assert.NotEqual(a.CaptureWidth, b.CaptureWidth);
 
-        var keyA = OrtSessionFactory.TensorRtCacheKeyFor(@"C:\models\yolox_m.onnx", Square(640), a, 1, true);
-        var keyB = OrtSessionFactory.TensorRtCacheKeyFor(@"C:\models\yolox_m.onnx", Square(640), b, 1, true);
+        var keyA = OrtSessionFactory.TensorRtCacheKeyFor(Model("yolox_m.onnx"), Square(640), a, 1, true);
+        var keyB = OrtSessionFactory.TensorRtCacheKeyFor(Model("yolox_m.onnx"), Square(640), b, 1, true);
 
         Assert.NotEqual(keyA, keyB);
         Assert.Equal("yolox_m-net640x640-cap1138x640-s2-b1", keyA);
@@ -40,21 +43,21 @@ public class TensorRtCacheKeyTests
     public void EveryVariantAxis_ChangesTheKey()
     {
         var layout = SliceLayout.Create(1920, 1080, 640);
-        var baseline = OrtSessionFactory.TensorRtCacheKeyFor(@"C:\models\yolox_m.onnx", Square(640), layout, 1, true);
+        var baseline = OrtSessionFactory.TensorRtCacheKeyFor(Model("yolox_m.onnx"), Square(640), layout, 1, true);
 
         var keys = new[]
         {
             baseline,
             // A different model file.
-            OrtSessionFactory.TensorRtCacheKeyFor(@"C:\models\yolox_s.onnx", Square(640), layout, 1, true),
+            OrtSessionFactory.TensorRtCacheKeyFor(Model("yolox_s.onnx"), Square(640), layout, 1, true),
             // A different network size (the 416 YOLOX sizes).
-            OrtSessionFactory.TensorRtCacheKeyFor(@"C:\models\yolox_m.onnx", Square(416), SliceLayout.Create(1920, 1080, 416), 1, true),
+            OrtSessionFactory.TensorRtCacheKeyFor(Model("yolox_m.onnx"), Square(416), SliceLayout.Create(1920, 1080, 416), 1, true),
             // Not sliced, but still carrying a merged nv12 preprocessing head.
-            OrtSessionFactory.TensorRtCacheKeyFor(@"C:\models\yolox_m.onnx", Square(640), null, 1, true),
+            OrtSessionFactory.TensorRtCacheKeyFor(Model("yolox_m.onnx"), Square(640), null, 1, true),
             // Not sliced and no head at all — the plain path.
-            OrtSessionFactory.TensorRtCacheKeyFor(@"C:\models\yolox_m.onnx", Square(640), null, 1, false),
+            OrtSessionFactory.TensorRtCacheKeyFor(Model("yolox_m.onnx"), Square(640), null, 1, false),
             // A different batch size.
-            OrtSessionFactory.TensorRtCacheKeyFor(@"C:\models\yolox_m.onnx", Square(640), null, 2, false),
+            OrtSessionFactory.TensorRtCacheKeyFor(Model("yolox_m.onnx"), Square(640), null, 2, false),
         };
 
         Assert.Equal(keys.Length, keys.Distinct().Count());
@@ -68,7 +71,7 @@ public class TensorRtCacheKeyTests
         Assert.Equal("a-b-c.d_e", OrtSessionFactory.SanitizeCacheKey("a/b\\c.d_e"));
         Assert.Equal("model-net640x640-raw-b1",
             OrtSessionFactory.SanitizeCacheKey(
-                OrtSessionFactory.TensorRtCacheKeyFor(@"C:\models\model.onnx", Square(640), null, 1, false)));
+                OrtSessionFactory.TensorRtCacheKeyFor(Model("model.onnx"), Square(640), null, 1, false)));
 
         // Null means "let ONNX Runtime name its own cache files", which is what every build before
         // 0.186.2 did — EngineBuildGate's warm probe falls back to its old behavior on it.

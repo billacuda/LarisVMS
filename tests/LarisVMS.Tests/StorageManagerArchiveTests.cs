@@ -19,13 +19,13 @@ public sealed class StorageManagerArchiveTests : IDisposable
     [Fact]
     public void BuildArchiveTargetPath_PreservesTheNestedDateHourSubpath()
     {
-        var primaryMain = @"E:\rec\cam-abc\main";
-        var archiveMain = @"D:\archive\cam-abc\main";
-        var source = @"E:\rec\cam-abc\main\2026\09\06\14\20260906T143000Z.mp4";
+        var primaryMain = TestPaths.Native(@"E:\rec\cam-abc\main");
+        var archiveMain = TestPaths.Native(@"D:\archive\cam-abc\main");
+        var source = TestPaths.Native(@"E:\rec\cam-abc\main\2026\09\06\14\20260906T143000Z.mp4");
 
         var target = StorageManager.BuildArchiveTargetPath(primaryMain, archiveMain, source);
 
-        Assert.Equal(@"D:\archive\cam-abc\main\2026\09\06\14\20260906T143000Z.mp4", target);
+        Assert.Equal(TestPaths.Native(@"D:\archive\cam-abc\main\2026\09\06\14\20260906T143000Z.mp4"), target);
     }
 
     [Theory]
@@ -35,7 +35,7 @@ public sealed class StorageManagerArchiveTests : IDisposable
     [InlineData(@"D:\archive", @"E:\rec", false)]
     [InlineData("", @"E:\rec", false)]
     public void IsUnderStorageRoot(string candidate, string root, bool expected)
-        => Assert.Equal(expected, StorageManager.IsUnderStorageRoot(candidate, root));
+        => Assert.Equal(expected, StorageManager.IsUnderStorageRoot(TestPaths.Native(candidate), TestPaths.Native(root)));
 
     [Fact]
     public void PartitionByRoot_SplitsPrimaryArchiveAndNeither()
@@ -43,15 +43,15 @@ public sealed class StorageManagerArchiveTests : IDisposable
         var (primary, archive, other) = StorageManager.PartitionByRoot(
             new[]
             {
-                @"E:\rec\cam-1\main\a.mp4",
-                @"D:\archive\cam-1\main\b.mp4",
-                @"F:\somewhere\else\c.mp4",
+                TestPaths.Native(@"E:\rec\cam-1\main\a.mp4"),
+                TestPaths.Native(@"D:\archive\cam-1\main\b.mp4"),
+                TestPaths.Native(@"F:\somewhere\else\c.mp4"),
             },
-            @"E:\rec", @"D:\archive");
+            TestPaths.Native(@"E:\rec"), TestPaths.Native(@"D:\archive"));
 
-        Assert.Equal(new[] { @"E:\rec\cam-1\main\a.mp4" }, primary);
-        Assert.Equal(new[] { @"D:\archive\cam-1\main\b.mp4" }, archive);
-        Assert.Equal(new[] { @"F:\somewhere\else\c.mp4" }, other);
+        Assert.Equal(new[] { TestPaths.Native(@"E:\rec\cam-1\main\a.mp4") }, primary);
+        Assert.Equal(new[] { TestPaths.Native(@"D:\archive\cam-1\main\b.mp4") }, archive);
+        Assert.Equal(new[] { TestPaths.Native(@"F:\somewhere\else\c.mp4") }, other);
     }
 
     [Fact]
