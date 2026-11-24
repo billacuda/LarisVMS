@@ -15,7 +15,9 @@ A node is **online** if it checked in within the last 2 minutes. A ⚠️ **cloc
 
 By default all live and playback video is relayed through the web server (**Proxy**). With **Direct**, browsers connect straight to each node's own HTTPS endpoint, which takes load off the server. Set the mode under **Settings → Live view** and override it per node.
 
-Direct mode needs a **client endpoint host** that browsers can reach, and a certificate (a `.pfx` path on the node's page). **Allow self-signed** is for testing only, because viewers get a browser warning. A camera whose node has no healthy endpoint falls back to the proxy automatically.
+Direct mode needs a **client endpoint host** that browsers can reach, and a certificate (a `.pfx` path on the node's page). **Allow self-signed** is for testing only, because viewers get a browser warning. A host set on the node itself (`CLIENTENDPOINTHOST`, `--client-endpoint-host`, or `LARISVMS_CLIENT_ENDPOINT_HOST`) is filled in on its page unless one is set there. **Endpoint status** on the node's page says whether browsers connect directly and, if not, why.
+
+A camera whose node has no healthy endpoint is relayed automatically. So is one whose node a browser can't reach: after 5 seconds it uses the relay, and tries the node again a few minutes later.
 
 ## Encrypted connections from the server
 

@@ -6,19 +6,34 @@
  * a plain proxy ticket pointing back at this host's own /live/{id}, i.e. exactly what live-view.js
  * did before this file existed.
  *
- * Playback does not go through here — in direct mode the /playback-segment endpoint 302-redirects the
- * browser to the node itself, so playback-player.js needs no changes.
+ * Playback does not resolve tickets here — in direct mode the /playback-segment endpoint 302-redirects
+ * the browser to the node itself — but it shares the "this browser can't reach the node" list below.
  */
 (function () {
     'use strict';
 
     var ticketCache = {}; // cameraId -> { ticket, expiresAtMs }
 
+    // Cameras whose node this browser couldn't reach directly (a firewall, a name it can't resolve, an
+    // untrusted certificate): relayed through the server until then, after which direct is tried again.
+    var relayUntil = {}; // cameraId -> ms
+    var RELAY_FALLBACK_MS = 3 * 60 * 1000;
+
+    function markDirectUnreachable(cameraId) {
+        relayUntil[cameraId] = Date.now() + RELAY_FALLBACK_MS;
+        invalidate(cameraId);
+    }
+
+    function isRelayed(cameraId) {
+        return (relayUntil[cameraId] || 0) > Date.now();
+    }
+
     function proxyTicket(cameraId) {
         return { mode: 'proxy', insecure: false, videoUrl: '/live/' + encodeURIComponent(cameraId), token: null, trustUrl: null, expiresInSeconds: 0 };
     }
 
     function resolveLive(cameraId) {
+        if (isRelayed(cameraId)) return Promise.resolve(proxyTicket(cameraId));
         var cached = ticketCache[cameraId];
         if (cached && cached.expiresAtMs > Date.now()) {
             return Promise.resolve(cached.ticket);
@@ -92,6 +107,8 @@
     window.larisvmsMediaEndpoint = {
         resolveLive: resolveLive,
         invalidate: invalidate,
+        markDirectUnreachable: markDirectUnreachable,
+        isRelayed: isRelayed,
         reportTiming: reportTiming,
         reportStreamEvent: reportStreamEvent
     };

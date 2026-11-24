@@ -792,6 +792,9 @@ var certHolder = new CertHolder(
         AutoRenewSelfSigned: false),
     certLogger);
 certHolder.Load(); // logs the outcome (and LastError) to the file log itself
+// And on the console, which is all `docker logs` and the systemd journal show.
+if (certHolder.LastError is { } certLoadError)
+    Console.Error.WriteLine(certHolder.IsSelfSigned ? $"{certLoadError} Using a self-signed certificate instead." : certLoadError);
 
 var httpsPort = builder.Configuration.GetValue<int?>("Kestrel:HttpsPort") ?? 8444;
 #pragma warning disable CA1416 // IsSupported is itself the platform check
@@ -1063,6 +1066,9 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
         request.ClientEndpointCertIsSelfSigned, request.ClientEndpointLastError, request.PartnerHealthReports,
         request.HostStats, request.StorageBlockedByEvidenceLocks, request.ClientEndpointCertSha256, ct);
     await nodeService.RecordInContainerAsync(node.Id, request.InContainer, ct);
+    if (await nodeService.FillClientEndpointHostAsync(node.Id, request.ClientEndpointHost, ct))
+        await auditService.LogAsync("Node.ClientEndpointHostReported", null, node.Name, ctx.Connection.RemoteIpAddress?.ToString(),
+            $"{node.Name} ({node.Id}) had no client endpoint host; now using the one set on the node: {request.ClientEndpointHost!.Trim()}.", ct);
     // Camera certificates the node refused under pinning: audit log and Super Admins.
     foreach (var refusal in (request.CameraCertificateRefusals ?? []).Take(50))
         if (!string.IsNullOrWhiteSpace(refusal.Host) && refusal.Host.Length <= 255 && refusal.Presented is { Length: 64 } presented
@@ -3160,7 +3166,10 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
     // headers the cross-origin read needs (and exposes X-Fragment-Start-Seconds). A fresh
     // IssueForSegment token per request, exactly as the proxy path mints below — the node's phase-5c
     // replay cache then makes each one single-use.
-    var route = await routing.ResolveByNodeIdAsync(segment.NodeId, ct);
+    // ?relay=1: the browser couldn't reach the node itself (playback-player.js), so it's relayed.
+    var route = ctx.Request.Query["relay"] == "1"
+        ? LarisVMS.Web.Services.MediaRoute.Proxy
+        : await routing.ResolveByNodeIdAsync(segment.NodeId, ct);
     if (route.Mode == LarisVMS.Web.Services.MediaStreamMode.Direct)
     {
         var directToken = MediaToken.IssueForSegment(cameraId, segment.FilePath, segment.NodeMediaSigningKey, TimeSpan.FromSeconds(30));

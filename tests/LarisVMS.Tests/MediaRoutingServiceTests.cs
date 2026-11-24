@@ -87,6 +87,21 @@ public class MediaRoutingServiceTests
     }
 
     [Fact]
+    public async Task TheReasonForRelayingIsGiven()
+    {
+        async Task<MediaRelayReason> Reason(MediaRouteInputs n) => (await Make().ExplainDirectAsync(n)).Reason;
+
+        Assert.Equal(MediaRelayReason.None, await Reason(Healthy()));
+        Assert.Equal(MediaRelayReason.ProxyMode, await Reason(Healthy(mode: "Proxy")));
+        Assert.Equal(MediaRelayReason.NoEndpoint, await Reason(Healthy() with { ClientEndpointReportedPort = null }));
+        Assert.Equal(MediaRelayReason.NoHost, await Reason(Healthy() with { ClientEndpointHost = null }));
+        Assert.Equal(MediaRelayReason.CertificateExpired, await Reason(Healthy() with { ClientEndpointCertNotAfter = DateTime.UtcNow.AddDays(-1) }));
+        Assert.Equal(MediaRelayReason.SelfSignedBlocked, await Reason(Healthy(selfSigned: true)));
+        // A certificate that didn't load is named before the self-signed one it was replaced with.
+        Assert.Equal(MediaRelayReason.EndpointError, await Reason(Healthy(insecureOverride: true, selfSigned: true, lastError: "Could not load pfx")));
+    }
+
+    [Fact]
     public async Task NullInputsResolvesToProxy()
     {
         Assert.Equal(MediaStreamMode.Proxy, (await Make(globalDirect: "Direct").ResolveAsync((MediaRouteInputs?)null)).Mode);

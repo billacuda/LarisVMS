@@ -87,7 +87,7 @@
       "larisvms.media": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.223.0, )"
+          "LarisVMS.Core": "[0.223.1, )"
         }
       },
       "larisvms.vision": {

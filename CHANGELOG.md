@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.223.1] - 2026-11-24
+
+### ➕ Added
+
+- **Why a node is relayed.** A node's page says under **Endpoint status** whether browsers connect to it
+  directly and, if not, why.
+
+### ⚙️ Changed
+
+- **Docker compose files.** The node and proxy files set `container_name`, the node file has a certificate
+  volume, and the comments and docs cover certificate paths, passwords, and the 8555 firewall port.
+
+### 🛠️ Fixed
+
+- **No video from cameras with AAC audio on ffmpeg 7.1.** Live view was black and playback said
+  "Segment could not be decoded" on nodes with ffmpeg 7.1 (the Docker node image, and Debian 13), which
+  loses AAC audio when copying it from a camera. Those nodes now re-encode the audio. Footage already
+  recorded there without its audio still doesn't play in a browser.
+- **Client endpoint host.** A host set on the node (`LARISVMS_CLIENT_ENDPOINT_HOST`,
+  `--client-endpoint-host`, or `CLIENTENDPOINTHOST`) now reaches the server, which uses it unless one is
+  set on the node's page. Before, the node was relayed. A new proxy registers with its host too.
+- **Unreachable nodes.** A browser that can't connect to a node within 5 seconds uses the server's relay
+  for a few minutes, in live view and playback, instead of staying on "Connecting".
+- **Untrusted recorder certificate.** The link to trust a recorder's self-signed certificate shows again.
+- **Certificate errors in Docker.** A certificate that can't be loaded is reported in `docker logs` and the
+  systemd journal, and the containers say when its path isn't mounted or can't be read.
+
 ## [0.223.0] - 2026-11-23
 
 ### ➕ Added
@@ -2193,7 +2220,8 @@ Only the 10 most recent versions are kept in this file. Older entries are archiv
 - [v0.21.1 – v0.40.0](changelog-archive/v0.21.1-to-v0.40.0.md) (2026-08-09 – 2026-08-11)
 - [v0.1.0 – v0.21.0](changelog-archive/v0.1.0-to-v0.21.0.md) (2026-08-08 – 2026-08-09)
 
-[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.223.0...HEAD
+[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.223.1...HEAD
+[0.223.1]: https://github.com/billacuda/LarisVMS/compare/v0.223.0...v0.223.1
 [0.223.0]: https://github.com/billacuda/LarisVMS/compare/v0.222.2...v0.223.0
 [0.222.2]: https://github.com/billacuda/LarisVMS/compare/v0.222.1...v0.222.2
 [0.222.1]: https://github.com/billacuda/LarisVMS/compare/v0.222.0...v0.222.1

@@ -28,6 +28,22 @@ public class NodeServiceReplayHardeningTests
         return (new NodeService(db, new SettingsResolver(db)), db, node.Id);
     }
 
+    [Theory]
+    [InlineData(null, "nvr1.example.com", "nvr1.example.com")]
+    [InlineData("", " nvr1.example.com ", "nvr1.example.com")]
+    [InlineData("admin.example.com", "nvr1.example.com", "admin.example.com")]   // an admin's host wins
+    [InlineData(null, "nvr1.example.com; script-src *", null)]                  // it goes into a header
+    [InlineData(null, null, null)]
+    public async Task AReportedEndpointHostOnlyFillsABlankOne(string? stored, string? reported, string? expected)
+    {
+        var (service, db, nodeId) = Seed(n => n.ClientEndpointHost = stored);
+
+        var filled = await service.FillClientEndpointHostAsync(nodeId, reported);
+
+        Assert.Equal(expected, (await db.Nodes.FindAsync(nodeId))!.ClientEndpointHost);
+        Assert.Equal(expected is not null && expected != stored, filled);
+    }
+
     [Fact]
     public async Task FirstCheckInWithNoStoredNonceIssuesOneAndPasses()
     {

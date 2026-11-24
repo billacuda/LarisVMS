@@ -10,6 +10,9 @@ namespace LarisVMS.Web.Services;
 /// <summary>How a browser should reach one camera's recorder node for live/playback.</summary>
 public enum MediaStreamMode { Proxy, Direct }
 
+/// <summary>Why a node's video is relayed instead of going straight to browsers (its page says so).</summary>
+public enum MediaRelayReason { None, ProxyMode, EndpointError, NoEndpoint, NoHost, CertificateExpired, SelfSignedBlocked }
+
 /// <param name="Mode">Proxy = relay every byte through this tier (the original behaviour). Direct =
 /// point the browser at <paramref name="DirectHost"/>:<paramref name="DirectPort"/> over HTTPS —
 /// which since phase 2 may be a standalone <see cref="MediaProxy"/> rather than the node itself.</param>
@@ -107,29 +110,32 @@ public class MediaRoutingService(ISettingsResolver settings, ApplicationDbContex
     }
 
     // ── Phase 1: direct to the node's own client endpoint ───────────────────────
-    public async Task<MediaRoute> ResolveDirectAsync(MediaRouteInputs? n, CancellationToken ct = default)
+    public async Task<MediaRoute> ResolveDirectAsync(MediaRouteInputs? n, CancellationToken ct = default) =>
+        n is null ? MediaRoute.Proxy : (await ExplainDirectAsync(n, ct)).Route;
+
+    /// <summary>The direct-to-node decision and, when it's to relay, the reason.</summary>
+    public async Task<(MediaRoute Route, MediaRelayReason Reason)> ExplainDirectAsync(MediaRouteInputs n, CancellationToken ct = default)
     {
-        if (n is null) return MediaRoute.Proxy;
+        static (MediaRoute, MediaRelayReason) Relay(MediaRelayReason reason) => (MediaRoute.Proxy, reason);
 
         var mode = !string.IsNullOrWhiteSpace(n.DirectStreamingMode)
             ? n.DirectStreamingMode
             : await settings.GetAsync("LiveView.DirectStreaming", "Proxy", ct: ct);
-        if (!string.Equals(mode, "Direct", StringComparison.OrdinalIgnoreCase))
-            return MediaRoute.Proxy;
+        if (!string.Equals(mode, "Direct", StringComparison.OrdinalIgnoreCase)) return Relay(MediaRelayReason.ProxyMode);
 
         var allowInsecure = n.AllowInsecureClientEndpoint
             ?? await settings.GetAsync("LiveView.AllowInsecureClientEndpoint", false, ct: ct);
 
-        var certHealthy = n.ClientEndpointCertNotAfter is { } notAfter && notAfter > DateTime.UtcNow
-                          && string.IsNullOrEmpty(n.ClientEndpointLastError);
         var selfSigned = n.ClientEndpointCertIsSelfSigned == true;
 
-        if (string.IsNullOrWhiteSpace(n.ClientEndpointHost) || n.ClientEndpointReportedPort is not > 0 || !certHealthy)
-            return MediaRoute.Proxy;
+        // An error comes first: a certificate that didn't load is why there may be no endpoint, or a
+        // self-signed one.
+        if (!string.IsNullOrEmpty(n.ClientEndpointLastError)) return Relay(MediaRelayReason.EndpointError);
+        if (n.ClientEndpointReportedPort is not > 0) return Relay(MediaRelayReason.NoEndpoint);
+        if (string.IsNullOrWhiteSpace(n.ClientEndpointHost)) return Relay(MediaRelayReason.NoHost);
+        if (n.ClientEndpointCertNotAfter is not { } notAfter || notAfter <= DateTime.UtcNow) return Relay(MediaRelayReason.CertificateExpired);
+        if (selfSigned && !allowInsecure) return Relay(MediaRelayReason.SelfSignedBlocked);
 
-        if (selfSigned && !allowInsecure)
-            return MediaRoute.Proxy;
-
-        return new MediaRoute(MediaStreamMode.Direct, n.ClientEndpointHost, n.ClientEndpointReportedPort.Value, selfSigned);
+        return (new MediaRoute(MediaStreamMode.Direct, n.ClientEndpointHost, n.ClientEndpointReportedPort.Value, selfSigned), MediaRelayReason.None);
     }
 }

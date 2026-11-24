@@ -4,7 +4,10 @@ namespace LarisVMS.Core.Dtos;
 // so LarisVMS.Proxy can (de)serialize them without referencing Infrastructure or Web. Auth mirrors
 // the node control plane — bearer "{proxyId}:{secret}", plus the phase-5a rolling check-in nonce.
 
-public record ProxyRegisterRequest(string RegistrationKey, string Hostname, string? Version, string? Platform);
+/// <summary>ClientEndpointHost is the host browsers use, when one is set on the proxy itself
+/// (LARISVMS_CLIENT_ENDPOINT_HOST, or the installer's setting).</summary>
+public record ProxyRegisterRequest(string RegistrationKey, string Hostname, string? Version, string? Platform,
+    string? ClientEndpointHost = null);
 
 public record ProxyRegisterResponse(Guid ProxyId, string Secret, string? UpdateSigningKeyPem = null);
 

@@ -34,6 +34,9 @@ public sealed class ClientEndpointConfig
     /// <summary>Host name to put in the self-signed cert's CN/SAN — the FQDN a browser dials. From the
     /// local json's <c>Host</c>, else the machine name.</summary>
     public string Host { get; init; } = Environment.MachineName;
+    /// <summary>The host set on this machine, reported to the server. Null when none is: the machine
+    /// name <see cref="Host"/> falls back to isn't an address anyone chose for browsers.</summary>
+    public string? ConfiguredHost { get; init; }
 
     public static readonly string LocalConfigPath = Path.Combine(LarisVMS.Core.LarisPaths.DataRoot, "client-endpoint.json");
 
@@ -79,10 +82,11 @@ public sealed class ClientEndpointConfig
         };
     }
 
-    public static ClientEndpointConfig Resolve(NodeConfigResponse? serverCached)
-    {
-        var local = WithEnvironment(ReadLocal(), Environment.GetEnvironmentVariable);
+    public static ClientEndpointConfig Resolve(NodeConfigResponse? serverCached) =>
+        Resolve(serverCached, WithEnvironment(ReadLocal(), Environment.GetEnvironmentVariable));
 
+    internal static ClientEndpointConfig Resolve(NodeConfigResponse? serverCached, ClientEndpointLocalConfig? local)
+    {
         var serverTls = serverCached?.EncryptServerConnection == true;
         var enabled = local?.Enabled == true || serverCached?.ClientEndpointEnabled == true || serverTls;
         var port = local is { Port: > 0 } ? local.Port
@@ -101,6 +105,7 @@ public sealed class ClientEndpointConfig
             AllowInsecure = allowInsecure,
             ServerTls = serverTls,
             Host = string.IsNullOrWhiteSpace(local?.Host) ? Environment.MachineName : local!.Host!,
+            ConfiguredHost = string.IsNullOrWhiteSpace(local?.Host) ? null : local!.Host!.Trim(),
         };
     }
 }

@@ -7,7 +7,8 @@ services:
     # The base image runs AI detection on an Intel GPU or the CPU. For NVIDIA GPUs, use the -cuda tag
     # (CUDA and cuDNN) or the -tensorrt tag (adds TensorRT), with the NVIDIA Container Toolkit
     # installed on this machine and the GPU block below.
-    image: ghcr.io/billacuda/larisvms-node:latest   # or 0.223.0, 0.223.0-cuda, 0.223.0-tensorrt, cuda, tensorrt
+    image: ghcr.io/billacuda/larisvms-node:latest   # or 0.223.1, 0.223.1-cuda, 0.223.1-tensorrt, cuda, tensorrt
+    container_name: larisvms-node
     hostname: larisvms-node-1   # the name this node shows under Nodes
     network_mode: host
     restart: unless-stopped
@@ -18,16 +19,18 @@ services:
       LARISVMS_STORAGE_ROOT: '/recordings'
       # LARISVMS_ARCHIVE_ROOT: '/archive'
       # LARISVMS_LIVE_PORT: '8554'
-      # Direct streaming to browsers:
+      # Direct streaming to browsers. Also set the streaming mode to Direct (Settings > Live view, or
+      # the node's page), and allow TCP 8555 in this machine's firewall.
       # LARISVMS_CLIENT_PORT: '8555'
-      # LARISVMS_CLIENT_ENDPOINT_HOST: 'nvr1.example.com'
-      # LARISVMS_CLIENT_PFX_PATH: '/certs/node.pfx'
-      # LARISVMS_CLIENT_PFX_PASSWORD: 'secret'
+      # LARISVMS_CLIENT_ENDPOINT_HOST: 'nvr1.example.com'   # used unless a host is set on the node's page
+      # LARISVMS_CLIENT_PFX_PATH: '/certs/node.pfx'   # the path inside the container (see volumes)
+      # LARISVMS_CLIENT_PFX_PASSWORD: 'secret'   # write $ as $$
     volumes:
       - larisvms-node-data:/var/lib/larisvms   # registration, machine ID, models
       - larisvms-node-logs:/var/log/larisvms
       - /srv/larisvms/recordings:/recordings   # where recordings go on this machine
       # - /mnt/archive:/archive
+      # - /srv/larisvms/certs:/certs:ro   # user 8444 must be able to read it
     # Intel GPU (OpenVINO AI detection) and VAAPI video encoding:
     # devices:
     #   - /dev/dri:/dev/dri

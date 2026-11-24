@@ -69,7 +69,11 @@ public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long
     List<NodeCameraCertificateRefusal>? CameraCertificateRefusals = null,
     /// <summary>True when the node runs from a Docker image (LARISVMS_CONTAINER=1): the server then
     /// offers it no update, since it's updated by pulling a new image. Null from an older node.</summary>
-    bool? InContainer = null);
+    bool? InContainer = null,
+    /// <summary>The client endpoint host set on the node itself (LARISVMS_CLIENT_ENDPOINT_HOST, or the
+    /// installer's setting). The server uses it when no host is set on the node's page. Null when none
+    /// is set, or from an older node.</summary>
+    string? ClientEndpointHost = null);
 
 /// <summary>A camera certificate a node refused: the camera's address, the SHA-256 of the
 /// certificate it presented, and when.</summary>

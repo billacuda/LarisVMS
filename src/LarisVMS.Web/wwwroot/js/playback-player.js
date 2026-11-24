@@ -144,11 +144,17 @@
         // to the normal fetch path unchanged. { id, promise<Uint8Array|null> }.
         var prefetch = null;
 
+        // This browser couldn't reach the camera's recorder directly (media-endpoint.js, shared with
+        // live view): ask the server to relay instead of redirecting to it.
+        function nodeIsRelayed() {
+            return !!(window.larisvmsMediaEndpoint && window.larisvmsMediaEndpoint.isRelayed(cameraId));
+        }
+
         function schedulePrefetch(afterSegment) {
             var next = nextSegmentAfter(afterSegment.startUtc);
             if (!next || knownBadSegmentIds[next.id] || (prefetch && prefetch.id === next.id)) return;
             var id = next.id;
-            var p = fetch('/playback-segment/' + cameraId + '/' + id)
+            var p = fetch('/playback-segment/' + cameraId + '/' + id + (nodeIsRelayed() ? '?relay=1' : ''))
                 .then(function (r) {
                     if (!r.ok) {
                         if (r.status === 404) knownBadSegmentIds[id] = true;
@@ -442,6 +448,8 @@
             // 0 (see below) since no X-Fragment-Start-Seconds header comes back either.
             var seekQuery = seekSeconds > MIN_SEEK_SECONDS_FOR_PARTIAL_FETCH
                 ? '?seekSeconds=' + encodeURIComponent(seekSeconds) : '';
+            // The retry goes through the server, in case it was the recorder's own address that failed.
+            if (isRetryAfterTimeout || nodeIsRelayed()) seekQuery += (seekQuery ? '&' : '?') + 'relay=1';
 
             // Combines the caller's own supersede signal with a local timeout — fetch() only accepts
             // one signal, and AbortSignal.any() isn't reliably available across this fleet's browser
@@ -485,12 +493,20 @@
                     return;
                 }
 
+                // A connection that failed at once: in direct mode that may be only the recorder.
+                if (!isRetryAfterTimeout) {
+                    if (myToken !== loadToken) return;
+                    await loadSegment(segment, seekSeconds, autoplay, myToken, signal, true);
+                    return;
+                }
                 if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.couldNotReachServer');
                 hideFreezeFrameForLoadFailure();
                 return;
             }
             signal.removeEventListener('abort', onOuterAbort);
             clearTimeout(timeoutHandle);
+            // The relay worked where the first attempt didn't: use it for this camera for now.
+            if (isRetryAfterTimeout && resp.ok && window.larisvmsMediaEndpoint) window.larisvmsMediaEndpoint.markDirectUnreachable(cameraId);
             if (myToken !== loadToken || resp === undefined) return;
             if (!resp.ok) {
                 // 404 specifically means "this file doesn't exist on the recorder" — a state that

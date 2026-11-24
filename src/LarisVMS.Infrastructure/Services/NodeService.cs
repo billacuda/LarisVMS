@@ -723,6 +723,18 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
     public async Task<List<long>> ListMotionSpanIdsAsync(Guid nodeId, CancellationToken ct = default)
         => await db.MotionSpans.AsNoTracking().Where(m => m.Camera.NodeId == nodeId).Select(m => m.Id).ToListAsync(ct);
 
+    public async Task<bool> FillClientEndpointHostAsync(Guid nodeId, string? reportedHost, CancellationToken ct = default)
+    {
+        var host = reportedHost?.Trim();
+        // Browsers are sent to it and it goes into the Content-Security-Policy, so the same check as a typed one.
+        if (string.IsNullOrEmpty(host) || !HostNames.IsValid(host)) return false;
+        var node = await db.Nodes.FirstOrDefaultAsync(n => n.Id == nodeId, ct);
+        if (node is null || !string.IsNullOrWhiteSpace(node.ClientEndpointHost)) return false;
+        node.ClientEndpointHost = host;
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+
     /// <summary>Pure so it's unit-testable without a database — same "isolate the arithmetic from the
     /// I/O" shape as TimelineService.NormalizeToUtc. Null input (an older node build not sending
     /// SentAtUtc yet) means "no measurement this heartbeat," not "zero skew."</summary>

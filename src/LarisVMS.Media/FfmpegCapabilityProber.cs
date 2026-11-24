@@ -122,6 +122,47 @@ public static class FfmpegCapabilityProber
         }
     }
 
+    /// <summary>Whether this ffmpeg loses a camera's AAC audio when it's copied: ffmpeg 7.1 stopped
+    /// treating every AAC packet as a keyframe, and its RTSP reader doesn't mark them (8.0 does), so
+    /// "-c copy" waits for a keyframe that never comes. The file still declares an audio track, and a
+    /// browser can't play video beside an empty one. Debian 13 ships 7.1. Never throws; a probe that
+    /// fails means "not affected".</summary>
+    public static async Task<bool> CopyDropsAacAsync(string ffmpegPath, CancellationToken ct = default)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = ffmpegPath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("-version");
+
+            using var process = Process.Start(psi);
+            if (process is null) return false;
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(15));
+
+            var stdout = await process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+            await process.WaitForExitAsync(timeoutCts.Token);
+
+            return IsFfmpegThatDropsAac(stdout);
+        }
+        catch (Exception) when (ct.IsCancellationRequested is false)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Reads the libavformat line of `ffmpeg -version` ("libavformat    61.  7.103 / 61.  7.103"):
+    /// 61.7 is exactly the 7.1 releases, whatever the distro calls its build.</summary>
+    internal static bool IsFfmpegThatDropsAac(string versionOutput) =>
+        System.Text.RegularExpressions.Regex.IsMatch(versionOutput, @"\blibavformat\s+61\.\s*7\.");
+
     /// <summary>True when a real `ffmpeg -encoders` line names <paramref name="encoderName"/> as its
     /// second whitespace-delimited token — the same exact-equality match <see cref="ParseEncodersOutput"/>
     /// uses, so a hypothetical "libwebp_anim" couldn't be mistaken for "libwebp".</summary>

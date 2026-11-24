@@ -81,7 +81,8 @@ if (config is null)
     try
     {
         response = await registerClient.RegisterAsync(
-            new ProxyRegisterRequest(registrationKey, Environment.MachineName, ProxyVersion.Current, LarisVMS.Core.PlatformId.Current),
+            new ProxyRegisterRequest(registrationKey, Environment.MachineName, ProxyVersion.Current, LarisVMS.Core.PlatformId.Current,
+                ProxyEndpointConfig.WithEnvironment(ProxyEndpointConfig.ReadLocal(), Environment.GetEnvironmentVariable)?.Host),
             CancellationToken.None);
     }
     catch (Exception ex) when (RegistrationFailure.Describe(ex, serverUrl) is { } reason)
@@ -120,6 +121,8 @@ if (certHolder.Load())
         $"({(certHolder.IsSelfSigned ? "self-signed" : "supplied certificate")}).");
 else
     Console.Error.WriteLine($"Proxy HTTPS endpoint has no usable certificate: {certHolder.LastError}");
+if (certHolder is { IsSelfSigned: true, LastError: { } certError })
+    Console.Error.WriteLine($"{certError} Using a self-signed certificate instead.");
 
 builder.WebHost.ConfigureKestrel(o =>
 {

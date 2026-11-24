@@ -200,6 +200,9 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // probing keeps producing JPEG until it has.
     private bool _webpSupported;
 
+    // This node's ffmpeg loses a camera's AAC audio when it's copied, so it's re-encoded instead.
+    private bool _copyDropsAac;
+
     /// <summary>Whether this node's ffmpeg can encode WebP (libwebp) — read by the thumbnail and
     /// snapshot-image routes to pick the cache file's format. See <see cref="_webpSupported"/>.</summary>
     public bool WebpSupported => _webpSupported;
@@ -481,6 +484,10 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         _logger.LogInformation("Cached thumbnail/snapshot image format: {Format}",
             _webpSupported ? "WebP (ffmpeg has libwebp)" : "JPEG (ffmpeg has no libwebp encoder)");
 
+        _copyDropsAac = await FfmpegCapabilityProber.CopyDropsAacAsync(ffmpegPath, stoppingToken);
+        if (_copyDropsAac)
+            _logger.LogInformation("This is ffmpeg 7.1, which loses AAC audio when copying it from a camera: audio is re-encoded instead. ffmpeg 8 or newer copies it.");
+
         var reconcileLoop = ReconcileLoopAsync(stoppingToken);
         var segmentReportLoop = SegmentReportLoopAsync(stoppingToken);
         var gatedDecisionLoop = GatedDecisionLoopAsync(stoppingToken);
@@ -618,7 +625,9 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     // Camera certificates refused under pinning, for the server's audit log.
                     CameraCertificateRefusals: refusals,
                     // A Docker image is updated by pulling a new one, so the server offers it no build.
-                    InContainer: LarisVMS.Core.RunningInContainer.Value), ct);
+                    InContainer: LarisVMS.Core.RunningInContainer.Value,
+                    // The host set on this machine, for the server to send browsers to.
+                    ClientEndpointHost: clientEndpoint.ConfiguredHost), ct);
                 }
                 catch
                 {
@@ -1326,7 +1335,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // noticed and kept running the old ffmpeg process against the stale URL forever.
             var mainStream = camera.Streams.FirstOrDefault(s => s.Role == "Main");
             var rtspUri = mainStream is null ? null : InjectCredentials(mainStream.RtspUri, camera.Username, camera.Password);
-            var transcodeAudio = mainStream is { HasAudio: true } && AudioTranscode.NeedsAac(mainStream.AudioCodec);
+            var transcodeAudio = mainStream is { HasAudio: true } && AudioTranscode.NeedsAac(mainStream.AudioCodec, _copyDropsAac);
             var streamFormat = StreamFormatSignature(mainStream);
 
             if (_active.TryGetValue(camera.CameraId, out var activeRecorder) && activeRecorder.PrivacyMaskSignature != privacySignature)
@@ -2157,7 +2166,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         // Only the Main stream's audio codec gets reported; a camera's profiles share one microphone
         // and almost always one codec, so Main's stands in until Sub has its own.
         var subAudioCodec = subStream.AudioCodec ?? camera.Streams.FirstOrDefault(s => s.Role == "Main")?.AudioCodec;
-        var subTranscodeAudio = subStream.HasAudio && AudioTranscode.NeedsAac(subAudioCodec);
+        var subTranscodeAudio = subStream.HasAudio && AudioTranscode.NeedsAac(subAudioCodec, _copyDropsAac);
         // Privacy masks apply to the Sub stream's live view too, or it would show what the recording hides.
         var subPrivacyFilters = BuildPrivacyMaskFilters(camera.Zones);
         var subPrivacyEncoder = ChoosePrivacyEncoder(camera.Zones, subStream);

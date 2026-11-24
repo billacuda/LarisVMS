@@ -233,6 +233,8 @@ if (clientEndpoint.Enabled)
             $"({(certHolder.IsSelfSigned ? "self-signed" : "supplied certificate")}).");
     else
         Console.Error.WriteLine($"Client HTTPS endpoint enabled but not starting: {certHolder.LastError}");
+    if (certHolder is { IsSelfSigned: true, LastError: { } certError })
+        Console.Error.WriteLine($"{certError} Using a self-signed certificate, so browsers are not sent to this node directly.");
 }
 
 builder.WebHost.ConfigureKestrel(o =>

@@ -11,6 +11,7 @@
     var mediaEndpoint = window.larisvmsMediaEndpoint || {
         resolveLive: function (id) { return Promise.resolve({ mode: 'proxy', videoUrl: '/live/' + encodeURIComponent(id), token: null }); },
         invalidate: function () { },
+        markDirectUnreachable: function () { },
         reportTiming: function () { },
         reportStreamEvent: function () { }
     };
@@ -25,6 +26,10 @@
     var GENERIC_FALLBACK = 'video/mp4';
     // AAC-LC — what LarisVMS's cameras report (`CameraStream.HasAudio`) actually send in practice.
     var AUDIO_CODEC = 'mp4a.40.2';
+
+    // A direct connection to a recorder that hasn't opened by then is given up for the server's relay:
+    // a firewall that drops packets otherwise leaves the tile at "Connecting" for minutes.
+    var DIRECT_OPEN_TIMEOUT_MS = 5000;
 
     // `codecHint` is the camera's actual stream codec (RecordingSession's ffmpeg-stderr-derived
     // CameraStream.Codec — "hevc", "h264", etc.), not a browser capability. It matters because
@@ -164,22 +169,37 @@
         // Proxies statusEl so startSession's existing `statusEl.textContent = '...'` call sites
         // don't need to change at all — writes just stop taking effect once a frame has ever been
         // shown, since the freeze+spinner overlay is doing that communicating instead from then on.
+        // The trust-this-recorder link stays up for a while after the relay takes over, or it would be
+        // gone before anyone could click it.
+        var holdStatusUntil = 0;
+        var holdTimer = null;
+
         var statusProxy = {
-            set textContent(v) { if (!hasEverShownFrame) statusEl.textContent = v; },
-            get textContent() { return statusEl.textContent; }
+            set textContent(v) { if (!hasEverShownFrame && Date.now() >= holdStatusUntil) statusEl.textContent = v; },
+            get textContent() { return statusEl.textContent; },
+            appendChild: function (node) { if (!hasEverShownFrame) statusEl.appendChild(node); }
         };
 
         function onFrameVisible() {
             hasEverShownFrame = true;
-            statusEl.textContent = '';
+            var holdMs = holdStatusUntil - Date.now();
+            if (holdMs <= 0) statusEl.textContent = '';
+            else if (!holdTimer) holdTimer = setTimeout(function () { holdTimer = null; statusEl.textContent = ''; }, holdMs);
             overlay.hide();
         }
 
         function launch() {
             sessionStartedAt = Date.now();
-            currentStop = startSession(cameraId, videoEl, statusProxy, codecHint, hasAudio, role, onFrameVisible, function onEnded() {
+            currentStop = startSession(cameraId, videoEl, statusProxy, codecHint, hasAudio, role, onFrameVisible, function onEnded(useRelay) {
                 if (stoppedByUser) return;
                 if (hasEverShownFrame) overlay.show();
+                // The recorder couldn't be reached directly: straight to the relay, with no backoff,
+                // and leaving any message about its certificate up until the picture arrives.
+                if (useRelay) {
+                    if (!hasEverShownFrame && statusEl.querySelector('a')) holdStatusUntil = Date.now() + 15000;
+                    retryTimer = setTimeout(function () { retryTimer = null; launch(); }, 100);
+                    return;
+                }
                 // A session that ran a while before failing is a transient blip (wifi roam, brief
                 // network hiccup) — reset backoff so recovery stays fast. One that fails immediately,
                 // repeatedly, is more likely a real problem (node/camera actually down), where
@@ -194,6 +214,7 @@
         return function stop() {
             stoppedByUser = true;
             if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+            if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
             if (currentStop) currentStop();
             overlay.destroy();
         };
@@ -288,6 +309,9 @@
     // close/error — so start()'s retry wrapper above has one place to decide whether to reconnect.
     function startSession(cameraId, videoEl, statusEl, codecHint, hasAudio, role, onFrameVisible, onEnded) {
         var ended = false;
+        var useRelay = false; // set when the direct connection never opened; tells start() to use the relay
+        // Declared up here because a session can end before the socket code below ever runs.
+        var directOpenTimer = null;
         // The <video> element outlives every session attached to it (each reconnect builds a fresh
         // MediaSource but reuses the same element), so listeners bound to it must be removed when
         // their session ends or they accumulate one full set per reconnect — every one of them still
@@ -323,6 +347,7 @@
             // element), so a session that ended mid-catch-up would otherwise leave the *next*
             // session's playback silently sped up from the very first frame.
             if (driftTimer) { clearInterval(driftTimer); driftTimer = null; }
+            if (directOpenTimer) { clearTimeout(directOpenTimer); directOpenTimer = null; }
             for (var i = 0; i < elementListeners.length; i++) {
                 videoEl.removeEventListener(elementListeners[i][0], elementListeners[i][1]);
             }
@@ -334,7 +359,7 @@
             // across a playback toggle).
             if (videoEl._larisvmsLiveTiming) videoEl._larisvmsLiveTiming = null;
             hideCatchupBadge();
-            onEnded();
+            onEnded(useRelay);
         }
 
         if (!('MediaSource' in window)) {
@@ -815,6 +840,18 @@
 
                 socket = new WebSocket(url);
                 socket.binaryType = 'arraybuffer';
+                var opened = false;
+                socket.onopen = function () {
+                    opened = true;
+                    if (directOpenTimer) { clearTimeout(directOpenTimer); directOpenTimer = null; }
+                };
+                if (streamMode === 'direct') {
+                    directOpenTimer = setTimeout(function () {
+                        directOpenTimer = null;
+                        // Closing a socket that's still connecting raises onerror, then onclose, below.
+                        if (!opened && !closed) socket.close();
+                    }, DIRECT_OPEN_TIMEOUT_MS);
+                }
 
                 socket.onmessage = function (evt) {
                     fragmentCount++;
@@ -862,6 +899,12 @@
                         // so a retry re-resolves (the operator may have flipped the toggle), and — if
                         // this was flagged insecure — offer the one-click trust step.
                         mediaEndpoint.invalidate(cameraId);
+                        if (!opened && !closed) {
+                            useRelay = true;
+                            mediaEndpoint.markDirectUnreachable(cameraId);
+                            console.warn('[live-view] could not connect to the recorder at', ticket.videoUrl, '- using the server relay');
+                            mediaEndpoint.reportStreamEvent(cameraId, role || 'main', streamMode, 'direct_unreachable', null, null);
+                        }
                         if (ticket.insecure && typeof ticket.trustUrl === 'string' &&
                             ticket.trustUrl.indexOf('https://') === 0 && statusEl) {
                             statusEl.textContent = larisvmsI18n.t('js.liveView.untrustedCertificate') + ' ';

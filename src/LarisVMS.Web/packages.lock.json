@@ -568,7 +568,7 @@
         "type": "Project",
         "dependencies": {
           "Azure.Identity": "[1.21.0, )",
-          "LarisVMS.Core": "[0.223.0, )",
+          "LarisVMS.Core": "[0.223.1, )",
           "LarisVMS.Onvif": "[1.0.0, )",
           "MailKit": "[4.17.0, )",
           "Microsoft.AspNetCore.Identity.EntityFrameworkCore": "[10.0.15, )",
@@ -589,7 +589,7 @@
       "larisvms.onvif": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.223.0, )"
+          "LarisVMS.Core": "[0.223.1, )"
         }
       },
       "larisvms.relay": {

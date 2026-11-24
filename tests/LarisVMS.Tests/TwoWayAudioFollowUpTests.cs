@@ -22,6 +22,15 @@ public class TwoWayAudioFollowUpTests
     [InlineData("", false)]
     public void OnlyNonAacAudioIsReencoded(string? codec, bool expected) => Assert.Equal(expected, AudioTranscode.NeedsAac(codec));
 
+    /// <summary>ffmpeg 7.1 loses copied AAC audio, so nothing is copied there, not even a codec that
+    /// isn't known yet.</summary>
+    [Theory]
+    [InlineData("aac")]
+    [InlineData("aac (LC)")]
+    [InlineData("pcm_alaw")]
+    [InlineData(null)]
+    public void AllAudioIsReencodedWhenCopyingLosesAac(string? codec) => Assert.True(AudioTranscode.NeedsAac(codec, copyDropsAac: true));
+
     [Fact]
     public void RecorderCopiesVideoAndEncodesAudioWhenAsked()
     {

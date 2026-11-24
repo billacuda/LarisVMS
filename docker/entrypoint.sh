@@ -27,6 +27,20 @@ if [ ! -s /var/lib/larisvms/machine-id ]; then
     chmod 0600 /var/lib/larisvms/machine-id
 fi
 
+# A certificate that can't be read is replaced by a self-signed one: say why here, where docker logs
+# shows it. Only a warning, and the file isn't copied, so a renewed one is still picked up.
+case "$KIND" in
+    web) pfx="${Kestrel__Certificates__Default__Path:-}" ;;
+    *) pfx="${LARISVMS_CLIENT_PFX_PATH:-}" ;;
+esac
+if [ -n "$pfx" ]; then
+    if [ ! -e "$pfx" ]; then
+        echo "The certificate $pfx doesn't exist inside this container. Mount its folder under volumes (such as /srv/larisvms/certs:/certs:ro) and use the path inside the container (/certs/...)." >&2
+    elif ! setpriv --reuid=larisvms --regid=larisvms --clear-groups test -r "$pfx"; then
+        echo "The certificate $pfx can't be read by this container's account, user and group $(id -u larisvms). On the host, give that user access to the folder and the file (chown $(id -u larisvms):$(id -g larisvms))." >&2
+    fi
+fi
+
 # The GPU images' defaults (where cuDNN and TensorRT are, TensorRT on), unless the compose file
 # sets the same variable.
 while IFS='=' read -r key value; do

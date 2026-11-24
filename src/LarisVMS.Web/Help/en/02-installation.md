@@ -100,7 +100,7 @@ docker run -d --name larisvms-node --hostname larisvms-node-1 --network host --r
   ghcr.io/billacuda/larisvms-node:latest
 ```
 
-Approve the node under **Nodes** afterward. For the server's address, use its LAN address or name, not `localhost`, even on the same machine. If the machine has a firewall, allow TCP 8444 (web server), 8554 (node), and 4443 (proxy), and UDP 8444 if you use HTTP/3. The containers run as user and group 8444, which owns their folders on the host.
+Approve the node under **Nodes** afterward. For the server's address, use its LAN address or name, not `localhost`, even on the same machine. If the machine has a firewall, allow TCP 8444 (web server), 8554 (node), 8555 (a node that streams directly to browsers), and 4443 (proxy), and UDP 8444 if you use HTTP/3. The containers run as user and group 8444, which owns their folders on the host.
 
 The Node step of the setup wizard, and the **Media proxies** page, show a compose stack for Portainer or `docker compose` with this server's address, registration key, and certificate filled in. The settings are the same environment variables the Linux services use (`LARISVMS_SERVER_URL`, `LARISVMS_REGISTRATION_KEY`, `LARISVMS_STORAGE_ROOT`, and so on). Keep `/var/lib/larisvms` on a volume: it holds the keys, the registration, and the machine ID that keeps saved passwords readable when the container is recreated. Use host networking, so camera discovery works. To update, run `docker compose pull` and `docker compose up -d`, choose **Update the stack** with **Re-pull image and redeploy** on in Portainer, or with plain Docker, pull the image, remove the container, and run its command again.
 
@@ -159,3 +159,5 @@ Developers can build and install from the repository with PowerShell instead: `i
 ## Certificates
 
 `Kestrel:Certificates:Default:Path` and `:Password` in `appsettings.Production.json` point at a `.pfx` file (on Linux, also settable in `/etc/larisvms/web.env` as `Kestrel__Certificates__Default__Path` and `__Password`). The server checks it every 60 seconds and swaps in a renewed certificate without a restart.
+
+In Docker, mount the certificate's folder (`/srv/larisvms/certs:/certs:ro`) and use the path inside the container, such as `/certs/vms.pfx`. User 8444 must be able to read it, and a `$` in the password is written `$$` in a compose file. A certificate that can't be loaded is replaced by a self-signed one, and `docker logs` says why.

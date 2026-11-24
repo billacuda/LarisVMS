@@ -13,9 +13,9 @@ namespace LarisVMS.Infrastructure;
 /// </summary>
 public static class AppRelease
 {
-    public const string Version = "0.223.0";
+    public const string Version = "0.223.1";
 
-    public const string Notes = "Added: Linux packages for the web server, nodes, and media proxies, Docker images, and mixed Windows and Linux fleets. Changed: Intel GPUs use OpenVINO for AI detection, and node updates bring the AI libraries they need. Fixed: video encoding no longer picks a GPU the node does not have.";
+    public const string Notes = "Fixed: cameras with AAC audio play again on nodes with ffmpeg 7.1 (the Docker node and Debian 13), a client endpoint host set on a node reaches the server, and browsers that cannot reach a node use the relay. Added: the node page says why a node is relayed.";
 
     /// <summary>Adds this release's AppVersions row unless it's already there. Idempotent.</summary>
     public static async Task EnsureRecordedAsync(ApplicationDbContext db, CancellationToken ct = default)

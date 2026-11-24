@@ -25,6 +25,7 @@ public static partial class DockerComposeSnippet
         sb.AppendLine("services:");
         sb.AppendLine("  larisvms-node:");
         sb.AppendLine($"    image: {Registry}/larisvms-node:{tag}   # or {tag}-cuda / {tag}-tensorrt for NVIDIA GPUs");
+        sb.AppendLine("    container_name: larisvms-node");
         sb.AppendLine("    hostname: larisvms-node-1   # the name this node shows under Nodes");
         sb.AppendLine("    network_mode: host");
         sb.AppendLine("    restart: unless-stopped");
@@ -49,6 +50,7 @@ public static partial class DockerComposeSnippet
         sb.AppendLine("services:");
         sb.AppendLine("  larisvms-proxy:");
         sb.AppendLine($"    image: {Registry}/larisvms-proxy:{ImageTag(runningVersion)}");
+        sb.AppendLine("    container_name: larisvms-proxy");
         sb.AppendLine("    hostname: larisvms-proxy-1");
         sb.AppendLine("    network_mode: host");
         sb.AppendLine("    restart: unless-stopped");

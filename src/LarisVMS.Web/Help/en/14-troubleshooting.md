@@ -21,7 +21,7 @@ Common problems, and where to look.
 
 ## Live view and playback stay on “connecting”
 
-When a node streams directly to browsers (see [Direct streaming](/Help/nodes#direct-streaming)), the browser connects to the node's client port, 4200 by default. If the browser's console shows a failed `wss://<node>:<port>/live/…` connection, check that the node's firewall allows that port: the installer creates an inbound rule named **LarisVMS Node Client Endpoint**. Installers before 0.215.1 could drop that rule when upgrading or taking over a node; run the current Node installer again, or add the rule by hand.
+When a node streams directly to browsers (see [Direct streaming](/Help/nodes#direct-streaming)), the browser connects to the node's client port, 8555 by default. If it can't within 5 seconds, the video is relayed through the server instead. If the browser's console shows a failed `wss://<node>:<port>/live/…` connection, check that the node's firewall allows that port: the installer creates an inbound rule named **LarisVMS Node Client Endpoint**. Installers before 0.215.1 could drop that rule when upgrading or taking over a node; run the current Node installer again, or add the rule by hand. Docker with host networking opens no ports: allow the port in the machine's own firewall (`sudo ufw allow 8555/tcp`).
 
 ## Active Directory sign-in or sync fails
 

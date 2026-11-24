@@ -35,8 +35,9 @@ public class ProxyService(ApplicationDbContext db, ISettingsResolver settings) :
         {
             Id = Guid.NewGuid(),
             Name = request.Hostname,
-            // A sensible default an admin corrects on Admin/Proxies to the actual routable FQDN.
-            Host = request.Hostname,
+            // The host set on the proxy; else a sensible default an admin corrects on Admin/Proxies to
+            // the actual routable FQDN.
+            Host = HostNames.IsValid(request.ClientEndpointHost?.Trim()) ? request.ClientEndpointHost!.Trim() : request.Hostname,
             ApiKeyHash = SecretHash.Hash(secret),
             Version = request.Version,
             Platform = LarisVMS.Core.PlatformId.Sanitize(request.Platform),

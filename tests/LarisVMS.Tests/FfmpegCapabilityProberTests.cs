@@ -26,6 +26,20 @@ public class FfmpegCapabilityProberTests
          V..... mjpeg                MJPEG (Motion JPEG)
         """;
 
+    [Theory]
+    [InlineData("libavformat    61.  7.103 / 61.  7.103", true)]    // 7.1, as Debian 13 ships it
+    [InlineData("libavformat    61.  7.100 / 61.  7.100", true)]
+    [InlineData("libavformat    59. 27.100 / 59. 27.100", false)]   // 5.1
+    [InlineData("libavformat    60. 16.100 / 60. 16.100", false)]   // 6.1
+    [InlineData("libavformat    61.  1.100 / 61.  1.100", false)]   // 7.0
+    [InlineData("libavformat    62.  3.100 / 62.  3.100", false)]   // 8.0
+    [InlineData("libavformat    63.  1.101 / 63.  1.101", false)]   // 9.0
+    [InlineData("libavformat    61. 70.100 / 61. 70.100", false)]
+    [InlineData("", false)]
+    public void OnlyFfmpeg71LosesCopiedAac(string formatLine, bool expected) =>
+        Assert.Equal(expected, FfmpegCapabilityProber.IsFfmpegThatDropsAac(
+            $"ffmpeg version x Copyright (c) 2000-2026 the FFmpeg developers\nlibavcodec     61. 19.101 / 61. 19.101\n{formatLine}\n"));
+
     [Fact]
     public void FindsEveryKnownEncoderPresentInTheOutput()
     {

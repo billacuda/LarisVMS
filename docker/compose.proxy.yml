@@ -4,7 +4,8 @@
 # To update: pull the new image and redeploy.
 services:
   larisvms-proxy:
-    image: ghcr.io/billacuda/larisvms-proxy:latest   # or a version, such as 0.223.0
+    image: ghcr.io/billacuda/larisvms-proxy:latest   # or a version, such as 0.223.1
+    container_name: larisvms-proxy
     hostname: larisvms-proxy-1
     network_mode: host
     restart: unless-stopped
@@ -13,13 +14,13 @@ services:
       LARISVMS_REGISTRATION_KEY: 'your-registration-key'   # only used the first time
       # LARISVMS_SERVER_CERT_THUMBPRINT: '...'
       LARISVMS_CLIENT_PORT: '4443'
-      # LARISVMS_CLIENT_ENDPOINT_HOST: 'proxy.example.com'
-      # LARISVMS_CLIENT_PFX_PATH: '/certs/proxy.pfx'
-      # LARISVMS_CLIENT_PFX_PASSWORD: 'secret'
+      # LARISVMS_CLIENT_ENDPOINT_HOST: 'proxy.example.com'   # only used the first time
+      # LARISVMS_CLIENT_PFX_PATH: '/certs/proxy.pfx'   # the path inside the container (see volumes)
+      # LARISVMS_CLIENT_PFX_PASSWORD: 'secret'   # write $ as $$
     volumes:
       - larisvms-proxy-data:/var/lib/larisvms
       - larisvms-proxy-logs:/var/log/larisvms
-      # - /srv/larisvms/certs:/certs:ro
+      # - /srv/larisvms/certs:/certs:ro   # user 8444 must be able to read it
 volumes:
   larisvms-proxy-data:
   larisvms-proxy-logs:

@@ -11,6 +11,7 @@
 @inject ISettingsResolver Settings
 @inject IAuditService AuditService
 @inject IProxyService ProxyService
+@inject MediaRoutingService MediaRouting
 @inject NodeControlClient NodeControlClient
 @inject NavigationManager NavigationManager
 
@@ -237,6 +238,10 @@ else
                     {
                         <div class="text-danger">⚠️ @n.ClientEndpointLastError</div>
                     }
+                    @if (RouteStatus is { } rs)
+                    {
+                        <div class="@rs.Css">@rs.Text</div>
+                    }
                 </div>
             </SettingField>
             <SettingField Label="@L["admin.nodeEdit.encryptServerConnection"]" Wide Hint="@L["admin.nodeEdit.encryptServerConnectionHint"]" HelpLink="/Help/nodes#encrypted-connections-from-the-server">
@@ -456,6 +461,9 @@ else
     private string GlobalDirectStreaming { get; set; } = "Proxy";
     private bool GlobalAllowInsecureClientEndpoint { get; set; }
     private (string Css, string Text)? FailoverBadge { get; set; }
+    /// <summary>Where browsers get this node's video, and why it's relayed when it is. Null when a media
+    /// proxy is assigned, since that comes first.</summary>
+    private (string Css, string Text)? RouteStatus { get; set; }
     private string? ErrorMessage;
 
     /// <summary>Where custom models go on this node's OS.</summary>
@@ -522,6 +530,17 @@ else
     private string BackendShowWhen =>
         "BackendOverride=ExternalHttp" + (string.Equals(S.EffectiveDetectionBackend, "ExternalHttp", StringComparison.OrdinalIgnoreCase) ? "," : "");
 
+    private static (string Css, string Text) DescribeRoute((MediaRoute Route, MediaRelayReason Reason) decision) => decision.Reason switch
+    {
+        MediaRelayReason.None => ("text-success", Loc.T("admin.nodeEdit.routeDirect", new { host = decision.Route.DirectHost, port = decision.Route.DirectPort })),
+        MediaRelayReason.ProxyMode => ("text-muted", Loc.T("admin.nodeEdit.routeRelayedMode")),
+        MediaRelayReason.EndpointError => ("text-warning-emphasis", Loc.T("admin.nodeEdit.routeRelayedError")),
+        MediaRelayReason.NoEndpoint => ("text-warning-emphasis", Loc.T("admin.nodeEdit.routeRelayedNoEndpoint")),
+        MediaRelayReason.NoHost => ("text-warning-emphasis", Loc.T("admin.nodeEdit.routeRelayedNoHost")),
+        MediaRelayReason.CertificateExpired => ("text-warning-emphasis", Loc.T("admin.nodeEdit.routeRelayedExpired")),
+        _ => ("text-warning-emphasis", Loc.T("admin.nodeEdit.routeRelayedSelfSigned")),
+    };
+
     private string DirectShowWhen =>
         "DirectStreamingMode=Direct" + (string.Equals(GlobalDirectStreaming, "Direct", StringComparison.OrdinalIgnoreCase) ? "," : "");
 
@@ -541,6 +560,8 @@ else
         GlobalDirectStreaming = await Settings.GetAsync("LiveView.DirectStreaming", "Proxy");
         GlobalAllowInsecureClientEndpoint = await Settings.GetAsync("LiveView.AllowInsecureClientEndpoint", false);
         AvailableProxies = (await ProxyService.ListAsync()).Where(p => p.Enabled).ToList();
+        RouteStatus = n.PrimaryProxyId is null && n.BackupProxyId is null
+            ? DescribeRoute(await MediaRouting.ExplainDirectAsync(MediaRouteInputs.From(n))) : null;
         S = await NodeSettingsState.LoadAsync(n, Settings);
 
         Encoders = ParseList(n.DetectedEncodersJson);

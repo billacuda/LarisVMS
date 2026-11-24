@@ -57,6 +57,17 @@ public class DockerContainerTests
     }
 
     [Fact]
+    public void OnlyAHostSetOnTheNodeIsReportedToTheServer()
+    {
+        var set = LarisVMS.Node.ClientEndpointConfig.Resolve(null, new LarisVMS.Node.ClientEndpointLocalConfig(Enabled: true, Port: 8555, Host: " nvr1.example.com "));
+        Assert.Equal("nvr1.example.com", set.ConfiguredHost);
+
+        var unset = LarisVMS.Node.ClientEndpointConfig.Resolve(null, new LarisVMS.Node.ClientEndpointLocalConfig(Enabled: true, Port: 8555));
+        Assert.Null(unset.ConfiguredHost);   // the machine name names the certificate only
+        Assert.Equal(Environment.MachineName, unset.Host);
+    }
+
+    [Fact]
     public void ANodeCertificateVariableAloneLeavesTheEndpointAsItWas()
     {
         var merged = LarisVMS.Node.ClientEndpointConfig.WithEnvironment(null, Env(("LARISVMS_CLIENT_PFX_PATH", "/certs/node.pfx")))!;

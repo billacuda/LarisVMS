@@ -124,6 +124,10 @@ public interface INodeService
     /// <summary>Stores whether the node runs from a Docker image. Null (an older node) leaves it as it is.</summary>
     Task RecordInContainerAsync(Guid nodeId, bool? inContainer, CancellationToken ct = default);
 
+    /// <summary>Fills in the node's client endpoint host with the one set on the node itself, when an
+    /// admin hasn't set one. Returns true when it did.</summary>
+    Task<bool> FillClientEndpointHostAsync(Guid nodeId, string? reportedHost, CancellationToken ct = default);
+
     /// <summary>Stores grid-mode motion heat a node reported for its own cameras: each report replaces
     /// that node run's earlier one for the camera and hour.</summary>
     Task RecordMotionHeatAsync(Guid nodeId, IReadOnlyList<NodeMotionHeatReport> reports, CancellationToken ct = default);
