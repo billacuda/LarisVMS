@@ -63,10 +63,14 @@ public class CameraAccessService(ApplicationDbContext db) : ICameraAccessService
             : await db.CameraGroups.AsNoTracking().Where(g => groupIds.Contains(g.Id))
                 .ToDictionaryAsync(g => g.Id, g => g.MaterializedPath, ct);
 
-        var cameras = await db.Cameras
-            .AsNoTracking()
-            .Select(c => new CameraGroupInfo(c.Id, c.Groups.Select(g => g.MaterializedPath).ToList()))
-            .ToListAsync(ct);
+        // Only group grants need to know which cameras are in which groups.
+        List<CameraGroupInfo> cameras = groupPathsById.Count == 0
+            ? []
+            : await db.Cameras
+                .AsNoTracking()
+                .Where(c => c.Groups.Any())
+                .Select(c => new CameraGroupInfo(c.Id, c.Groups.Select(g => g.MaterializedPath).ToList()))
+                .ToListAsync(ct);
 
         return Resolve(rows, action, cameras, groupPathsById);
     }

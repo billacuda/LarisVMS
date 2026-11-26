@@ -60,7 +60,9 @@ public static class WebSocketRelay
     {
         if (ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
         {
-            try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); }
+            // CloseAsync waits for the other end to answer, which one that has gone away never does.
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, timeout.Token); }
             catch { /* best effort */ }
         }
     }

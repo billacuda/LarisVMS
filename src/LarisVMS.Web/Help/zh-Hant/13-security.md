@@ -11,11 +11,11 @@ IP 允許清單、獨立的即時/回放連接埠、嚴格指令碼原則、憑�
 
 ## 獨立連接埠
 
-**設定 → 即時檢視 → 自訂連接埠**會將即時和回放流量移到它自己的 HTTPS 連接埠，使用同一個憑證。這樣您可以為它單獨設定防火牆，或只將它暴露到區域網路之外。它在 `Restart-Service LarisVMSWeb` 之後生效。此後，影像只在新連接埠上回應，其他所有內容只在主連接埠上回應。清空該欄位即可恢復為單一連接埠。
+**設定 → 即時檢視 → 自訂連接埠**會將即時和回放流量移到它自己的 HTTPS 連接埠，使用同一個憑證。這樣您可以為它單獨設定防火牆，或只將它暴露到區域網路之外。它在 `Restart-Service LarisVMSWeb`（Linux 上為 `sudo systemctl restart larisvms-web`）之後生效。此後，影像只在新連接埠上回應，其他所有內容只在主連接埠上回應。清空該欄位即可恢復為單一連接埠。
 
 ## HTTP/3
 
-伺服器使用 HTTP/2，並在 Windows 11、Windows Server 2022 或更新版本上增加 HTTP/3。瀏覽器從 HTTP/2 開始，在能夠連線時會自行切換到 HTTP/3。HTTP/3 在 HTTPS 連接埠（以及已設定的自訂連接埠）上使用 UDP。安裝程式會同時開放 TCP 和 UDP；對於較舊的安裝，請為該連接埠新增一條 UDP 規則，或再次執行目前的安裝程式。在此之前，一切仍透過 HTTP/2 正常運作。要關閉 HTTP/3，請取消勾選**設定 → 安全性 → HTTP/3**，然後執行 `Restart-Service LarisVMSWeb`。
+伺服器使用 HTTP/2，並在 Windows 11、Windows Server 2022 或更新版本上，以及安裝了 Microsoft 的 `libmsquic` 套件的 Linux 上增加 HTTP/3。瀏覽器從 HTTP/2 開始，在能夠連線時會自行切換到 HTTP/3。HTTP/3 在 HTTPS 連接埠（以及已設定的自訂連接埠）上使用 UDP。安裝程式（和 Linux 套件）會同時開放 TCP 和 UDP；對於較舊的安裝，請為該連接埠新增一條 UDP 規則，或再次執行目前的安裝程式。在此之前，一切仍透過 HTTP/2 正常運作。要關閉 HTTP/3，請取消勾選**設定 → 安全性 → HTTP/3**，然後執行 `Restart-Service LarisVMSWeb`（或 `sudo systemctl restart larisvms-web`）。
 
 ## 嚴格指令碼原則
 
@@ -48,7 +48,7 @@ IP 允許清單、獨立的即時/回放連接埠、嚴格指令碼原則、憑�
 
 ## 加密的密碼
 
-攝影機憑證、SMB 憑證、節點金鑰、電子郵件密碼、Entra 和 Google 用戶端密碼，以及 Active Directory 服務帳戶的密碼，使用 `%ProgramData%\LarisVMS\keys` 中的資料保護金鑰加密後存放在資料庫中。只有 SYSTEM、Administrators 和 LarisVMS 服務的帳戶才能開啟 `%ProgramData%\LarisVMS`：在那裡發現的任何其他存取權限，例如本機使用者在安裝 LarisVMS 之前建立的資料夾，會在服務啟動時被移除。請備份該資料夾，並且在部署期間絕不要刪除它。
+攝影機憑證、SMB 憑證、節點金鑰、電子郵件密碼、Entra 和 Google 用戶端密碼，以及 Active Directory 服務帳戶的密碼，使用 `%ProgramData%\LarisVMS\keys` 中的資料保護金鑰加密後存放在資料庫中。只有 SYSTEM、Administrators 和 LarisVMS 服務的帳戶才能開啟 `%ProgramData%\LarisVMS`：在那裡發現的任何其他存取權限，例如本機使用者在安裝 LarisVMS 之前建立的資料夾，會在服務啟動時被移除。請備份該資料夾，並且在部署期間絕不要刪除它。在 Linux 上，金鑰位於 `/var/lib/larisvms/keys`，`/var/lib/larisvms` 歸 larisvms 帳戶所有，其他任何人都無法存取。
 
 ## 針對企業的額外保護
 
@@ -66,4 +66,4 @@ IP 允許清單、獨立的即時/回放連接埠、嚴格指令碼原則、憑�
 - **從伺服器到節點的加密連線**：在每個節點的頁面上（請參閱[來自伺服器的加密連線](/Help/nodes#encrypted-connections-from-the-server)）。
 - **將稽核記錄轉送到 syslog**：設定 → 記錄（請參閱[稽核記錄](/Help/users#audit-log)）。
 - **由發行者簽署的更新**，適用於您自己建置的版本（請參閱[更新](#updates)）。
-- **權限更低的服務帳戶**。LarisVMS 服務以 LocalSystem 執行。您可以使用其他帳戶來執行它們（`services.msc` 或 `sc.exe config`），但此後需要您自己為該帳戶提供服務所需的內容：安裝資料夾、每個儲存和封存資料夾或共用，以及憑證檔案。`%ProgramData%\LarisVMS` 由系統為您處理：每個 LarisVMS 服務在啟動時都會將其限制為 SYSTEM、Administrators，以及 LarisVMS 服務執行所用的帳戶，並移除那裡的任何其他存取權限。變更之後請檢查服務的記錄。
+- **權限更低的服務帳戶**。LarisVMS 服務以 LocalSystem 執行。您可以使用其他帳戶來執行它們（`services.msc` 或 `sc.exe config`），但此後需要您自己為該帳戶提供服務所需的內容：安裝資料夾、每個儲存和封存資料夾或共用，以及憑證檔案。`%ProgramData%\LarisVMS` 由系統為您處理：每個 LarisVMS 服務在啟動時都會將其限制為 SYSTEM、Administrators，以及 LarisVMS 服務執行所用的帳戶，並移除那裡的任何其他存取權限。變更之後請檢查服務的記錄。在 Linux 上，服務已經以無特殊權限的專用帳戶 `larisvms` 執行；只有安裝已核准的節點和代理更新的小型輔助程式以 root 執行。

@@ -64,7 +64,8 @@ public static class MotionZoneOverlayHandler
     private static async Task TryCloseAsync(WebSocket socket)
     {
         if (socket.State != WebSocketState.Open) return;
-        try { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); }
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, timeout.Token); }
         catch { /* client already gone — nothing to clean up */ }
     }
 }

@@ -26,20 +26,14 @@ public static class LiveViewerHandler
     /// dropped with a clean close (below) rather than being fed a spliced byte stream.</summary>
     private const int LiveViewerQueueCapacity = 128;
 
+    /// <summary>How long a viewer being dropped gets to take what's already queued for it. A send that
+    /// never finishes (a client that stopped reading without closing) would otherwise hold its queue,
+    /// tens of MB, for as long as the connection lasts.</summary>
+    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(10);
+
     public static async Task RunAsync(WebSocket socket, ILiveSource session, ILogger logger, CancellationToken ct)
     {
-        byte[] initSegment;
-        try
-        {
-            using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            waitCts.CancelAfter(TimeSpan.FromSeconds(15));
-            initSegment = await session.WaitForLiveInitSegmentAsync(waitCts.Token);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            await TryCloseAsync(socket, WebSocketCloseStatus.InternalServerError, "no live stream available yet");
-            return;
-        }
+        using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
         // FullMode.Wait (not DropOldest, the old behaviour, nor DropWrite): when this viewer's send
         // loop can't keep up we need to *notice*, not silently discard a fragment from the middle of
@@ -59,27 +53,58 @@ public static class LiveViewerHandler
             SingleWriter = true
         });
 
+        // Both handlers run on the source's own loops, so neither may throw or block.
+        void FinishSending()
+        {
+            channel.Writer.TryComplete();
+            try { sendCts.CancelAfter(DrainTimeout); }
+            catch (ObjectDisposedException) { /* this viewer has already left */ }
+        }
+
         var fellBehind = 0;
+        var attemptEnded = 0;
         void OnFragment(byte[] fragment)
         {
+            if (Volatile.Read(ref attemptEnded) == 1) return; // not a continuation of what this viewer has
             if (!channel.Writer.TryWrite(fragment) && Interlocked.Exchange(ref fellBehind, 1) == 0)
             {
                 logger.LogInformation(
                     "Live viewer fell behind (per-viewer queue of {Capacity} full) — closing socket for a clean reconnect.",
                     LiveViewerQueueCapacity);
-                channel.Writer.TryComplete();
+                FinishSending();
             }
         }
-        session.LiveFragmentReceived += OnFragment;
 
+        // The recorder's ffmpeg restarted. What comes next has another init segment and restarted
+        // timestamps, which a browser's buffer can't take: end here, and the viewer reconnects to it.
+        void OnAttemptEnded()
+        {
+            if (Interlocked.Exchange(ref attemptEnded, 1) == 0) FinishSending();
+        }
+
+        session.LiveAttemptEnded += OnAttemptEnded;
         try
         {
-            await socket.SendAsync(initSegment, WebSocketMessageType.Binary, endOfMessage: true, ct);
+            byte[] initSegment;
+            try
+            {
+                using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                waitCts.CancelAfter(TimeSpan.FromSeconds(15));
+                initSegment = await session.WaitForLiveInitSegmentAsync(waitCts.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                await TryCloseAsync(socket, WebSocketCloseStatus.InternalServerError, "no live stream available yet");
+                return;
+            }
 
-            await foreach (var fragment in channel.Reader.ReadAllAsync(ct))
+            session.LiveFragmentReceived += OnFragment;
+            await socket.SendAsync(initSegment, WebSocketMessageType.Binary, endOfMessage: true, sendCts.Token);
+
+            await foreach (var fragment in channel.Reader.ReadAllAsync(sendCts.Token))
             {
                 if (socket.State != WebSocketState.Open) break;
-                await socket.SendAsync(fragment, WebSocketMessageType.Binary, endOfMessage: true, ct);
+                await socket.SendAsync(fragment, WebSocketMessageType.Binary, endOfMessage: true, sendCts.Token);
             }
         }
         catch (OperationCanceledException) { }
@@ -90,6 +115,7 @@ public static class LiveViewerHandler
         finally
         {
             session.LiveFragmentReceived -= OnFragment;
+            session.LiveAttemptEnded -= OnAttemptEnded;
             var (status, reason) = Volatile.Read(ref fellBehind) == 1
                 ? (WebSocketCloseStatus.PolicyViolation, "viewer fell behind — reconnect")
                 : (WebSocketCloseStatus.NormalClosure, (string?)null);
@@ -100,7 +126,9 @@ public static class LiveViewerHandler
     private static async Task TryCloseAsync(WebSocket socket, WebSocketCloseStatus status, string? description)
     {
         if (socket.State != WebSocketState.Open) return;
-        try { await socket.CloseAsync(status, description, CancellationToken.None); }
+        // CloseAsync waits for the client to answer, which one that has gone away never does.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try { await socket.CloseAsync(status, description, timeout.Token); }
         catch { /* client already gone — nothing to clean up */ }
     }
 }

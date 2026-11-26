@@ -2,9 +2,9 @@
 
 Nodi di registrazione: stato, percorsi di streaming, proxy multimediali, failover, manutenzione e aggiornamenti.
 
-**Nodi** nella barra laterale elenca ogni nodo con il suo stato, indirizzo, versione, numero di telecamere e utilizzo del disco. Faccia clic su un nodo per modificarne le impostazioni. Il menu **⋯** ha queste azioni:
+**Nodi** nella barra laterale elenca ogni nodo con il suo stato, indirizzo, versione, numero di telecamere e utilizzo del disco. Sotto ogni versione c’è la piattaforma del nodo (Windows o Linux): un server può avere nodi su entrambe. **Docker** accanto significa che il nodo è eseguito da un’immagine Docker. Il server non gli invia build: quando viene approvata una build più recente, la pagina indica quale immagine scaricare. Faccia clic su un nodo per modificarne le impostazioni. Il menu **⋯** ha queste azioni:
 
-- **Riavvia servizio**: riavvia il servizio Windows del nodo, non la macchina. La registrazione si interrompe per alcuni secondi.
+- **Riavvia servizio**: riavvia il servizio del nodo (un servizio Windows, o systemd su Linux), non la macchina. La registrazione si interrompe per alcuni secondi.
 - **Reimposta autenticazione**: cancella il token di check-in del nodo, per un nodo bloccato in errori di autenticazione dopo un heartbeat perso. Non ha effetto su un nodo in buono stato.
 - **Manutenzione**: sposta le telecamere del nodo sul suo nodo di riserva finché non disattiva la manutenzione.
 - **Elimina**: rimuove il nodo. Le sue telecamere diventano non assegnate. Le registrazioni non vengono eliminate.
@@ -15,7 +15,9 @@ Un nodo è **online** se ha fatto check-in negli ultimi 2 minuti. Un avviso ⚠�
 
 Per impostazione predefinita tutto il video dal vivo e in riproduzione è inoltrato attraverso il server web (**Proxy**). Con **Diretto**, i browser si connettono direttamente all’endpoint HTTPS di ciascun nodo, il che toglie carico al server. Imposti la modalità in **Impostazioni → Visualizzazione dal vivo** e la sostituisca per nodo.
 
-La modalità Diretto richiede un **host dell’endpoint client** raggiungibile dai browser e un certificato (un percorso `.pfx` nella pagina del nodo). **Consenti autofirmati** è solo per test, perché gli spettatori ricevono un avviso del browser. Una telecamera il cui nodo non ha un endpoint in buono stato ripiega automaticamente sul proxy.
+La modalità Diretto richiede un **host dell’endpoint client** raggiungibile dai browser e un certificato (un percorso `.pfx` nella pagina del nodo). **Consenti autofirmati** è solo per test, perché gli spettatori ricevono un avviso del browser. Un host impostato sul nodo stesso (`CLIENTENDPOINTHOST`, `--client-endpoint-host` o `LARISVMS_CLIENT_ENDPOINT_HOST`) viene compilato nella sua pagina, a meno che lì non ne sia impostato uno. **Stato dell’endpoint** nella pagina del nodo indica se i browser si connettono direttamente e, in caso contrario, perché.
+
+Una telecamera il cui nodo non ha un endpoint in buono stato viene inoltrata automaticamente. Lo stesso vale per una il cui nodo non è raggiungibile da un browser: dopo 5 secondi usa l’inoltro, e riprova il nodo qualche minuto dopo.
 
 ## Connessioni cifrate dal server
 
@@ -37,7 +39,7 @@ La pagina del nodo avvisa quando il nodo di riserva ha hardware IA diverso o è 
 
 Nodi e proxy si aggiornano da soli dalle build approvate (vedere [Installazione](/Help/installation#updates)). **Nodi → Aggiornamenti e registrazione → Aggiornamento automatico** lo attiva o disattiva per ogni nodo.
 
-La sezione **Build** della pagina Nodi mostra la build verso cui sta andando ogni tipo di nodo e qualsiasi build in attesa di approvazione, con **Approva** e **Rifiuta**. **Cronologia delle build** elenca ogni build, comprese quelle approvate, sostituite e rifiutate.
+La sezione **Build** della pagina Nodi mostra la build verso cui sta andando ogni tipo di nodo e qualsiasi build in attesa di approvazione, con **Approva** e **Rifiuta**. Le build sono tenute per piattaforma: un nodo Windows riceve solo una build Windows, e un nodo Linux una Linux. Ogni installazione web contiene entrambe, e **Approva tutte** approva una versione per tutte le piattaforme in una volta. **Cronologia delle build** elenca ogni build, comprese quelle approvate, sostituite e rifiutate. **Rimuovi le vecchie build** elimina ogni build più vecchia di quella approvata per la sua piattaforma, con i suoi file.
 
 ## Certificato del server
 
@@ -47,9 +49,9 @@ La sezione **Build** della pagina Nodi mostra la build verso cui sta andando ogn
 - **Solo certificato attendibile**: solo un certificato di una CA attendibile che corrisponda al nome del server. Ne installi uno prima di scegliere questa opzione.
 - **Non verificare**: qualsiasi certificato. Non sicuro: chiunque sul percorso di rete potrebbe fingersi il server.
 
-Con la fiducia al primo utilizzo, un nodo considera attendibile il certificato che vede la prima volta che si connette. Perché verifichi fin dalla primissima connessione, passi al programma di installazione l’impronta mostrata in **Verifica del certificato del server**: `-ServerCertThumbprint` per `install-node.ps1` e `install-proxy.ps1`, oppure `SERVERCERTTHUMBPRINT=` per l’MSI. I comandi di installazione nelle pagine Installazione e Proxy multimediali la includono già. Dietro un reverse proxy, usi invece l’impronta del certificato che il reverse proxy presenta.
+Con la fiducia al primo utilizzo, un nodo considera attendibile il certificato che vede la prima volta che si connette. Perché verifichi fin dalla primissima connessione, passi al programma di installazione l’impronta mostrata in **Verifica del certificato del server**: `-ServerCertThumbprint` per `install-node.ps1` e `install-proxy.ps1`, `SERVERCERTTHUMBPRINT=` per l’MSI, oppure `--server-cert-thumbprint` per `larisvms-node setup` e `larisvms-proxy setup` su Linux. I comandi di installazione nelle pagine Installazione e Proxy multimediali la includono già. Dietro un reverse proxy, usi invece l’impronta del certificato che il reverse proxy presenta.
 
-Il certificato autofirmato che il server crea per sé dura 10 anni e non viene sostituito da solo. **Rigenera certificato autofirmato** lo sostituisce; ogni nodo e proxy deve allora essere registrato di nuovo, e la pagina Nodi elenca quelli che non hanno fatto check-in da allora. Per registrare di nuovo un nodo, esegua di nuovo il programma di installazione del nodo, oppure esegua `LarisVMS.Node.exe --reset-server-pin` su di esso e riavvii il suo servizio (i proxy hanno la stessa opzione).
+Il certificato autofirmato che il server crea per sé dura 10 anni e non viene sostituito da solo. **Rigenera certificato autofirmato** lo sostituisce; ogni nodo e proxy deve allora essere registrato di nuovo, e la pagina Nodi elenca quelli che non hanno fatto check-in da allora. Per registrare di nuovo un nodo, esegua di nuovo il programma di installazione del nodo, oppure esegua `LarisVMS.Node.exe --reset-server-pin` su di esso e riavvii il suo servizio (i proxy hanno la stessa opzione). Su Linux, esegua `sudo larisvms-node setup --reregister --server-url <url> --registration-key <key>` (o `larisvms-proxy`).
 
 ## Codici di registrazione monouso
 

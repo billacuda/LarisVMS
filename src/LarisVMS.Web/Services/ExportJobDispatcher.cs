@@ -128,7 +128,10 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
         }
 
         var segmentPaths = segments.Select(s => s.FilePath).ToList();
-        var outputFileName = BuildOutputFileName(candidate.CameraName, candidate.CameraId, node.Name, candidate.FromUtc, candidate.ToUtc);
+        // The item's ID keeps two exports of the same footage (one with areas blacked out, say) in two
+        // files on the node; downloads leave it out (ExportFileName).
+        var outputFileName = LarisVMS.Core.ExportFileName.WithItemId(
+            BuildOutputFileName(candidate.CameraName, candidate.CameraId, node.Name, candidate.FromUtc, candidate.ToUtc), candidate.ExportItemId);
         // Two-way audio said through the camera during this footage goes into the export too. Only
         // presses recorded on this same node — the file has to be local to the ffmpeg mixing it.
         var segmentsStart = segments[0].StartUtc;

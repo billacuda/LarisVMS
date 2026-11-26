@@ -10,20 +10,34 @@ Activez-la par caméra avec **Surveiller les objets sur cette caméra**. Seuls *
 
 Un seul paquet de nœud couvre toutes les machines. Au démarrage, le service de vision choisit un moteur adapté au matériel qu’il trouve :
 
-| Matériel | Moteur | Requis sur le nœud |
-|---|---|---|
-| GPU NVIDIA | CUDA (repasse à DirectML) | CUDA Toolkit 12.x et cuDNN 9.x |
-| GPU Intel | OpenVINO (repasse à DirectML) | Un pilote graphique Intel à jour |
-| GPU AMD | DirectML | Un pilote de GPU à jour |
-| Pas de GPU | CPU | Rien |
+| Matériel | Windows | Linux | Requis sur le nœud |
+|---|---|---|---|
+| GPU NVIDIA | CUDA (repasse à DirectML) | CUDA (repasse au CPU) | CUDA 12 et cuDNN 9 (voir les prérequis ci-dessous) |
+| GPU Intel | OpenVINO (repasse à DirectML) | OpenVINO (repasse au CPU) | Un pilote graphique Intel à jour ; sous Linux, le compute runtime d’Intel (`intel-opencl-icd`) |
+| GPU AMD | DirectML | CPU | Un pilote de GPU à jour |
+| Pas de GPU | CPU | CPU | Rien |
 
-La page de modification du nœud affiche les accélérateurs détectés, et son paramètre **Accélérateur** peut en imposer un. Les modèles ne sont jamais fournis avec le logiciel. Un nœud récupère les modèles YOLOX intégrés depuis le serveur, et les autres modèles vont dans `C:\ProgramData\LarisVMS\models` sur le nœud.
+La page de modification du nœud affiche les accélérateurs détectés, et son paramètre **Accélérateur** peut en imposer un. Les modèles ne sont jamais fournis avec le logiciel. Un nœud récupère les modèles YOLOX intégrés depuis le serveur, et les autres modèles vont dans `C:\ProgramData\LarisVMS\models` (Windows) ou `/var/lib/larisvms/models` (Linux) sur le nœud.
+
+Debian 13 n’a pas de paquet `intel-opencl-icd`. Installez celui des versions publiées par Intel, en suivant les étapes de leur page : [26.27.39122.11](https://github.com/intel/compute-runtime/releases/tag/26.27.39122.11) pour les Core de 11e génération (Tiger Lake), Arc et plus récents, ou [24.35.30872.36](https://github.com/intel/compute-runtime/releases/tag/24.35.30872.36) pour les puces graphiques plus anciennes. L’image Docker du nœud contient déjà les deux.
+
+Prérequis NVIDIA pour le moteur CUDA (ONNX Runtime 1.24, compilé avec CUDA 12.8) :
+
+| | Linux | Windows |
+|---|---|---|
+| Pilote NVIDIA | 570.26 ou plus récent | 570.65 ou plus récent |
+| CUDA | 12.8 ou un 12.x plus récent | 12.8 ou un 12.x plus récent |
+| cuDNN | 9.x | 9.x |
+| GPU | Turing (série RTX 20, série GTX 16) ou plus récent ; Pascal et Maxwell nécessitent cuDNN 9.10.2 ou antérieur | idem |
+| TensorRT (facultatif) | 10.x | 10.x |
+
+La page **Nœuds** avertit lorsque le pilote NVIDIA d’un nœud est trop ancien pour CUDA. Sous Linux, installez CUDA et cuDNN depuis le dépôt apt ou dnf de NVIDIA (`cuda-libraries-12-8` et `libcudnn9-cuda-12`) ; le nœud les trouve par le chemin des bibliothèques du système ou dans `/usr/local/cuda/lib64`. L’accélération GPU sous Linux n’a pas encore été testée sur du matériel réel.
 
 ## Moteur lent
 
-Si un nœud NVIDIA ne peut pas utiliser CUDA, la détection IA repasse à DirectML, qui s’exécute plusieurs fois plus lentement. Moins d’images sont analysées, le GPU chauffe, et des objets rapides comme des voitures qui passent peuvent ne pas être détectés. La page **Nœuds** affiche alors **⚠️ IA sur DirectML** à côté du nœud, avec la raison, et les super administrateurs reçoivent une notification.
+Si un nœud NVIDIA ne peut pas utiliser CUDA, la détection IA repasse à DirectML (au CPU sous Linux), qui s’exécute plusieurs fois plus lentement. Moins d’images sont analysées, le GPU chauffe, et des objets rapides comme des voitures qui passent peuvent ne pas être détectés. La page **Nœuds** affiche alors **⚠️ IA sur DirectML** à côté du nœud, avec la raison, et les super administrateurs reçoivent une notification.
 
-La cause habituelle est un cuDNN manquant. Installez le CUDA Toolkit 12.x et cuDNN 9.x pour CUDA 12 sur le nœud, depuis le téléchargement cuDNN de NVIDIA ou avec `pip install nvidia-cudnn-cu12`. Le nœud les trouve dans les 10 minutes, les copie à côté de son moteur d’IA et redémarre la détection sur CUDA.
+La cause habituelle est un cuDNN manquant, ou un pilote NVIDIA plus ancien que ce qu’exige CUDA 12.8. Sous Windows, installez le CUDA Toolkit 12.x et cuDNN 9.x pour CUDA 12 sur le nœud, depuis le téléchargement cuDNN de NVIDIA ou avec `pip install nvidia-cudnn-cu12`. Sous Linux, installez `cuda-libraries-12-8` et `libcudnn9-cuda-12` depuis le dépôt de NVIDIA. Le nœud les trouve dans les 10 minutes (sous Windows, il les copie à côté de son moteur d’IA) et redémarre la détection sur CUDA.
 
 ## Familles de modèles
 
@@ -41,7 +55,7 @@ Changer de modèle redémarre la détection de chaque caméra.
 
 ## Modèles personnalisés
 
-Déposez un fichier `.onnx` dans `C:\ProgramData\LarisVMS\models` sur le nœud. Si les métadonnées du modèle décrivent son décodeur, sa taille d’entrée et ses libellés, il fonctionne tel quel. Sinon, ajoutez un fichier `.json` du même nom qui fournit ce qui manque. **Actualiser** liste chaque modèle trouvé par les nœuds et signale ceux dont les métadonnées sont incomplètes. Un modèle avec un avertissement peut être sélectionné mais ne s’exécutera pas tant que l’avertissement n’est pas corrigé.
+Déposez un fichier `.onnx` dans `C:\ProgramData\LarisVMS\models` (Windows) ou `/var/lib/larisvms/models` (Linux) sur le nœud ; sous Linux, vérifiez que le compte larisvms peut le lire. Si les métadonnées du modèle décrivent son décodeur, sa taille d’entrée et ses libellés, il fonctionne tel quel. Sinon, ajoutez un fichier `.json` du même nom qui fournit ce qui manque. **Actualiser** liste chaque modèle trouvé par les nœuds et signale ceux dont les métadonnées sont incomplètes. Un modèle avec un avertissement peut être sélectionné mais ne s’exécutera pas tant que l’avertissement n’est pas corrigé.
 
 ## Ajustement du format
 

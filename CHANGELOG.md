@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.223.2] - 2026-11-25
+
+### ⚙️ Changed
+
+- **Translations.** Help and the interface are complete again in all nine languages, with everything about
+  Linux, Docker, and direct streaming.
+- **Recording folders.** A node lists only the current hour folders of each camera instead of everything
+  it has recorded, every 5 seconds.
+- **Less database work.** Cleaning up old events no longer loads every event, failover checks nodes at the
+  same time, and API keys, camera access, and the Exports page read and write less.
+- **Exports.** A node makes two exports at a time and stops them when the service stops.
+- **Detection model mirrors.** A model address you set can have its SHA-256 checked
+  (`DetectionModels:<family>:<size>-sha256`).
+- **Code scanning.** The last findings are fixed or reviewed, and ESLint now checks timers for code passed
+  as text, in place of a DevSkim rule that flagged every timer.
+
+### 🛠️ Fixed
+
+- **Footage lost when clocks go back.** Recordings are named by UTC, in a `utc` folder inside each camera's
+  `main` folder. Named by local time, the repeated hour overwrote the one before. Existing footage stays
+  where it is and plays as before.
+- **Motion and Event recording.** An error deciding about one segment no longer stops those decisions for
+  every camera until the node restarts.
+- **Exports overwriting each other.** Two exports of the same camera and time no longer share a file, where
+  one with areas blacked out could be replaced by one without.
+- **Exports stuck on running.** An export cut off by a recorder restart is marked failed, so it can be retried.
+- **Saved changes reaching nodes.** Changes and manual recordings reach a node right away again instead of
+  after up to 30 seconds.
+- **After an outage.** A node sends its backlog in parts, so it catches up however long the server was away.
+  One report the database refuses no longer takes others with it.
+- **Cameras that come and go.** Retries slow down for a camera that stays offline, and start from a short wait
+  again once it works. A stuck ffmpeg no longer stops motion, AI detection, or the sub stream.
+- **Recording restarts.** A changed camera's new recording waits for the old one to end.
+- **Live view after a reconnect.** Viewers start over when the recorder reconnects to the camera, and ones
+  that stopped responding are closed.
+- **AI detection.** Fixed detections missing until they ended, a camera left without detection after an
+  error, a crash when D-FINE falls back to FP32, and detection left running after it was stopped.
+- **Camera events.** A camera whose event subscription fails is no longer asked again without a pause.
+- **Failed updates.** A node or proxy update that fails is retried less and less often.
+- **Two-way audio.** What was said is on the timeline when the browser's connection drops.
+- **Settings.** A setting read while it's being saved can't stay at its old value.
+- **Help.** The Linux section says where the node command is shown: the setup wizard, not an **Add node** page.
+
+### 🔒 Security
+
+- **Two-way audio, detection boxes, and motion zones.** Camera access is checked every minute, as it was for
+  live video.
+- **Media proxy.** Limits open connections per address, and waits 10 seconds at most for a node.
+- **Forms.** The content security policy only lets pages send forms to LarisVMS, except the sign-in and email
+  settings pages.
+
 ## [0.223.1] - 2026-11-24
 
 ### ➕ Added
@@ -2220,7 +2271,8 @@ Only the 10 most recent versions are kept in this file. Older entries are archiv
 - [v0.21.1 – v0.40.0](changelog-archive/v0.21.1-to-v0.40.0.md) (2026-08-09 – 2026-08-11)
 - [v0.1.0 – v0.21.0](changelog-archive/v0.1.0-to-v0.21.0.md) (2026-08-08 – 2026-08-09)
 
-[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.223.1...HEAD
+[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.223.2...HEAD
+[0.223.2]: https://github.com/billacuda/LarisVMS/compare/v0.223.1...v0.223.2
 [0.223.1]: https://github.com/billacuda/LarisVMS/compare/v0.223.0...v0.223.1
 [0.223.0]: https://github.com/billacuda/LarisVMS/compare/v0.222.2...v0.223.0
 [0.222.2]: https://github.com/billacuda/LarisVMS/compare/v0.222.1...v0.222.2

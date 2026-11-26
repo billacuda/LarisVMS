@@ -884,7 +884,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
     public async Task UpdateStreamInfoAsync(Guid nodeId, IReadOnlyList<StreamInfoReportItem> items, CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
-        foreach (var item in items)
+        // A node that couldn't reach the server for a while sends many reports per stream at once.
+        foreach (var item in StreamInfoReportItem.Merge(items))
         {
             if (!Enum.TryParse<CameraStreamRole>(item.StreamRole, out var role)) continue;
 
@@ -994,22 +995,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         }
 
         // Backstop for what the check above can't see: two reports of the same new segment racing
-        // each other (the FilePath unique constraint), or a camera removed meanwhile (its FK). One
-        // bad row shouldn't cost the rest of the batch: retry, each time detaching the entries EF
-        // identifies as the cause of that attempt's failure, until either everything savable is
-        // saved or a failure can't be attributed to specific entries (then it propagates normally).
-        while (true)
-        {
-            try
-            {
-                await db.SaveChangesAsync(ct);
-                break;
-            }
-            catch (DbUpdateException ex) when (ex.Entries.Count > 0)
-            {
-                foreach (var entry in ex.Entries) entry.State = EntityState.Detached;
-            }
-        }
+        // each other (the FilePath unique constraint), or a camera removed meanwhile (its FK).
+        await SaveDroppingUnsavableAsync(added, _ => Array.Empty<object>(), null, ct);
 
         // Tamper evidence: link what was actually saved (a re-sent duplicate was dropped above) into
         // each camera's hash chain.
@@ -1255,8 +1242,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             await FoldObjectsAsync(created, item);
         }
 
-        // Detach-and-retry: a row the batch can't save is dropped (not the whole batch). Two causes
-        // in practice —
+        // A row that can't be saved is dropped (not the whole batch). Two causes in practice —
         //  - an FK violation: a zone/rule/category deleted mid-flight (the *Service.DeleteAsync nulls
         //    matching MotionSpans rows first but can't fix a report already in flight); the row is
         //    genuinely unsaveable, so dropping it is right.
@@ -1265,37 +1251,15 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         //    rare, but a multi-instance web farm, or a future caller, could still race). Here the row
         //    is not junk — merge its forward progress (later EndUtc, better best-frame) into the
         //    committed winner before dropping the duplicate, rather than losing it.
-        var attempt = 0;
-        while (true)
+        await SaveDroppingUnsavableAsync(pending, s => s.Objects, async (rejected, uniqueViolation) =>
         {
-            try
-            {
-                await db.SaveChangesAsync(ct);
-                break;
-            }
-            catch (DbUpdateException ex) when (ex.Entries.Count > 0 && ++attempt <= 20)
-            {
-                var uniqueViolation = DatabaseProviderOps.IsUniqueViolation(ex.InnerException);
-                foreach (var entry in ex.Entries)
-                {
-                    if (uniqueViolation && entry.State == EntityState.Added
-                        && entry.Entity is MotionSpan rejected && rejected.DetectedObjectLabel is not null)
-                    {
-                        var winner = await db.MotionSpans.FirstOrDefaultAsync(m =>
-                            m.CameraId == rejected.CameraId
-                            && m.DetectedObjectLabel == rejected.DetectedObjectLabel
-                            && m.StartUtc == rejected.StartUtc, ct);
-                        if (winner is not null) MergeSpanForward(winner, rejected);
-                    }
-                    // A dropped span's objects can't be saved without it.
-                    if (entry.Entity is MotionSpan droppedSpan)
-                    {
-                        foreach (var o in droppedSpan.Objects) db.Entry(o).State = EntityState.Detached;
-                    }
-                    entry.State = EntityState.Detached;
-                }
-            }
-        }
+            if (!uniqueViolation || rejected.DetectedObjectLabel is null) return;
+            var winner = await db.MotionSpans.FirstOrDefaultAsync(m =>
+                m.CameraId == rejected.CameraId
+                && m.DetectedObjectLabel == rejected.DetectedObjectLabel
+                && m.StartUtc == rejected.StartUtc, ct);
+            if (winner is not null) MergeSpanForward(winner, rejected);
+        }, ct);
 
         if (detectionEvents is not null)
         {
@@ -1314,6 +1278,70 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 if (db.Entry(span).State != EntityState.Unchanged) continue; // dropped above
                 detectionEvents.PublishMotion(new MotionEvent(span.Id, span.CameraId, span.ZoneId, span.StartUtc, span.EndUtc));
             }
+        }
+    }
+
+    /// <summary>Saves everything pending. When the database refuses a row, the new rows are saved one at
+    /// a time and only the refused ones are dropped. EF names every row of a failed command, good ones
+    /// included (up to 42 on SQL Server), so dropping what it names loses most of a batch to one bad row.
+    ///
+    /// Only for a row the database can never take. Anything else (connection lost, timeout, deadlock)
+    /// propagates: the node sends the whole report again.</summary>
+    /// <param name="children">New rows saved together with theirs, held in a collection on it.</param>
+    /// <param name="onDropped">Called for each dropped row, with whether it was a duplicate.</param>
+    private async Task SaveDroppingUnsavableAsync<T>(IReadOnlyCollection<T> newRows, Func<T, System.Collections.IList> children,
+        Func<T, bool, Task>? onDropped, CancellationToken ct) where T : class
+    {
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return;
+        }
+        catch (DbUpdateException ex) when (DatabaseProviderOps.IsConstraintViolation(ex.InnerException))
+        {
+            // Nothing was saved: it's one transaction.
+        }
+
+        var waiting = newRows.Where(r => db.Entry(r).State == EntityState.Added)
+            .Select(r => (Row: r, Children: children(r).Cast<object>().ToList())).ToList();
+        foreach (var (row, rowChildren) in waiting) Detach(row, rowChildren);
+
+        // What's left changes rows that exist already.
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (DatabaseProviderOps.IsConstraintViolation(ex.InnerException))
+        {
+            foreach (var entry in db.ChangeTracker.Entries().Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted).ToList())
+                entry.State = EntityState.Detached;
+        }
+
+        foreach (var (row, rowChildren) in waiting)
+        {
+            // Detaching may have emptied the collection; adding the row adds what's in it.
+            var collection = children(row);
+            foreach (var child in rowChildren) if (!collection.Contains(child)) collection.Add(child);
+            db.Add(row);
+            try
+            {
+                await db.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException ex) when (DatabaseProviderOps.IsConstraintViolation(ex.InnerException))
+            {
+                Detach(row, rowChildren);
+                if (onDropped is not null)
+                {
+                    await onDropped(row, DatabaseProviderOps.IsUniqueViolation(ex.InnerException));
+                    await db.SaveChangesAsync(ct);
+                }
+            }
+        }
+
+        void Detach(T row, List<object> rowChildren)
+        {
+            foreach (var child in rowChildren) db.Entry(child).State = EntityState.Detached;
+            db.Entry(row).State = EntityState.Detached;
         }
     }
 
@@ -1472,29 +1500,18 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         events = events.Where(e => reportable.Contains(e.CameraId)).ToList();
         if (events.Count == 0) return;
 
-        db.CameraEvents.AddRange(events.Select(item => new CameraEvent
+        var rows = events.Select(item => new CameraEvent
         {
             CameraId = item.CameraId,
             OnvifTopic = item.OnvifTopic,
             ReceivedUtc = item.ReceivedUtc,
             PayloadJson = item.PayloadJson
-        }));
+        }).ToList();
+        db.CameraEvents.AddRange(rows);
 
-        while (true)
-        {
-            try
-            {
-                await db.SaveChangesAsync(ct);
-                break;
-            }
-            catch (DbUpdateException ex) when (ex.Entries.Count > 0)
-            {
-                // Same detach-and-retry shape as RecordMotionSpansAsync — a camera reassigned away
-                // from this node between the event firing and this report landing is the realistic
-                // cause (FK still enforced on insert), not worth losing the rest of the batch over.
-                foreach (var entry in ex.Entries) entry.State = EntityState.Detached;
-            }
-        }
+        // A camera removed between the event firing and this report landing is the realistic cause of a
+        // row that can't be saved, not worth losing the rest of the batch over.
+        await SaveDroppingUnsavableAsync(rows, _ => Array.Empty<object>(), null, ct);
     }
 
     public async Task AssignCameraAsync(Guid cameraId, Guid? nodeId, CancellationToken ct = default)

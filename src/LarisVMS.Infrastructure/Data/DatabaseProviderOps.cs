@@ -64,6 +64,20 @@ public abstract partial class DatabaseProviderOps
         _ => false
     };
 
+    /// <summary>The database refused the row itself: a duplicate, a reference to something that's gone,
+    /// a missing or too long value. Trying it again can't help, unlike a lost connection, a timeout, or a
+    /// deadlock.</summary>
+    public static bool IsConstraintViolation(Exception? ex) => IsUniqueViolation(ex) || ex switch
+    {
+        SqlException { Number: 515 or 547 or 2628 or 8152 } => true,
+        MySqlException
+        {
+            ErrorCode: MySqlErrorCode.NoReferencedRow or MySqlErrorCode.NoReferencedRow2
+                or MySqlErrorCode.ColumnCannotBeNull or MySqlErrorCode.DataTooLong
+        } => true,
+        _ => false
+    };
+
     // Database/login names are meant to be plain identifiers, validated up front against an
     // allow-list (Windows account names additionally need '\' for DOMAIN\user) so a crafted name
     // can't break out of the quoted identifier or string literal contexts they're used in.

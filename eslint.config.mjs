@@ -16,6 +16,8 @@ export default [
         languageOptions: {
             ecmaVersion: "latest",
             sourceType: "script",
+            // no-implied-eval only checks calls to globals it's told about.
+            globals: { setTimeout: "readonly", setInterval: "readonly", window: "readonly", self: "readonly" },
         },
         plugins: {
             security,

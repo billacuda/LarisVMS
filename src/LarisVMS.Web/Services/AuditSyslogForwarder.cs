@@ -230,6 +230,12 @@ public sealed class AuditSyslogForwarder(IServiceScopeFactory scopeFactory, ILog
             var message = $"<{Priority}>1 {time} {hostName} LarisVMS - audit - {json}";
             var length = Encoding.UTF8.GetByteCount(message);
             if (length <= maxBytes || string.IsNullOrEmpty(details)) return message;
+            if (details == "…")
+            {
+                // The rest of the entry alone is too long. Sent as it is: what can't be sent whole is
+                // better than an entry that's never sent, or a loop that never ends.
+                return message;
+            }
             var keep = Math.Max(0, details.Length - Math.Max(16, (length - maxBytes) / 2 + 16));
             details = keep == 0 ? "…" : details[..keep] + "…";
         }

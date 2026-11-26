@@ -44,7 +44,8 @@ public sealed class DahuaCgiEventSession(
     /// without operator intervention.</summary>
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromMinutes(15);
 
-    private readonly Dictionary<DetectionKind, MotionHysteresis> _hysteresis = [];
+    // Concurrent: NodeWorker's checkpoint and keep/discard loops walk it while this session adds to it.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<DetectionKind, MotionHysteresis> _hysteresis = new();
 
     /// <summary>Fires when a detection span closes — identical shape to
     /// CameraEventSession.DetectionSpanCompleted, so NodeWorker wires both the same way.</summary>
@@ -299,11 +300,8 @@ public sealed class DahuaCgiEventSession(
         // trusting a camera-supplied time went wrong in practice on this exact fleet.
         var at = nowUtc ?? DateTime.UtcNow;
 
-        if (!_hysteresis.TryGetValue(detectionKind, out var hysteresis))
-        {
-            hysteresis = new MotionHysteresis(startAfter: TimeSpan.Zero, endAfter: TimeSpan.Zero);
-            _hysteresis[detectionKind] = hysteresis;
-        }
+        var hysteresis = _hysteresis.GetOrAdd(detectionKind,
+            _ => new MotionHysteresis(startAfter: TimeSpan.Zero, endAfter: TimeSpan.Zero));
 
         var completed = hysteresis.Observe(at, evt.IsStart, score: 1.0);
         if (completed is not null) DetectionSpanCompleted?.Invoke(detectionKind, completed);

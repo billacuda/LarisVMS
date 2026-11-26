@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
@@ -68,7 +70,8 @@ public sealed class CameraEventSession(
     // should touch the built-in motion hysteresis above. Created lazily rather than pre-seeded for
     // every DetectionKind because most cameras only ever report one or two classes, and an
     // untouched hysteresis would still be walked by the checkpoint loop every 15s for nothing.
-    private readonly Dictionary<DetectionKind, MotionHysteresis> _detectionHysteresis = [];
+    // Concurrent: NodeWorker's checkpoint and keep/discard loops walk it while this session adds to it.
+    private readonly ConcurrentDictionary<DetectionKind, MotionHysteresis> _detectionHysteresis = new();
 
     // Logged at most once per session — a skewed camera clock produces a notification every few
     // seconds, and this is a standing configuration problem, not a per-event incident.
@@ -250,6 +253,18 @@ public sealed class CameraEventSession(
         return null;
     }
 
+    private static readonly TimeSpan MinEmptyPull = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan HealthySubscription = TimeSpan.FromSeconds(60);
+
+    private static TimeSpan NextBackoff(TimeSpan backoff) => TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, 60));
+
+    private async Task TryUnsubscribeAsync(Uri pullPoint)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try { await client.UnsubscribeAsync(pullPoint, credentials, timeout.Token); }
+        catch (Exception ex) { logger.LogDebug(ex, "Could not end the PullPoint subscription; it expires by itself."); }
+    }
+
     public async Task RunAsync(CancellationToken ct)
     {
         var backoff = TimeSpan.FromSeconds(5);
@@ -270,11 +285,12 @@ public sealed class CameraEventSession(
             {
                 try { await Task.Delay(backoff, ct); }
                 catch (OperationCanceledException) { break; }
-                backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, 60));
+                backoff = NextBackoff(backoff);
                 continue;
             }
-            backoff = TimeSpan.FromSeconds(5);
             logger.LogInformation("Subscribed for ONVIF events.");
+            var subscribedAt = Stopwatch.StartNew();
+            var pulls = new Stopwatch();
 
             // Pulls against this one subscription until it faults (device rebooted, subscription
             // expired server-side, network blip) — then loops back out to open a fresh one.
@@ -283,9 +299,13 @@ public sealed class CameraEventSession(
                 IReadOnlyList<OnvifNotificationMessage> messages;
                 try
                 {
+                    pulls.Restart();
                     messages = await client.PullMessagesAsync(pullPoint, PullTimeout, PullMessageLimit, credentials, ct);
+                    // A camera that ignores the timeout and answers "nothing" at once would be asked again
+                    // as fast as the network allows.
+                    if (messages.Count == 0 && pulls.Elapsed < MinEmptyPull) await Task.Delay(MinEmptyPull, ct);
                 }
-                catch (OperationCanceledException) { break; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex, "PullMessages failed — re-subscribing.");
@@ -342,11 +362,8 @@ public sealed class CameraEventSession(
                     // edges rather than one cutting the other short.
                     if (CameraEventClassifier.DetectionTopicKind(msg.Topic) is { } detectionKind)
                     {
-                        if (!_detectionHysteresis.TryGetValue(detectionKind, out var detectionHysteresis))
-                        {
-                            detectionHysteresis = new MotionHysteresis(startAfter: TimeSpan.Zero, endAfter: TimeSpan.Zero);
-                            _detectionHysteresis[detectionKind] = detectionHysteresis;
-                        }
+                        var detectionHysteresis = _detectionHysteresis.GetOrAdd(detectionKind,
+                            _ => new MotionHysteresis(startAfter: TimeSpan.Zero, endAfter: TimeSpan.Zero));
 
                         var detectionCompleted = detectionHysteresis.Observe(
                             eventTime, CameraEventClassifier.IsDetectionActive(msg.SimpleItems), score: 1.0);
@@ -355,6 +372,20 @@ public sealed class CameraEventSession(
                     }
                 }
             }
+
+            // Cameras allow only a few subscriptions, and an abandoned one counts until it expires.
+            await TryUnsubscribeAsync(pullPoint);
+
+            // One that worked for a while (it expired, or the camera restarted) is replaced at once. One
+            // that fails right after subscribing would otherwise be retried without any pause.
+            if (subscribedAt.Elapsed >= HealthySubscription)
+            {
+                backoff = TimeSpan.FromSeconds(5);
+                continue;
+            }
+            try { await Task.Delay(backoff, ct); }
+            catch (OperationCanceledException) { break; }
+            backoff = NextBackoff(backoff);
         }
 
         // Same shutdown shape as MotionSession.RunAsync's own FlushAll — an in-progress span (the

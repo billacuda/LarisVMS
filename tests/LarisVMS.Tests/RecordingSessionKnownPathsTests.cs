@@ -11,9 +11,8 @@ namespace LarisVMS.Tests;
 /// SegmentCompleted for every old file all over again — and for a Motion-mode camera, a
 /// freshly-restarted MotionSession/CameraEventSession has observed no motion yet at that instant, so
 /// nearly all of that re-fired history looked like "no motion" and was wrongly discarded, deleting
-/// files that already had valid Segments rows from a previous run. RunAsync's knownPaths parameter
-/// (pre-seeding reportedPaths from GET /api/nodes/segments/paths, fetched once by NodeWorker before
-/// any session starts) is the fix; this exercises the actual skip behavior against a real directory.
+/// files that already had valid Segments rows from a previous run. RunAsync pre-seeding reportedPaths
+/// with everything on disk is the fix; this exercises the actual skip behavior against a real directory.
 /// </summary>
 public sealed class RecordingSessionKnownPathsTests : IDisposable
 {
@@ -28,7 +27,8 @@ public sealed class RecordingSessionKnownPathsTests : IDisposable
 
     private string WriteSegmentFile(string name, DateTime creationTimeUtc)
     {
-        var path = Path.Combine(_root, name);
+        var path = Path.Combine(_root, RecordingSession.UtcFolder, name);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, [1, 2, 3, 4]); // non-empty — a 0-byte file is a known failure artifact, not a segment
         File.SetCreationTimeUtc(path, creationTimeUtc);
         return path;
@@ -36,7 +36,8 @@ public sealed class RecordingSessionKnownPathsTests : IDisposable
 
     private string WriteSegmentFileWithSize(string name, DateTime creationTimeUtc, int sizeBytes)
     {
-        var path = Path.Combine(_root, name);
+        var path = Path.Combine(_root, RecordingSession.UtcFolder, name);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, new byte[sizeBytes]);
         File.SetCreationTimeUtc(path, creationTimeUtc);
         return path;
@@ -61,8 +62,7 @@ public sealed class RecordingSessionKnownPathsTests : IDisposable
         var fired = new List<string>();
         session.SegmentCompleted += seg => fired.Add(seg.FilePath);
 
-        // Pre-seeded exactly the way NodeWorker seeds RunAsync's reportedPaths from the server's
-        // already-known-paths response — "known" must never fire SegmentCompleted again.
+        // Pre-seeded the way RunAsync does it — "known" must never fire SegmentCompleted again.
         var reportedPaths = new HashSet<string>([known], StringComparer.OrdinalIgnoreCase);
         session.PollForCompletedSegments(reportedPaths, []);
 
@@ -88,6 +88,53 @@ public sealed class RecordingSessionKnownPathsTests : IDisposable
 
         Assert.Contains(a, fired);
         Assert.Contains(b, fired);
+    }
+
+    [Fact]
+    public void AfterTheFirstPollOnlyRecentHourFoldersAreListed()
+    {
+        static string InHour(DateTime utc, string name) =>
+            Path.Combine(utc.ToString("yyyy"), utc.ToString("MM"), utc.ToString("dd"), utc.ToString("HH"), name);
+
+        var now = DateTime.UtcNow;
+        var old = now.AddDays(-3);
+        var known = WriteSegmentFile(InHour(old, "known.mp4"), DateTime.UtcNow.AddDays(-3));
+        var open = WriteSegmentFile(InHour(now, "a-open.mp4"), DateTime.UtcNow);
+
+        var session = NewSession(_root);
+        var fired = new List<string>();
+        session.SegmentCompleted += seg => fired.Add(seg.FilePath);
+        var reportedPaths = new HashSet<string>([known], StringComparer.OrdinalIgnoreCase);
+
+        session.PollForCompletedSegments(reportedPaths, []);
+        Assert.Empty(fired);
+
+        // Something put into an old folder later isn't this session's; a new file in this hour is.
+        WriteSegmentFile(InHour(old, "later.mp4"), DateTime.UtcNow.AddDays(-3));
+        WriteSegmentFile(InHour(now, "b-open.mp4"), DateTime.UtcNow);
+        session.PollForCompletedSegments(reportedPaths, []);
+
+        Assert.Equal([open], fired);
+        Assert.DoesNotContain(known, reportedPaths); // its folder can't be listed again
+    }
+
+    [Fact]
+    public void FootageNamedByLocalTimeIsLeftAlone()
+    {
+        // What versions before UTC names recorded: beside the utc folder, not in it. On a server ahead of
+        // UTC it sorts after everything new, and would look like the file being written.
+        var local = Path.Combine(_root, "2026", "11", "24", "23");
+        Directory.CreateDirectory(local);
+        File.WriteAllBytes(Path.Combine(local, "20261124T235900Z.mp4"), [1, 2, 3, 4]);
+        var closed = WriteSegmentFile(Path.Combine("2026", "11", "24", "22", "20261124T220000Z.mp4"), DateTime.UtcNow.AddMinutes(-2));
+        WriteSegmentFile(Path.Combine("2026", "11", "24", "22", "20261124T220100Z.mp4"), DateTime.UtcNow.AddMinutes(-1));
+
+        var session = NewSession(_root);
+        var fired = new List<string>();
+        session.SegmentCompleted += seg => fired.Add(seg.FilePath);
+        session.PollForCompletedSegments([], []);
+
+        Assert.Equal([closed], fired);
     }
 
     [Fact]

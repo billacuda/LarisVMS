@@ -69,14 +69,15 @@ public sealed class DetectionModelDistributor(
             if (TryOpen(path) is { } hitAfterWait) return hitAfterWait;
 
             // The default download must be the exact file pinned above, so a swapped upstream file
-            // never reaches the nodes. An override (a mirror, a re-export) can't be pinned, but it
-            // must be HTTPS.
+            // never reaches the nodes. An override (a mirror, a re-export) must be HTTPS, and is checked
+            // when its SHA-256 is set too (DetectionModels:<family>:<size>-sha256).
             var overrideUrl = config[$"DetectionModels:{family}:{variant}"];
             var url = overrideUrl ?? source.DefaultUrl;
             if (overrideUrl is not null
                 && (!Uri.TryCreate(overrideUrl, UriKind.Absolute, out var overrideUri) || overrideUri.Scheme != Uri.UriSchemeHttps))
                 throw new InvalidOperationException(Loc.T("server.detectionModelDistributor.detectionmodelsMustBeAnHttps", new { family, variant }));
-            var expectedSha256 = overrideUrl is null ? source.Sha256 : null;
+            var expectedSha256 = overrideUrl is null ? source.Sha256 : config[$"DetectionModels:{family}:{variant}-sha256"]?.Trim();
+            if (string.IsNullOrEmpty(expectedSha256)) expectedSha256 = null;
             Directory.CreateDirectory(CacheDirectory);
             logger.LogInformation("Fetching detection model {Family}/{Variant} from {Url} (one-time; will be cached).", family, variant, url);
 

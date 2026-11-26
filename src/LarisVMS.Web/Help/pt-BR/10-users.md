@@ -73,6 +73,7 @@ Uma função é um conjunto nomeado de permissões, gerenciado em **Configuraç�
 - **Domínio:** apenas o nome do domínio, como `corp.example.com`.
 - **Criptografia:** LDAPS na porta 636 é o padrão e exige nos seus controladores de domínio um certificado em que este servidor confie. O LDAP simples na porta 389 funciona sem ele, mas é inseguro e não é recomendado.
 - **Conta de busca:** a segurança integrada (o padrão) usa a própria conta do serviço LarisVMS Web. Quando o serviço roda como LocalSystem em um servidor ingressado no domínio, essa é a conta do computador. Ou informe uma conta de serviço como `DOMINIO\usuario` com a senha dela.
+- **Em um servidor Linux**, o Active Directory precisa de LDAPS e de uma conta de serviço: o servidor não tem conta de domínio própria, e lá o LDAP simples não pode ser assinado e selado.
 - **Entrando:** um nome com `@` é uma conta local. Qualquer outra coisa é um nome de usuário do AD, digitado sem o domínio.
 
 **Vínculos grupo → função:** comece a digitar o nome de um grupo e escolha na lista (Tab pega a primeira correspondência). Os membros do grupo recebem a função, inclusive os membros de grupos aninhados. As contas são criadas na primeira vez que são necessárias, assim que um grupo é vinculado ou quando o usuário entra pela primeira vez. Grupos e usuários são rastreados por SID, então renomear qualquer um deles no AD é reconhecido na próxima sincronização. As funções das contas do AD vêm só dos vínculos de grupos e não podem ser editadas na página Usuários.

@@ -11,11 +11,11 @@ Listas de IPs permitidos, uma porta separada para ao vivo/reprodução, a polít
 
 ## Porta separada
 
-**Configurações → Visualização ao vivo → Porta personalizada** move o tráfego ao vivo e de reprodução para uma porta HTTPS própria, usando o mesmo certificado. Isso permite protegê-la separadamente com firewall, ou expor só ela fora da LAN. Tem efeito depois de `Restart-Service LarisVMSWeb`. A partir daí, o vídeo só responde na nova porta e todo o resto só na porta principal. Esvazie o campo para voltar a uma porta só.
+**Configurações → Visualização ao vivo → Porta personalizada** move o tráfego ao vivo e de reprodução para uma porta HTTPS própria, usando o mesmo certificado. Isso permite protegê-la separadamente com firewall, ou expor só ela fora da LAN. Tem efeito depois de `Restart-Service LarisVMSWeb` (no Linux, `sudo systemctl restart larisvms-web`). A partir daí, o vídeo só responde na nova porta e todo o resto só na porta principal. Esvazie o campo para voltar a uma porta só.
 
 ## HTTP/3
 
-O servidor usa HTTP/2 e acrescenta HTTP/3 no Windows 11, Windows Server 2022 ou posterior. Os navegadores começam em HTTP/2 e passam para HTTP/3 sozinhos quando conseguem alcançá-lo. O HTTP/3 usa UDP na porta HTTPS (e na porta personalizada, se definida). O instalador abre TCP e UDP; numa instalação mais antiga, adicione uma regra UDP para a porta ou execute o instalador atual de novo. Até lá, tudo continua funcionando por HTTP/2. Para desativar o HTTP/3, desmarque **Configurações → Segurança → HTTP/3** e depois `Restart-Service LarisVMSWeb`.
+O servidor usa HTTP/2 e acrescenta HTTP/3 no Windows 11, Windows Server 2022 ou posterior, e no Linux quando o pacote `libmsquic` da Microsoft está instalado. Os navegadores começam em HTTP/2 e passam para HTTP/3 sozinhos quando conseguem alcançá-lo. O HTTP/3 usa UDP na porta HTTPS (e na porta personalizada, se definida). O instalador (e o pacote do Linux) abre TCP e UDP; numa instalação mais antiga, adicione uma regra UDP para a porta ou execute o instalador atual de novo. Até lá, tudo continua funcionando por HTTP/2. Para desativar o HTTP/3, desmarque **Configurações → Segurança → HTTP/3** e depois `Restart-Service LarisVMSWeb` (ou `sudo systemctl restart larisvms-web`).
 
 ## Política de scripts rígida
 
@@ -48,7 +48,7 @@ Estas verificações ficam entre um download e uma instalação em execução:
 
 ## Segredos criptografados
 
-As credenciais das câmeras, as credenciais SMB, as chaves dos nós, os segredos de e-mail, os segredos de cliente do Entra e do Google, e a senha da conta de serviço do Active Directory são criptografados no banco de dados, usando as chaves de proteção de dados em `%ProgramData%\LarisVMS\keys`. Somente SYSTEM, Administrators e as contas dos serviços do LarisVMS podem abrir `%ProgramData%\LarisVMS`: qualquer outro acesso encontrado ali, como uma pasta criada por um usuário local antes de o LarisVMS ser instalado, é removido quando um serviço inicia. Faça backup dessa pasta e nunca a exclua durante um deploy.
+As credenciais das câmeras, as credenciais SMB, as chaves dos nós, os segredos de e-mail, os segredos de cliente do Entra e do Google, e a senha da conta de serviço do Active Directory são criptografados no banco de dados, usando as chaves de proteção de dados em `%ProgramData%\LarisVMS\keys`. Somente SYSTEM, Administrators e as contas dos serviços do LarisVMS podem abrir `%ProgramData%\LarisVMS`: qualquer outro acesso encontrado ali, como uma pasta criada por um usuário local antes de o LarisVMS ser instalado, é removido quando um serviço inicia. Faça backup dessa pasta e nunca a exclua durante um deploy. No Linux as chaves ficam em `/var/lib/larisvms/keys`, e `/var/lib/larisvms` pertence à conta larisvms, sem acesso para mais ninguém.
 
 ## Proteção extra para empresas
 
@@ -66,4 +66,4 @@ De fábrica, o LarisVMS é configurado para que uma instalação doméstica simp
 - **Conexões criptografadas do servidor para os nós**: na página de cada nó (veja [Conexões criptografadas do servidor](/Help/nodes#encrypted-connections-from-the-server)).
 - **Encaminhar o log de auditoria para o syslog**: Configurações → Logs (veja [Log de auditoria](/Help/users#audit-log)).
 - **Atualizações assinadas pelo editor**, para builds que você mesmo gera (veja [Atualizações](#updates)).
-- **Uma conta de serviço menos privilegiada.** Os serviços do LarisVMS rodam como LocalSystem. Você pode executá-los com outra conta (`services.msc`, ou `sc.exe config`), mas então cabe a você dar a essa conta o que o serviço precisa: a pasta de instalação, cada pasta ou compartilhamento de armazenamento e de arquivo morto, e os arquivos de certificado. `%ProgramData%\LarisVMS` é tratado por você: cada serviço do LarisVMS, ao iniciar, o limita a SYSTEM, Administrators e às contas com que os serviços do LarisVMS rodam, e remove qualquer outro acesso ali. Confira o log do serviço depois da mudança.
+- **Uma conta de serviço menos privilegiada.** Os serviços do LarisVMS rodam como LocalSystem. Você pode executá-los com outra conta (`services.msc`, ou `sc.exe config`), mas então cabe a você dar a essa conta o que o serviço precisa: a pasta de instalação, cada pasta ou compartilhamento de armazenamento e de arquivo morto, e os arquivos de certificado. `%ProgramData%\LarisVMS` é tratado por você: cada serviço do LarisVMS, ao iniciar, o limita a SYSTEM, Administrators e às contas com que os serviços do LarisVMS rodam, e remove qualquer outro acesso ali. Confira o log do serviço depois da mudança. No Linux os serviços já rodam com sua própria conta sem privilégios, `larisvms`; só o pequeno auxiliar que instala as atualizações aprovadas de nós e proxies roda como root.

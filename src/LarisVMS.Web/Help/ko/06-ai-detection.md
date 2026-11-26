@@ -10,20 +10,34 @@
 
 하나의 노드 패키지로 모든 컴퓨터를 지원합니다. 시작할 때 비전 서비스가 발견한 하드웨어에 맞는 백엔드를 선택합니다.
 
-| 하드웨어 | 백엔드 | 노드에 필요한 것 |
-|---|---|---|
-| NVIDIA GPU | CUDA(DirectML로 대체) | CUDA Toolkit 12.x 및 cuDNN 9.x |
-| Intel GPU | OpenVINO(DirectML로 대체) | 최신 Intel 그래픽 드라이버 |
-| AMD GPU | DirectML | 최신 GPU 드라이버 |
-| GPU 없음 | CPU | 없음 |
+| 하드웨어 | Windows | Linux | 노드에 필요한 것 |
+|---|---|---|---|
+| NVIDIA GPU | CUDA(DirectML로 대체) | CUDA(CPU로 대체) | CUDA 12 및 cuDNN 9(아래 요구 사항 참조) |
+| Intel GPU | OpenVINO(DirectML로 대체) | OpenVINO(CPU로 대체) | 최신 Intel 그래픽 드라이버, Linux에서는 Intel의 compute runtime(`intel-opencl-icd`) |
+| AMD GPU | DirectML | CPU | 최신 GPU 드라이버 |
+| GPU 없음 | CPU | CPU | 없음 |
 
-노드의 편집 페이지에는 감지된 가속기가 표시되며 **가속기** 설정으로 하나를 강제할 수 있습니다. 모델은 포함되어 있지 않습니다. 노드는 기본 제공 YOLOX 모델을 서버에서 가져오고, 다른 모델은 노드의 `C:\ProgramData\LarisVMS\models`에 넣습니다.
+노드의 편집 페이지에는 감지된 가속기가 표시되며 **가속기** 설정으로 하나를 강제할 수 있습니다. 모델은 포함되어 있지 않습니다. 노드는 기본 제공 YOLOX 모델을 서버에서 가져오고, 다른 모델은 노드의 `C:\ProgramData\LarisVMS\models`(Windows) 또는 `/var/lib/larisvms/models`(Linux)에 넣습니다.
+
+Debian 13에는 `intel-opencl-icd` 패키지가 없습니다. Intel의 릴리스에서 해당 페이지의 단계에 따라 설치하십시오. 11세대 Core(Tiger Lake), Arc 이상에는 [26.27.39122.11](https://github.com/intel/compute-runtime/releases/tag/26.27.39122.11), 그보다 오래된 그래픽에는 [24.35.30872.36](https://github.com/intel/compute-runtime/releases/tag/24.35.30872.36)입니다. 노드의 Docker 이미지에는 둘 다 이미 들어 있습니다.
+
+CUDA 백엔드의 NVIDIA 요구 사항(CUDA 12.8로 빌드된 ONNX Runtime 1.24):
+
+| | Linux | Windows |
+|---|---|---|
+| NVIDIA 드라이버 | 570.26 이상 | 570.65 이상 |
+| CUDA | 12.8 또는 그 이상의 12.x | 12.8 또는 그 이상의 12.x |
+| cuDNN | 9.x | 9.x |
+| GPU | Turing(RTX 20 시리즈, GTX 16 시리즈) 이상. Pascal과 Maxwell에는 cuDNN 9.10.2 이하 필요 | 동일 |
+| TensorRT(선택 사항) | 10.x | 10.x |
+
+**노드** 페이지는 노드의 NVIDIA 드라이버가 CUDA에 너무 오래된 경우 경고합니다. Linux에서는 NVIDIA의 apt 또는 dnf 리포지토리에서 CUDA와 cuDNN을 설치하십시오(`cuda-libraries-12-8` 및 `libcudnn9-cuda-12`). 노드는 시스템의 라이브러리 경로 또는 `/usr/local/cuda/lib64`에서 이를 찾습니다. Linux의 GPU 가속은 아직 실제 하드웨어에서 테스트되지 않았습니다.
 
 ## 느린 백엔드
 
-NVIDIA 노드가 CUDA를 사용할 수 없으면 AI 감지는 DirectML로 대체되며 몇 배 느리게 실행됩니다. 분석되는 프레임이 줄고, GPU가 뜨거워지며, 지나가는 자동차처럼 빠른 객체는 감지되지 않을 수 있습니다. 이 경우 **노드** 페이지의 노드 옆에 이유와 함께 **⚠️ DirectML에서 AI 실행**이 표시되고 Super Admin에게 알림이 전송됩니다.
+NVIDIA 노드가 CUDA를 사용할 수 없으면 AI 감지는 DirectML(Linux에서는 CPU)로 대체되며 몇 배 느리게 실행됩니다. 분석되는 프레임이 줄고, GPU가 뜨거워지며, 지나가는 자동차처럼 빠른 객체는 감지되지 않을 수 있습니다. 이 경우 **노드** 페이지의 노드 옆에 이유와 함께 **⚠️ DirectML에서 AI 실행**이 표시되고 Super Admin에게 알림이 전송됩니다.
 
-일반적인 원인은 cuDNN이 없는 것입니다. 노드에 CUDA Toolkit 12.x와 CUDA 12용 cuDNN 9.x를 NVIDIA의 cuDNN 다운로드 또는 `pip install nvidia-cudnn-cu12`로 설치하십시오. 노드는 10분 이내에 이를 찾아 AI 백엔드 옆에 복사하고 CUDA에서 감지를 다시 시작합니다.
+일반적인 원인은 cuDNN이 없거나 NVIDIA 드라이버가 CUDA 12.8에 필요한 것보다 오래된 것입니다. Windows에서는 노드에 CUDA Toolkit 12.x와 CUDA 12용 cuDNN 9.x를 NVIDIA의 cuDNN 다운로드 또는 `pip install nvidia-cudnn-cu12`로 설치하십시오. Linux에서는 NVIDIA의 리포지토리에서 `cuda-libraries-12-8`과 `libcudnn9-cuda-12`를 설치하십시오. 노드는 10분 이내에 이를 찾아(Windows에서는 AI 백엔드 옆에 복사) CUDA에서 감지를 다시 시작합니다.
 
 ## 모델 계열
 
@@ -41,7 +55,7 @@ NVIDIA 노드가 CUDA를 사용할 수 없으면 AI 감지는 DirectML로 대체
 
 ## 사용자 지정 모델
 
-`.onnx` 파일을 노드의 `C:\ProgramData\LarisVMS\models`에 넣습니다. 모델 자체의 메타데이터에 디코더, 입력 크기, 레이블이 기술되어 있으면 그대로 작동합니다. 그렇지 않으면 부족한 정보를 채워 주는 같은 이름의 `.json` 파일을 추가하십시오. **새로 고침**은 노드가 찾은 모든 모델을 나열하고, 메타데이터가 불완전한 모델에는 표시를 붙입니다. 경고가 있는 모델은 선택할 수 있지만 경고가 해결되기 전까지는 실행되지 않습니다.
+`.onnx` 파일을 노드의 `C:\ProgramData\LarisVMS\models`(Windows) 또는 `/var/lib/larisvms/models`(Linux)에 넣습니다. Linux에서는 larisvms 계정이 읽을 수 있는지 확인하십시오. 모델 자체의 메타데이터에 디코더, 입력 크기, 레이블이 기술되어 있으면 그대로 작동합니다. 그렇지 않으면 부족한 정보를 채워 주는 같은 이름의 `.json` 파일을 추가하십시오. **새로 고침**은 노드가 찾은 모든 모델을 나열하고, 메타데이터가 불완전한 모델에는 표시를 붙입니다. 경고가 있는 모델은 선택할 수 있지만 경고가 해결되기 전까지는 실행되지 않습니다.
 
 ## 화면 비율 맞춤
 

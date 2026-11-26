@@ -289,7 +289,9 @@ builder.Services.AddSingleton(sp => new ExportRunner(
 var app = builder.Build();
 // Tidy up after the last auto-update, and say so in this log if it never got applied.
 app.Services.GetRequiredService<UpdateService>().CheckLastUpdate();
-app.UseWebSockets();
+// A connection whose other end stopped answering is closed instead of waiting for TCP to notice. Longer
+// than a live viewer may lag (LiveViewerHandler), so a slow one isn't cut off by this.
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30), KeepAliveTimeout = TimeSpan.FromSeconds(90) });
 // Encrypted connections from the server (opt-in per node): once this node serves HTTPS, the plain
 // LAN port refuses everything but /health and this machine's own callers. See ServerConnectionPolicy.
 LarisVMS.Node.ServerConnectionPolicy.EncryptedOnly = config.CachedConfig?.EncryptServerConnection == true;
@@ -1259,7 +1261,7 @@ app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Ex
     ctx.Response.StatusCode = StatusCodes.Status202Accepted;
     await ctx.Response.CompleteAsync();
 
-    // Fire-and-forget: the request is already acknowledged above. CancellationToken.None, not
+    // Fire-and-forget: the request is already acknowledged above. Ends with the service, not with
     // ctx.RequestAborted — this must keep running (and eventually report back) even though the HTTP
     // request that started it has already completed.
     // Talk clips must be WAVs in this camera's own talk directory; anything else is dropped rather
@@ -1282,7 +1284,8 @@ app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Ex
 
     // The standalone player's H.264 copy, when the export asked for one.
     var convertEncoder = request.ConvertToH264 ? EncoderSelection.ChooseH264Encoder(worker.DetectedEncoders) : null;
-    _ = Task.Run(() => exportRunner.RunAsync(request.ExportItemId, cameraId, validatedPaths, storageRoot, outputFileName, CancellationToken.None,
+    _ = Task.Run(() => exportRunner.RunAsync(request.ExportItemId, cameraId, validatedPaths, storageRoot, outputFileName,
+        app.Lifetime.ApplicationStopping,
         talkClips, request.SegmentsHaveAudio, redactionFilters, redactionEncoder, request.SegmentSha256, request.ConvertToH264, convertEncoder));
 });
 

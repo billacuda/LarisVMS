@@ -118,7 +118,8 @@ public class ExportManifestBuilder(ApplicationDbContext db, ISigningKeyService s
                 // Follow the links themselves rather than trusting id order.
                 var byPrev = following.GroupBy(s => s.PrevChainHash!).ToDictionary(g => g.Key, g => g.First());
                 var at = last.ChainHash!;
-                while (at != checkpoint.ChainHash && byPrev.TryGetValue(at, out var next))
+                // At most one step per row: rows changed to point at each other would go round forever.
+                while (at != checkpoint.ChainHash && links.Count < following.Count && byPrev.TryGetValue(at, out var next))
                 {
                     links.Add(next);
                     at = next.ChainHash!;
@@ -140,7 +141,7 @@ public class ExportManifestBuilder(ApplicationDbContext db, ISigningKeyService s
             requested = new { fromUtc = Utc(item.ExportJob.FromUtc), toUtc = Utc(item.ExportJob.ToUtc) },
             file = new
             {
-                name = report.OutputFilePath is null ? null : LarisVMS.Core.ForeignPath.GetFileName(report.OutputFilePath),
+                name = report.OutputFilePath is null ? null : LarisVMS.Core.ExportFileName.Friendly(report.OutputFilePath),
                 sizeBytes = report.SizeBytes,
                 sha256 = report.OutputSha256,
             },

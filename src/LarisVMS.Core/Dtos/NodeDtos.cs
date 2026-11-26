@@ -73,7 +73,9 @@ public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long
     /// <summary>The client endpoint host set on the node itself (LARISVMS_CLIENT_ENDPOINT_HOST, or the
     /// installer's setting). The server uses it when no host is set on the node's page. Null when none
     /// is set, or from an older node.</summary>
-    string? ClientEndpointHost = null);
+    string? ClientEndpointHost = null,
+    /// <summary>How long the node's process has been running. Null from an older node.</summary>
+    long? UptimeSeconds = null);
 
 /// <summary>A camera certificate a node refused: the camera's address, the SHA-256 of the
 /// certificate it presented, and when.</summary>
@@ -683,4 +685,17 @@ public record StreamInfoReportItem(Guid CameraId, string StreamRole, int? Width,
     bool? IsEngineBuilding = null, bool? EngineBuildFailed = null,
     /// <summary>Whether this camera's footage is being kept right now, by the same rules that decide
     /// each segment. Null from an older node.</summary>
-    bool? IsKeepingFootage = null);
+    bool? IsKeepingFootage = null)
+{
+    /// <summary>One report per camera stream, each field from the newest report that has it: what
+    /// applying them in order would leave behind.</summary>
+    public static List<StreamInfoReportItem> Merge(IEnumerable<StreamInfoReportItem> items) =>
+        items.GroupBy(i => (i.CameraId, i.StreamRole))
+            .Select(g => g.Aggregate((older, newer) => new StreamInfoReportItem(newer.CameraId, newer.StreamRole,
+                newer.Width ?? older.Width, newer.Height ?? older.Height, newer.Codec ?? older.Codec,
+                newer.Fps ?? older.Fps, newer.BitrateKbps ?? older.BitrateKbps, newer.ReconnectCount ?? older.ReconnectCount,
+                newer.AudioCodec ?? older.AudioCodec, newer.AudioSampleRateHz ?? older.AudioSampleRateHz,
+                newer.IsEngineBuilding ?? older.IsEngineBuilding, newer.EngineBuildFailed ?? older.EngineBuildFailed,
+                newer.IsKeepingFootage ?? older.IsKeepingFootage)))
+            .ToList();
+}

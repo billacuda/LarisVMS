@@ -82,6 +82,10 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // badly enough that the tee muxer blocked and recording *and* live view stopped together (see
     // EngineBuildGate for the other half of that fix). Null until the build completes.
     private volatile IDetectionEngine? _engine;
+
+    // A rebuilt engine waiting for the inference loop to take it.
+    private IDetectionEngine? _replacementEngine;
+    private bool _disposed;
     // Not readonly: a D-FINE FP16-overflow rebuild (see TriggerDFineFp32RebuildIfNeeded) replaces this
     // with an FP32 copy once, so the cache key / precision fields it carries reflect whichever engine
     // _engine currently points at. Only ever written from the inference loop's own async flow (the
@@ -609,18 +613,35 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     private async Task RunAsync(CancellationToken ct)
     {
         var sessionTask = _session.RunAsync(ct);
-        var inferenceTask = InferenceLoopAsync(ct);
-        var checkpointTask = CheckpointLoopAsync(ct);
+        var inferenceTask = InferenceOrFailAsync(ct);
         var reportFlushTask = ReportFlushLoopAsync(ct);
 
         try
         {
-            await Task.WhenAll(sessionTask, inferenceTask, checkpointTask, reportFlushTask);
+            await Task.WhenAll(sessionTask, inferenceTask, reportFlushTask);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Camera detection pipeline for {Camera} (id {CameraId}) failed.", _request.DisplayName, _request.CameraId);
+        }
+    }
+
+    /// <summary>When the inference loop ends by itself, the rest of the pipeline ends with it and is
+    /// marked failed, so the node starts this camera again. Capture would otherwise carry on with
+    /// nothing looking at its frames.</summary>
+    private async Task InferenceOrFailAsync(CancellationToken ct)
+    {
+        try
+        {
+            await InferenceLoopAsync(ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogError(ex, "AI detection for camera {Camera} (id {CameraId}) stopped — the node will start it again. {Detail}",
+                _request.DisplayName, _request.CameraId, Flatten(ex));
+            _engineBuildFailed = true;
+            await _cts.CancelAsync();
         }
     }
 
@@ -674,6 +695,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         // _engine.Detect reads it, TrySubFrameSnapshot encodes its JPEG before returning, and nothing
         // retains it past that (PostEagerCropAsync is handed the finished JPEG, not the frame).
         var frameBuffer = new byte[_slot.FrameBytes];
+        var failuresInARow = 0;
 
         while (!ct.IsCancellationRequested)
         {
@@ -681,329 +703,352 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             if (captured is null) break; // cancelled or disposed
             var frame = captured.Value.Frame;
 
-            // Re-synced immediately before use, not once at the top of the loop: a background FP32
-            // rebuild (TriggerDFineFp32RebuildIfNeeded) can swap and dispose the old engine at any
-            // time, including during the (possibly long) TakeAsync wait above — re-checking only
-            // before TakeAsync would let this call land on an already-disposed session.
-            engine = _engine ?? engine;
+            // An engine rebuilt in the background (TriggerDFineFp32RebuildIfNeeded) is put in place here,
+            // between frames, and the old one disposed here too: anywhere else it could still be in use.
+            if (Interlocked.Exchange(ref _replacementEngine, null) is { } replacement)
+            {
+                _engine = replacement;
+                engine.Dispose();
+                engine = replacement;
+            }
 
-            List<YoloDotNet.Models.ObjectDetection> detections;
             try
             {
-                // The external backend does its own tiling + cross-seam merge service-side and
-                // returns one already-merged list (HttpDetectionEngine implements IDetectionEngine
-                // only, never ISlicedDetectionEngine), so it always goes through the plain
-                // engine.Detect path even in Slice mode.
-                detections = _sliceLayout is { } layout && engine is ISlicedDetectionEngine sliced
-                    ? MergeSliceDetections(layout, sliced.DetectSliced(frame, _request.Confidence))
-                    : engine.Detect(frame, _request.Confidence, _request.Iou);
-
-                // D-FINE FP16 TensorRT overflow: kicked off in the background (never awaited here) so
-                // a minutes-long cold FP32 engine build never freezes this camera's own capture/detect
-                // loop — see TriggerDFineFp32RebuildIfNeeded's own doc comment.
-                if (engine is DFineEngine { HasNonFiniteOverflow: true } dfine)
-                    TriggerDFineFp32RebuildIfNeeded(dfine, ct);
+                ProcessFrame(engine, frame, captured.Value.CapturedUtc, ct);
+                failuresInARow = 0;
             }
             catch (Exception ex)
             {
-                // See _cadenceInferenceFailures' own comment: the first failure logs in full, the
-                // rest are counted onto the cadence line so a permanently broken engine doesn't
-                // drown the log it would be diagnosed from.
-                _cadenceInferenceFailures++;
-                if (!_loggedInferenceFailure)
-                {
-                    _loggedInferenceFailure = true;
-                    _logger.LogWarning(ex,
-                        "Inference failed on one frame — skipping it. Further failures on this camera are counted " +
-                        "on the detection cadence line rather than logged individually.");
-                }
-                // Logged from here too, not only after a successful frame below — otherwise an engine
-                // failing every frame never reaches it, and the count this promises never appears.
-                LogCadenceIfDue();
-                continue;
+                // One bad frame is skipped. When none works, the pipeline gives up (RunAsync), and the
+                // node starts this camera again: the watchdog only acts when every camera is stuck.
+                if (++failuresInARow == 1)
+                    _logger.LogError(ex, "Processing a frame failed for camera {Camera} — skipping it.", _request.DisplayName);
+                if (failuresInARow >= MaxFrameFailuresInARow) throw;
             }
+            CheckpointIfDue();
+        }
+    }
 
-            MarkInferenceOk();
+    private const int MaxFrameFailuresInARow = 100;
 
-            // Ignored kinds go before the tracker, so they never get a track ID. Removed in place:
-            // CanRejoin below indexes into this same list.
-            if (_ignoredObjects.Count > 0)
-                detections.RemoveAll(d => CocoCategoryMap.IsIgnored(_ignoredObjects, d.Label?.Name));
+    private void ProcessFrame(IDetectionEngine engine, byte[] frame, DateTime capturedUtc, CancellationToken ct)
+    {
+        List<YoloDotNet.Models.ObjectDetection> detections;
+        try
+        {
+            // The external backend does its own tiling + cross-seam merge service-side and
+            // returns one already-merged list (HttpDetectionEngine implements IDetectionEngine
+            // only, never ISlicedDetectionEngine), so it always goes through the plain
+            // engine.Detect path even in Slice mode.
+            detections = _sliceLayout is { } layout && engine is ISlicedDetectionEngine sliced
+                ? MergeSliceDetections(layout, sliced.DetectSliced(frame, _request.Confidence))
+                : engine.Detect(frame, _request.Confidence, _request.Iou);
 
-            var tracked = _tracker.Update(detections, (hiddenId, index) => CanRejoin(hiddenId, detections[index], frame, captured.Value.CapturedUtc));
-            foreach (var (fromId, intoId, framesHidden) in _tracker.Rejoins)
+            // D-FINE FP16 TensorRT overflow: kicked off in the background (never awaited here) so
+            // a minutes-long cold FP32 engine build never freezes this camera's own capture/detect
+            // loop — see TriggerDFineFp32RebuildIfNeeded's own doc comment.
+            if (engine is DFineEngine { HasNonFiniteOverflow: true })
+                TriggerDFineFp32RebuildIfNeeded(ct);
+        }
+        catch (Exception ex)
+        {
+            // See _cadenceInferenceFailures' own comment: the first failure logs in full, the
+            // rest are counted onto the cadence line so a permanently broken engine doesn't
+            // drown the log it would be diagnosed from.
+            _cadenceInferenceFailures++;
+            if (!_loggedInferenceFailure)
             {
-                if (fromId != 0)
-                {
-                    _objects.Merge(fromId, intoId);
-                    if (_snapshottedTrackIds.Remove(fromId)) _snapshottedTrackIds.Add(intoId);
-                }
-                _logger.LogInformation("Track {TrackId} ({Label}) back in view after {Frames} frame(s){Joined}.",
-                    intoId, _labelArbiter.LabelOf(intoId) ?? "object", framesHidden,
-                    fromId != 0 ? $"; joined new track {fromId}" : "");
+                _loggedInferenceFailure = true;
+                _logger.LogWarning(ex,
+                    "Inference failed on one frame — skipping it. Further failures on this camera are counted " +
+                    "on the detection cadence line rather than logged individually.");
             }
-
-            if (detections.Count > _cadencePeakDetections) _cadencePeakDetections = detections.Count;
-            if (tracked.Count > _cadencePeakTracked) _cadencePeakTracked = tracked.Count;
-            foreach (var d in detections)
-            {
-                if (d.Confidence > _cadenceBestDetectionScore) _cadenceBestDetectionScore = d.Confidence;
-            }
-
+            // Logged from here too, not only after a successful frame below — otherwise an engine
+            // failing every frame never reaches it, and the count this promises never appears.
             LogCadenceIfDue();
-            // The instant the reader captured this frame — NOT DateTime.UtcNow read here, which is
-            // after TakeAsync waited for a slot and _engine.Detect ran, both of which push it later
-            // than the moment the boxes actually describe (a systematic "the object already moved"
-            // error on every snapshot). See CapturedFrame's own doc comment.
-            var now = captured.Value.CapturedUtc;
-            // Prune per-track state against every track ByteTrack still considers alive (emitted this
-            // frame OR briefly lost and being coasted for re-acquisition), not just this frame's
-            // matched detections. _tracker.Update only returns tracks matched to a detection this
-            // frame, so a moving object that drops a single detection frame (motion blur, a partial
-            // occlusion — exactly what fast movers do) would otherwise have its whole centroid
-            // history wiped here and be re-reported Idle, with no live overlay box, until it rebuilds
-            // a MovementWindow's worth of samples. See ByteTracker.LiveTrackIds.
-            var liveTrackIds = _tracker.LiveTrackIds;
-            _movement.Prune(liveTrackIds);
-            foreach (var missed in _movement.TakeMissedTracks())
-                _logger.LogInformation("Movement not detected for {Summary}.", missed);
-            _labelArbiter.Prune(liveTrackIds);
-            _snapshottedTrackIds.RemoveWhere(id => !liveTrackIds.Contains(id));
-            _objects.Prune(liveTrackIds, now);
-            _speedMeter.Prune(liveTrackIds);
-            if (_request.ClassifyColors && now - _monochromeCheckedUtc >= MonochromeCheckInterval)
+            return;
+        }
+
+        MarkInferenceOk();
+
+        // Ignored kinds go before the tracker, so they never get a track ID. Removed in place:
+        // CanRejoin below indexes into this same list.
+        if (_ignoredObjects.Count > 0)
+            detections.RemoveAll(d => CocoCategoryMap.IsIgnored(_ignoredObjects, d.Label?.Name));
+
+        var tracked = _tracker.Update(detections, (hiddenId, index) => CanRejoin(hiddenId, detections[index], frame, capturedUtc));
+        foreach (var (fromId, intoId, framesHidden) in _tracker.Rejoins)
+        {
+            if (fromId != 0)
             {
-                _monochromeCheckedUtc = now;
-                _frameMonochrome = IsFrameMonochrome(frame);
+                _objects.Merge(fromId, intoId);
+                if (_snapshottedTrackIds.Remove(fromId)) _snapshottedTrackIds.Add(intoId);
             }
-            foreach (var id in _lastMovingAtByTrack.Keys)
+            _logger.LogInformation("Track {TrackId} ({Label}) back in view after {Frames} frame(s){Joined}.",
+                intoId, _labelArbiter.LabelOf(intoId) ?? "object", framesHidden,
+                fromId != 0 ? $"; joined new track {fromId}" : "");
+        }
+
+        if (detections.Count > _cadencePeakDetections) _cadencePeakDetections = detections.Count;
+        if (tracked.Count > _cadencePeakTracked) _cadencePeakTracked = tracked.Count;
+        foreach (var d in detections)
+        {
+            if (d.Confidence > _cadenceBestDetectionScore) _cadenceBestDetectionScore = d.Confidence;
+        }
+
+        LogCadenceIfDue();
+        // The instant the reader captured this frame — NOT DateTime.UtcNow read here, which is
+        // after TakeAsync waited for a slot and _engine.Detect ran, both of which push it later
+        // than the moment the boxes actually describe (a systematic "the object already moved"
+        // error on every snapshot). See CapturedFrame's own doc comment.
+        var now = capturedUtc;
+        // Prune per-track state against every track ByteTrack still considers alive (emitted this
+        // frame OR briefly lost and being coasted for re-acquisition), not just this frame's
+        // matched detections. _tracker.Update only returns tracks matched to a detection this
+        // frame, so a moving object that drops a single detection frame (motion blur, a partial
+        // occlusion — exactly what fast movers do) would otherwise have its whole centroid
+        // history wiped here and be re-reported Idle, with no live overlay box, until it rebuilds
+        // a MovementWindow's worth of samples. See ByteTracker.LiveTrackIds.
+        var liveTrackIds = _tracker.LiveTrackIds;
+        _movement.Prune(liveTrackIds);
+        foreach (var missed in _movement.TakeMissedTracks())
+            _logger.LogInformation("Movement not detected for {Summary}.", missed);
+        _labelArbiter.Prune(liveTrackIds);
+        _snapshottedTrackIds.RemoveWhere(id => !liveTrackIds.Contains(id));
+        _objects.Prune(liveTrackIds, now);
+        _speedMeter.Prune(liveTrackIds);
+        if (_request.ClassifyColors && now - _monochromeCheckedUtc >= MonochromeCheckInterval)
+        {
+            _monochromeCheckedUtc = now;
+            _frameMonochrome = IsFrameMonochrome(frame);
+        }
+        foreach (var id in _lastMovingAtByTrack.Keys)
+        {
+            if (!liveTrackIds.Contains(id)) _lastMovingAtByTrack.Remove(id);
+        }
+        var liveMovingHold = TimeSpan.FromSeconds(Math.Max(0, _request.IdleTimeoutSeconds));
+
+        var seenLabels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var liveBoxes = new List<VisionLiveDetectionBox>(tracked.Count);
+        // Pass G: every detection that's Moving in THIS frame (label + box), plus whether one of
+        // them is a track we haven't snapshotted yet — decided after the loop so the crop covers
+        // all of them at once.
+        var movingThisFrame = new List<(string Label, YoloDotNet.Models.ObjectDetection Detection)>();
+        var newMovingTrack = false;
+
+        // Every box in this frame, so the classifier can tell an object's edge from one hidden
+        // behind something else being tracked.
+        _movement.BeginFrame(tracked.Where(d => d.Id is not null).Select(d => (d.Id!.Value, d.BoundingBox)));
+
+        foreach (var detection in tracked)
+        {
+            if (detection.Id is not { } trackId) continue;
+
+            // rawLabel/rawCategory are what the live overlay shows — the viewer should keep
+            // seeing what the model actually said this instant. Everything that feeds a span
+            // (hysteresis, best-frame tracking, reporting) uses the arbiter's stable label
+            // instead, so a track's flickering per-frame guess can't fragment into several
+            // independent snapshots — see TrackLabelArbiter's own doc comment.
+            var rawLabel = detection.Label?.Name ?? "object";
+            var rawCategory = CocoCategoryMap.Resolve(rawLabel);
+            var label = _labelArbiter.Resolve(trackId, rawLabel, detection.Confidence);
+            var category = CocoCategoryMap.Resolve(label);
+            seenLabels.Add(label);
+
+            // _sourceWidth/_sourceHeight (this camera's own real dims), not frame.Width/Height —
+            // as of pass 1, detection.BoundingBox is reported in that same source-pixel space
+            // (see DFineDecoder.Decode's own doc comment) for Letterbox/Stretch, and pass 4's
+            // MergeSliceDetections below already remaps every slice's own local box into it
+            // before the tracker (and therefore this loop) ever sees it. Normalizing against the
+            // wrong dimensions would silently misplace every box on a non-Stretch camera.
+            var observation = _movement.Observe(trackId, detection.BoundingBox, detection.Confidence,
+                _sourceWidth, _sourceHeight, now, label);
+
+            // Speed traps time the box's bottom centre — where the object meets the ground the
+            // gates are drawn on. A reading only counts for a track the movement rule has called
+            // moving in the last few seconds: a parked car's box that jumps (cut at a slice seam, or
+            // its track hopping to the car next to it) can cross both lines too, and a speed must
+            // never make something moving on its own.
+            var box = detection.BoundingBox;
+            var classifiedMoving = observation.State == MovementState.Moving;
+            SpeedMeasurement? speed = null;
+            if (_speedMeter.HasTraps
+                && _speedMeter.Observe(trackId, (box.Left + box.Width / 2.0) / _sourceWidth, box.Bottom / (double)_sourceHeight, now) is { } measured)
             {
-                if (!liveTrackIds.Contains(id)) _lastMovingAtByTrack.Remove(id);
+                var recentlyMoving = classifiedMoving
+                    || (_lastMovingAtByTrack.TryGetValue(trackId, out var movedAt) && now - movedAt < SpeedNeedsMovementWithin);
+                if (recentlyMoving) speed = measured;
+                else
+                    _logger.LogInformation("Speed reading ignored for track {TrackId} ({Label}): it wasn't moving.", trackId, label);
             }
-            var liveMovingHold = TimeSpan.FromSeconds(Math.Max(0, _request.IdleTimeoutSeconds));
-
-            var seenLabels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var liveBoxes = new List<VisionLiveDetectionBox>(tracked.Count);
-            // Pass G: every detection that's Moving in THIS frame (label + box), plus whether one of
-            // them is a track we haven't snapshotted yet — decided after the loop so the crop covers
-            // all of them at once.
-            var movingThisFrame = new List<(string Label, YoloDotNet.Models.ObjectDetection Detection)>();
-            var newMovingTrack = false;
-
-            // Every box in this frame, so the classifier can tell an object's edge from one hidden
-            // behind something else being tracked.
-            _movement.BeginFrame(tracked.Where(d => d.Id is not null).Select(d => (d.Id!.Value, d.BoundingBox)));
-
-            foreach (var detection in tracked)
+            var moving = classifiedMoving && CocoCategoryMap.CountsAsMoving(_movingObjects, category, label);
+            if (observation.Reason is { } why)
             {
-                if (detection.Id is not { } trackId) continue;
-
-                // rawLabel/rawCategory are what the live overlay shows — the viewer should keep
-                // seeing what the model actually said this instant. Everything that feeds a span
-                // (hysteresis, best-frame tracking, reporting) uses the arbiter's stable label
-                // instead, so a track's flickering per-frame guess can't fragment into several
-                // independent snapshots — see TrackLabelArbiter's own doc comment.
-                var rawLabel = detection.Label?.Name ?? "object";
-                var rawCategory = CocoCategoryMap.Resolve(rawLabel);
-                var label = _labelArbiter.Resolve(trackId, rawLabel, detection.Confidence);
-                var category = CocoCategoryMap.Resolve(label);
-                seenLabels.Add(label);
-
-                // _sourceWidth/_sourceHeight (this camera's own real dims), not frame.Width/Height —
-                // as of pass 1, detection.BoundingBox is reported in that same source-pixel space
-                // (see DFineDecoder.Decode's own doc comment) for Letterbox/Stretch, and pass 4's
-                // MergeSliceDetections below already remaps every slice's own local box into it
-                // before the tracker (and therefore this loop) ever sees it. Normalizing against the
-                // wrong dimensions would silently misplace every box on a non-Stretch camera.
-                var observation = _movement.Observe(trackId, detection.BoundingBox, detection.Confidence,
-                    _sourceWidth, _sourceHeight, now, label);
-
-                // Speed traps time the box's bottom centre — where the object meets the ground the
-                // gates are drawn on. A reading only counts for a track the movement rule has called
-                // moving in the last few seconds: a parked car's box that jumps (cut at a slice seam, or
-                // its track hopping to the car next to it) can cross both lines too, and a speed must
-                // never make something moving on its own.
-                var box = detection.BoundingBox;
-                var classifiedMoving = observation.State == MovementState.Moving;
-                SpeedMeasurement? speed = null;
-                if (_speedMeter.HasTraps
-                    && _speedMeter.Observe(trackId, (box.Left + box.Width / 2.0) / _sourceWidth, box.Bottom / (double)_sourceHeight, now) is { } measured)
-                {
-                    var recentlyMoving = classifiedMoving
-                        || (_lastMovingAtByTrack.TryGetValue(trackId, out var movedAt) && now - movedAt < SpeedNeedsMovementWithin);
-                    if (recentlyMoving) speed = measured;
-                    else
-                        _logger.LogInformation("Speed reading ignored for track {TrackId} ({Label}): it wasn't moving.", trackId, label);
-                }
-                var moving = classifiedMoving && CocoCategoryMap.CountsAsMoving(_movingObjects, category, label);
-                if (observation.Reason is { } why)
-                {
-                    // Once per track, when it first counts as moving: which rule decided it and where,
-                    // so a parked object reported as moving can be traced to its cause.
-                    _logger.LogInformation("Track {TrackId} ({Label}) moving: {Rule}, box {W}x{H} at ({X},{Y}).",
-                        trackId, label, why, box.Width, box.Height, box.Left, box.Top);
-                }
-
-                // Idle tracks never open/extend a span unless ReportIdleDetections is on — decision
-                // 7's "not interested in static objects" default. A Moving track always does.
-                var motionPresent = moving || _request.ReportIdleDetections;
-
-                // Only a detection that's actually contributing to this span gets to compete for
-                // "best frame" — otherwise a parked/idle object sharing this label (a driveway's
-                // own stationary truck, say) can win over the thing that's actually driving the
-                // reported span (a car passing through), since it's bigger, better-lit, and more
-                // stable every single frame. Computed after motionPresent so a non-contributing
-                // detection is skipped entirely, not just deprioritized.
-                if (motionPresent)
-                {
-                    UpdateBestFrameForLabel(label, detection, _sourceWidth, _sourceHeight, now);
-                    if (_objects.Observe(trackId, label, now,
-                            box.Left / (double)_sourceWidth, box.Top / (double)_sourceHeight,
-                            box.Width / (double)_sourceWidth, box.Height / (double)_sourceHeight,
-                            detection.Confidence, moving)
-                        && _request.ClassifyColors)
-                    {
-                        _objects.SetColors(trackId, now, ClassifyColors(frame, box, category));
-                    }
-                    if (moving) _lastMovingAtByLabel[label] = now;
-
-                    movingThisFrame.Add((label, detection));
-                    // Pass G: a track we've never snapshotted starting to move is what triggers this
-                    // frame's first Sub-frame snapshot after this loop. The progressive upgrade on
-                    // top of that first crop is decided after the loop from the whole frame's
-                    // CompositeFrameScore, not per track — see the trigger block below.
-                    if (_snapshottedTrackIds.Add(trackId)) newMovingTrack = true;
-                }
-
-                // After Observe above, so the entry normally exists (SetSpeed keeps it for later if not).
-                if (speed is not null) _objects.SetSpeed(trackId, speed);
-
-                var hysteresis = GetOrCreateHysteresis(label);
-                var wasActive = hysteresis.IsActive;
-                if (hysteresis.Observe(now, motionPresent, detection.Confidence) is { } closed)
-                {
-                    EnqueueReport(closed, label, category);
-                }
-                // Report a span the moment it opens rather than at the first 15 s checkpoint, so a
-                // detection alert (and the Snapshots page) hears about it within seconds.
-                else if (!wasActive && hysteresis.IsActive
-                    && hysteresis.CurrentInProgressSpan(now, CheckpointRecency) is { } opened)
-                {
-                    EnqueueReport(opened, label, category, spanClosed: false);
-                }
-
-                // See _lastMovingAtByTrack: a paused track stays Moving for the viewer until it has
-                // been still for the idle timeout.
-                if (moving) _lastMovingAtByTrack[trackId] = now;
-                var liveState = moving
-                    || (_lastMovingAtByTrack.TryGetValue(trackId, out var lastMovingAt) && now - lastMovingAt < liveMovingHold)
-                    ? MovementState.Moving
-                    : MovementState.Idle;
-
-                liveBoxes.Add(new VisionLiveDetectionBox(
-                    trackId, rawCategory, rawLabel, liveState.ToString(),
-                    detection.BoundingBox.Left / (double)_sourceWidth,
-                    detection.BoundingBox.Top / (double)_sourceHeight,
-                    detection.BoundingBox.Width / (double)_sourceWidth,
-                    detection.BoundingBox.Height / (double)_sourceHeight,
-                    detection.Confidence,
-                    _objects.SpeedOf(trackId), _objects.ColorOf(trackId)));
+                // Once per track, when it first counts as moving: which rule decided it and where,
+                // so a parked object reported as moving can be traced to its cause.
+                _logger.LogInformation("Track {TrackId} ({Label}) moving: {Rule}, box {W}x{H} at ({X},{Y}).",
+                    trackId, label, why, box.Width, box.Height, box.Left, box.Top);
             }
 
-            // A label with no instance in this frame still needs to observe absence, so its
-            // hysteresis can wind down and eventually close — mirroring MotionSession's own
-            // per-zone loop, which evaluates every zone every frame regardless of current activity.
+            // Idle tracks never open/extend a span unless ReportIdleDetections is on — decision
+            // 7's "not interested in static objects" default. A Moving track always does.
+            var motionPresent = moving || _request.ReportIdleDetections;
+
+            // Only a detection that's actually contributing to this span gets to compete for
+            // "best frame" — otherwise a parked/idle object sharing this label (a driveway's
+            // own stationary truck, say) can win over the thing that's actually driving the
+            // reported span (a car passing through), since it's bigger, better-lit, and more
+            // stable every single frame. Computed after motionPresent so a non-contributing
+            // detection is skipped entirely, not just deprioritized.
+            if (motionPresent)
+            {
+                UpdateBestFrameForLabel(label, detection, _sourceWidth, _sourceHeight, now);
+                if (_objects.Observe(trackId, label, now,
+                        box.Left / (double)_sourceWidth, box.Top / (double)_sourceHeight,
+                        box.Width / (double)_sourceWidth, box.Height / (double)_sourceHeight,
+                        detection.Confidence, moving)
+                    && _request.ClassifyColors)
+                {
+                    _objects.SetColors(trackId, now, ClassifyColors(frame, box, category));
+                }
+                if (moving) _lastMovingAtByLabel[label] = now;
+
+                movingThisFrame.Add((label, detection));
+                // Pass G: a track we've never snapshotted starting to move is what triggers this
+                // frame's first Sub-frame snapshot after this loop. The progressive upgrade on
+                // top of that first crop is decided after the loop from the whole frame's
+                // CompositeFrameScore, not per track — see the trigger block below.
+                if (_snapshottedTrackIds.Add(trackId)) newMovingTrack = true;
+            }
+
+            // After Observe above, so the entry normally exists (SetSpeed keeps it for later if not).
+            if (speed is not null) _objects.SetSpeed(trackId, speed);
+
+            var hysteresis = GetOrCreateHysteresis(label);
+            var wasActive = hysteresis.IsActive;
+            if (hysteresis.Observe(now, motionPresent, detection.Confidence) is { } closed)
+            {
+                EnqueueReport(closed, label, category);
+            }
+            // Report a span the moment it opens rather than at the first 15 s checkpoint, so a
+            // detection alert (and the Snapshots page) hears about it within seconds.
+            else if (!wasActive && hysteresis.IsActive
+                && hysteresis.CurrentInProgressSpan(now, CheckpointRecency) is { } opened)
+            {
+                EnqueueReport(opened, label, category, spanClosed: false);
+            }
+
+            // See _lastMovingAtByTrack: a paused track stays Moving for the viewer until it has
+            // been still for the idle timeout.
+            if (moving) _lastMovingAtByTrack[trackId] = now;
+            var liveState = moving
+                || (_lastMovingAtByTrack.TryGetValue(trackId, out var lastMovingAt) && now - lastMovingAt < liveMovingHold)
+                ? MovementState.Moving
+                : MovementState.Idle;
+
+            liveBoxes.Add(new VisionLiveDetectionBox(
+                trackId, rawCategory, rawLabel, liveState.ToString(),
+                detection.BoundingBox.Left / (double)_sourceWidth,
+                detection.BoundingBox.Top / (double)_sourceHeight,
+                detection.BoundingBox.Width / (double)_sourceWidth,
+                detection.BoundingBox.Height / (double)_sourceHeight,
+                detection.Confidence,
+                _objects.SpeedOf(trackId), _objects.ColorOf(trackId)));
+        }
+
+        // A label with no instance in this frame still needs to observe absence, so its
+        // hysteresis can wind down and eventually close — mirroring MotionSession's own
+        // per-zone loop, which evaluates every zone every frame regardless of current activity.
+        foreach (var (label, hysteresis) in _hysteresisByLabel)
+        {
+            if (seenLabels.Contains(label)) continue;
+            if (hysteresis.Observe(now, motionPresent: false, score: 0) is { } closed)
+            {
+                EnqueueReport(closed, label, CocoCategoryMap.Resolve(label));
+            }
+        }
+
+        // "x2" / "x3" badge: peak moving tracks per label this frame, kept as a running max over
+        // the life of that label's open span (reset in EnqueueReport on close). Each entry in
+        // movingThisFrame is one distinct track (the tracker returns a track at most once per
+        // frame and the arbiter gives it one label), so a per-label tally is the distinct count.
+        if (movingThisFrame.Count > 0)
+        {
+            var perLabel = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (lbl, _) in movingThisFrame)
+            {
+                perLabel[lbl] = perLabel.GetValueOrDefault(lbl) + 1;
+            }
+            foreach (var (lbl, count) in perLabel)
+            {
+                _peakMovingCountByLabel[lbl] = Math.Max(_peakMovingCountByLabel.GetValueOrDefault(lbl), count);
+            }
+        }
+
+        // Detection.SnapshotMotionAccuracy: finalize a span early once its object has genuinely
+        // left — no instance of the label classified Moving for DepartureGrace — rather than
+        // holding it open the full IdleTimeoutSeconds. Without this, a later unrelated object of
+        // the same type on this camera (a second truck 30s after the first drove off) merges
+        // into the first one's span and its snapshot. Skipped when ReportIdleDetections is on:
+        // there, a still-present idle instance is deliberately kept reported, not "departed".
+        if (_request.SnapshotMotionAccuracy && !_request.ReportIdleDetections)
+        {
+            List<(MotionSpanResult Closed, string Label)>? departed = null;
             foreach (var (label, hysteresis) in _hysteresisByLabel)
             {
-                if (seenLabels.Contains(label)) continue;
-                if (hysteresis.Observe(now, motionPresent: false, score: 0) is { } closed)
+                if (!hysteresis.IsActive) continue;
+                var lastMoving = _lastMovingAtByLabel.GetValueOrDefault(label, DateTime.MinValue);
+                if (now - lastMoving < _departureGrace) continue;
+                if (hysteresis.Flush(now) is { } closed) (departed ??= []).Add((closed, label));
+            }
+            if (departed is not null)
+            {
+                foreach (var (closed, label) in departed)
                 {
                     EnqueueReport(closed, label, CocoCategoryMap.Resolve(label));
                 }
             }
+        }
 
-            // "x2" / "x3" badge: peak moving tracks per label this frame, kept as a running max over
-            // the life of that label's open span (reset in EnqueueReport on close). Each entry in
-            // movingThisFrame is one distinct track (the tracker returns a track at most once per
-            // frame and the arbiter gives it one label), so a per-label tally is the distinct count.
-            if (movingThisFrame.Count > 0)
-            {
-                var perLabel = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                foreach (var (lbl, _) in movingThisFrame)
-                {
-                    perLabel[lbl] = perLabel.GetValueOrDefault(lbl) + 1;
-                }
-                foreach (var (lbl, count) in perLabel)
-                {
-                    _peakMovingCountByLabel[lbl] = Math.Max(_peakMovingCountByLabel.GetValueOrDefault(lbl), count);
-                }
-            }
+        _liveSnapshot = liveBoxes;
+        Interlocked.Exchange(ref _liveSnapshotTicksUtc, now.Ticks);
 
-            // Detection.SnapshotMotionAccuracy: finalize a span early once its object has genuinely
-            // left — no instance of the label classified Moving for DepartureGrace — rather than
-            // holding it open the full IdleTimeoutSeconds. Without this, a later unrelated object of
-            // the same type on this camera (a second truck 30s after the first drove off) merges
-            // into the first one's span and its snapshot. Skipped when ReportIdleDetections is on:
-            // there, a still-present idle instance is deliberately kept reported, not "departed".
-            if (_request.SnapshotMotionAccuracy && !_request.ReportIdleDetections)
-            {
-                List<(MotionSpanResult Closed, string Label)>? departed = null;
-                foreach (var (label, hysteresis) in _hysteresisByLabel)
-                {
-                    if (!hysteresis.IsActive) continue;
-                    var lastMoving = _lastMovingAtByLabel.GetValueOrDefault(label, DateTime.MinValue);
-                    if (now - lastMoving < _departureGrace) continue;
-                    if (hysteresis.Flush(now) is { } closed) (departed ??= []).Add((closed, label));
-                }
-                if (departed is not null)
-                {
-                    foreach (var (closed, label) in departed)
-                    {
-                        EnqueueReport(closed, label, CocoCategoryMap.Resolve(label));
-                    }
-                }
-            }
+        // Pass G / progressive best snapshot: how well this frame captures *every* moving object
+        // at once — the count plus their cumulative confidence*area. Boxes are in this camera's
+        // source-pixel space here (same as everywhere else in this loop). Built with a plain loop
+        // rather than CompositeFrameScore.ForFrame (which the tests use) to keep this hot path
+        // allocation-free.
+        var cumulativeSnapshotScore = 0.0;
+        foreach (var (_, det) in movingThisFrame)
+        {
+            var mb = det.BoundingBox;
+            var mArea = Math.Clamp(
+                (mb.Width / (double)_sourceWidth) * (mb.Height / (double)_sourceHeight), 0.0, 1.0);
+            cumulativeSnapshotScore += MovementClassifier.Score(det.Confidence, mArea);
+        }
+        var frameScore = new CompositeFrameScore(movingThisFrame.Count, cumulativeSnapshotScore);
 
-            _liveSnapshot = liveBoxes;
-            Interlocked.Exchange(ref _liveSnapshotTicksUtc, now.Ticks);
-
-            // Pass G / progressive best snapshot: how well this frame captures *every* moving object
-            // at once — the count plus their cumulative confidence*area. Boxes are in this camera's
-            // source-pixel space here (same as everywhere else in this loop). Built with a plain loop
-            // rather than CompositeFrameScore.ForFrame (which the tests use) to keep this hot path
-            // allocation-free.
-            var cumulativeSnapshotScore = 0.0;
-            foreach (var (_, det) in movingThisFrame)
-            {
-                var mb = det.BoundingBox;
-                var mArea = Math.Clamp(
-                    (mb.Width / (double)_sourceWidth) * (mb.Height / (double)_sourceHeight), 0.0, 1.0);
-                cumulativeSnapshotScore += MovementClassifier.Score(det.Confidence, mArea);
-            }
-            var frameScore = new CompositeFrameScore(movingThisFrame.Count, cumulativeSnapshotScore);
-
-            // Snapshot everything moving straight from this exact frame when a new track started
-            // moving (its first crop), or this frame frames the moving set better than whatever is
-            // staged — more objects, or the same number more clearly. Per-camera cadence gate still
-            // caps a burst at one crop per second.
-            if ((newMovingTrack || frameScore.BeatsRetained(_stagedSnapshotScore, SnapshotImprovementMargin))
-                && now - _lastSubSnapshotUtc >= SubSnapshotMinGap && movingThisFrame.Count > 0)
-            {
-                _lastSubSnapshotUtc = now;
-                TrySubFrameSnapshot(frame, now, movingThisFrame, frameScore);
-            }
+        // Snapshot everything moving straight from this exact frame when a new track started
+        // moving (its first crop), or this frame frames the moving set better than whatever is
+        // staged — more objects, or the same number more clearly. Per-camera cadence gate still
+        // caps a burst at one crop per second.
+        if ((newMovingTrack || frameScore.BeatsRetained(_stagedSnapshotScore, SnapshotImprovementMargin))
+            && now - _lastSubSnapshotUtc >= SubSnapshotMinGap && movingThisFrame.Count > 0)
+        {
+            _lastSubSnapshotUtc = now;
+            TrySubFrameSnapshot(frame, now, movingThisFrame, frameScore);
         }
     }
 
     /// <summary>Fires (at most once per pipeline lifetime) the background FP32 rebuild once
-    /// <paramref name="dfine"/> has latched <see cref="DFineEngine.HasNonFiniteOverflow"/> — the
+    /// the engine has latched <see cref="DFineEngine.HasNonFiniteOverflow"/> — the
     /// TensorRT FP16 builder overflowing D-FINE's transformer activations, the automatic counterpart
     /// to <see cref="DFineEngine.WarnIfNonFinite"/>'s log line. Never awaited by the caller: a cold
     /// TensorRT engine build is minutes, and blocking the per-frame inference loop on it would freeze
     /// this camera's own capture/detect cycle for that whole window (other cameras are unaffected —
     /// each has its own loop — but this one would otherwise sit idle rather than continuing to run,
     /// zero-detection, against the still-overflowing engine until the swap is ready).</summary>
-    private void TriggerDFineFp32RebuildIfNeeded(DFineEngine dfine, CancellationToken ct)
+    private void TriggerDFineFp32RebuildIfNeeded(CancellationToken ct)
     {
         if (!string.Equals(_engineOptions.TensorRtPrecision, "FP16", StringComparison.OrdinalIgnoreCase)) return;
         if (Interlocked.CompareExchange(ref _dfineFp32RebuildStarted, 1, 0) != 0) return;
@@ -1013,10 +1058,10 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             "FP32 in the background. Detections stay empty on this camera until the rebuild completes.",
             _request.DisplayName);
 
-        _ = RebuildDFineAtFp32Async(dfine, ct);
+        _ = RebuildDFineAtFp32Async(ct);
     }
 
-    private async Task RebuildDFineAtFp32Async(DFineEngine overflowing, CancellationToken ct)
+    private async Task RebuildDFineAtFp32Async(CancellationToken ct)
     {
         var fp32Options = _engineOptions with { TensorRtPrecision = "FP32", TensorRtLayerNormFp32Fallback = false };
         try
@@ -1028,10 +1073,9 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 _logger, ct), ct);
 
             _engineOptions = fp32Options;
-            _engine = newEngine;
-            // Only disposed after the swap — engine.Detect (this loop, or a slice call already in
-            // flight against the old instance) must never see a disposed session mid-call.
-            overflowing.Dispose();
+            Interlocked.Exchange(ref _replacementEngine, newEngine)?.Dispose();
+            // The pipeline ended during the build, so nothing will put it in place.
+            if (Volatile.Read(ref _disposed)) Interlocked.Exchange(ref _replacementEngine, null)?.Dispose();
             _logger.LogInformation(
                 "D-FINE engine for camera {Camera} rebuilt at FP32 after an FP16 overflow — detections should " +
                 "resume on the next frame.", _request.DisplayName);
@@ -1590,21 +1634,20 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         }
     }
 
-    private async Task CheckpointLoopAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try { await Task.Delay(CheckpointInterval, ct); }
-            catch (OperationCanceledException) { break; }
+    private DateTime _nextCheckpointUtc = DateTime.UtcNow + CheckpointInterval;
 
-            var now = DateTime.UtcNow;
-            foreach (var (label, hysteresis) in _hysteresisByLabel)
-            {
-                if (hysteresis.CurrentInProgressSpan(now, CheckpointRecency) is { } span)
-                {
-                    EnqueueReport(span, label, CocoCategoryMap.Resolve(label), spanClosed: false);
-                }
-            }
+    /// <summary>Reports every span still open, every 15 seconds. Called by the inference loop: the
+    /// per-label state is only ever touched from there.</summary>
+    private void CheckpointIfDue()
+    {
+        var now = DateTime.UtcNow;
+        if (now < _nextCheckpointUtc) return;
+        _nextCheckpointUtc = now + CheckpointInterval;
+
+        foreach (var (label, hysteresis) in _hysteresisByLabel)
+        {
+            if (hysteresis.CurrentInProgressSpan(now, CheckpointRecency) is { } span)
+                EnqueueReport(span, label, CocoCategoryMap.Resolve(label), spanClosed: false);
         }
     }
 
@@ -1723,6 +1766,8 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         _cts.Dispose();
         _slot.Dispose();
         _engine?.Dispose();
+        Volatile.Write(ref _disposed, true);
+        Interlocked.Exchange(ref _replacementEngine, null)?.Dispose();
     }
 }
 

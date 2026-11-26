@@ -17,4 +17,9 @@ public interface ILiveSource
     /// <summary>Raised once per complete fMP4 fragment (moof+mdat) after the init segment is
     /// available. Each array is a fresh copy safe to hold onto past the event call.</summary>
     event Action<byte[]>? LiveFragmentReceived;
+
+    /// <summary>Raised when an ffmpeg attempt is over. The next attempt has a new init segment and new
+    /// timestamps, so a viewer of this one has to start again: its fragments don't continue the
+    /// stream it was given.</summary>
+    event Action? LiveAttemptEnded;
 }

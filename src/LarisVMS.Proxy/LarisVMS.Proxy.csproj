@@ -10,7 +10,7 @@
     <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.223.1</Version>
+    <Version>0.223.2</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 

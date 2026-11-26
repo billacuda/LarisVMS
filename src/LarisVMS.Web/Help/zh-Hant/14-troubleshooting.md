@@ -10,6 +10,7 @@
 - **節點**：每個節點上的 `%ProgramData%\LarisVMS\logs\node-*.log`。
 - **AI 偵測**：每個節點上的 `%ProgramData%\LarisVMS\logs\vision-*.log`。
 - **自動更新**：每個節點或代理上的 `%ProgramData%\LarisVMS\logs\updater-*.log`。
+- **在 Linux 上**，相同的檔案位於 `/var/log/larisvms`。每個服務的輸出（包括未能啟動的原因）都在 systemd 日誌中：`journalctl -u larisvms-node`（或 `larisvms-web`、`larisvms-proxy`；加上 `-f` 可持續追蹤），`systemctl status larisvms-node` 會顯示它是否在執行。更新由 `larisvms-node-update.service` 安裝：`journalctl -u larisvms-node-update`。
 
 ## 攝影機沒有在錄影
 
@@ -20,7 +21,7 @@
 
 ## 即時檢視和回放一直停在「正在連線」
 
-當節點直接向瀏覽器串流時（請參閱[直連串流](/Help/nodes#direct-streaming)），瀏覽器會連線到節點的用戶端連接埠，預設為 4200。如果瀏覽器主控台顯示 `wss://<node>:<port>/live/…` 連線失敗，請檢查節點的防火牆是否允許該連接埠：安裝程式會建立一條名為 **LarisVMS Node Client Endpoint** 的輸入規則。0.215.1 之前的安裝程式在升級或接管節點時可能會遺失該規則；請再次執行目前的節點安裝程式，或手動新增該規則。
+當節點直接向瀏覽器串流時（請參閱[直連串流](/Help/nodes#direct-streaming)），瀏覽器會連線到節點的用戶端連接埠，預設為 8555。如果 5 秒內無法連線，影像會透過伺服器轉送。如果瀏覽器主控台顯示 `wss://<node>:<port>/live/…` 連線失敗，請檢查節點的防火牆是否允許該連接埠：安裝程式會建立一條名為 **LarisVMS Node Client Endpoint** 的輸入規則。0.215.1 之前的安裝程式在升級或接管節點時可能會遺失該規則；請再次執行目前的節點安裝程式，或手動新增該規則。使用主機網路的 Docker 不會開放連接埠：請在電腦自身的防火牆中允許該連接埠（`sudo ufw allow 8555/tcp`）。
 
 ## Active Directory 登入或同步失敗
 
@@ -48,7 +49,7 @@ Chrome 會限制不可見的視窗，因此第二個螢幕上的即時牆可能�
 
 ## AI 偵測停止，但錄影繼續
 
-通常是 GPU 驅動程式被重設了。Windows 系統事件記錄會在那一刻顯示 `nvlddmkm` 事件 153 或 `Display` 事件 4101。視覺服務在 60 秒沒有結果後會自行重新啟動。反覆重設說明問題出在 GPU、其驅動程式、散熱或電源上。
+通常是 GPU 驅動程式被重設了。Windows 系統事件記錄會在那一刻顯示 `nvlddmkm` 事件 153 或 `Display` 事件 4101；在 Linux 上，`journalctl -k` 會顯示一行 `NVRM: Xid`。視覺服務在 60 秒沒有結果後會自行重新啟動。反覆重設說明問題出在 GPU、其驅動程式、散熱或電源上。
 
 ## 更新後節點或代理沒有恢復
 

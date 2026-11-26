@@ -18,6 +18,16 @@ public sealed class PtzArbitrationService : IPtzArbitrationService
         return PtzArbitrationPolicy.CanAcquire(currentHold, userId, priorityLevel, nowUtc);
     }
 
-    public void RecordCommand(Guid cameraId, string userId, int priorityLevel, int lockoutSeconds, DateTime nowUtc) =>
-        _holds[cameraId] = new PtzHoldSnapshot(userId, priorityLevel, lockoutSeconds, nowUtc);
+    public void RecordCommand(Guid cameraId, string userId, int priorityLevel, int lockoutSeconds, DateTime nowUtc)
+    {
+        // Checked again: the camera was commanded in between, and someone with a higher priority may have
+        // taken it meanwhile. Their hold stays.
+        lock (_recordGate)
+        {
+            if (TryAcquire(cameraId, userId, priorityLevel, nowUtc).Granted)
+                _holds[cameraId] = new PtzHoldSnapshot(userId, priorityLevel, lockoutSeconds, nowUtc);
+        }
+    }
+
+    private readonly Lock _recordGate = new();
 }

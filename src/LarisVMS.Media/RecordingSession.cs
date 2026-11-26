@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO.Pipelines;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
@@ -130,8 +131,41 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
     // poll LiveInitSegment — replaced at the start of every attempt (not just once) so a viewer that
     // connects while ffmpeg is mid-restart waits for the new attempt's moov instead of hanging on a
     // task that will never complete (the old attempt is gone, its TCS is cancelled below).
-    private TaskCompletionSource<byte[]> _initSegmentTcs = NewInitSegmentTcs();
+    private volatile TaskCompletionSource<byte[]> _initSegmentTcs = NewInitSegmentTcs();
     private static TaskCompletionSource<byte[]> NewInitSegmentTcs() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    // Counts finished attempts, so a drain left behind by an abandoned ffmpeg stops publishing.
+    private int _liveAttempt;
+
+    /// <inheritdoc/>
+    public event Action? LiveAttemptEnded;
+
+    // As soon as an attempt is over, not when the next one starts: a viewer arriving during the backoff
+    // between them would otherwise be handed the finished attempt's init segment.
+    private void EndLiveAttempt()
+    {
+        Interlocked.Increment(ref _liveAttempt);
+        LiveInitSegment = null;
+        var ended = _initSegmentTcs;
+        _initSegmentTcs = NewInitSegmentTcs();
+        ended.TrySetCanceled();
+        LiveAttemptEnded?.Invoke();
+    }
+
+    // Whether this attempt has written real video. Files left by earlier attempts don't count.
+    private bool _dataThisAttempt;
+
+    // Where the last listing left off (see ListSegmentFiles).
+    private DateTime? _lastScanUtc;
+    private string? _newestDirectory;
+
+    /// <summary>Segments are named by UTC, in their own folder. They used to be named by local time, beside
+    /// it: when clocks go back, an hour's names came round again and ffmpeg overwrote that hour's footage.
+    /// Those files stay where they are, and the separate folder keeps a UTC name from being one of theirs
+    /// (a server ahead of UTC would otherwise overwrite its last few hours on the day it's updated).</summary>
+    internal const string UtcFolder = "utc";
+
+    private string SegmentRoot => Path.Combine(options.OutputDirectory, UtcFolder);
 
     /// <summary>Waits for the current ffmpeg attempt's live init segment. Throws
     /// OperationCanceledException if ct fires (typically a caller-supplied timeout) before one
@@ -221,30 +255,22 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
     internal static int? EstimateBitrateKbps(long sizeBytes, TimeSpan duration)
         => duration.TotalSeconds > 0 ? (int)(sizeBytes * 8.0 / 1000.0 / duration.TotalSeconds) : null;
 
-    /// <summary><paramref name="knownPaths"/> pre-seeds the reported-paths set with segment files
-    /// the server already has a Segments row for, from the caller's own record (NodeWorker fetches
-    /// this once via GET /api/nodes/segments/paths before any session starts) — without it, a
-    /// *process* restart (not just an ffmpeg reconnect, which reportedPaths already survives — see
-    /// its own comment below) rescans this camera's entire on-disk history with zero memory of
-    /// what's already been reported, and every one of those re-discovered files fires
-    /// SegmentCompleted again as if brand new. Confirmed as a real, serious bug, not theoretical:
-    /// for a Motion-mode camera, a freshly-restarted MotionSession/CameraEventSession has observed
-    /// no motion yet at the moment that rescan runs, so nearly all of that re-fired history looked
-    /// like "no motion" to NodeWorker.DecideMotionSegment and was wrongly discarded — deleting files
-    /// that already had valid, previously-reported Segments rows, on every single node restart.</summary>
-    public async Task RunAsync(CancellationToken ct, IEnumerable<string>? knownPaths = null)
+    /// <summary>Everything already on disk when this starts counts as reported. Without that, a restarted
+    /// process rescans a camera's entire history and fires SegmentCompleted for all of it as if brand
+    /// new. Confirmed as a real, serious bug, not theoretical: for a Motion-mode camera, a
+    /// freshly-restarted MotionSession/CameraEventSession has observed no motion yet at that moment, so
+    /// nearly all of that re-fired history looked like "no motion" and was wrongly discarded — deleting
+    /// files that already had valid, previously-reported Segments rows, on every single node restart.
+    /// A file that really wasn't reported is imported by the node's hourly storage reconcile.</summary>
+    public async Task RunAsync(CancellationToken ct)
     {
-        Directory.CreateDirectory(options.OutputDirectory);
-        EnsureUpcomingHourDirectories();
         var consecutiveFailures = 0;
         // Scoped to the whole session, not the per-attempt loop below: it was previously recreated
         // on every ffmpeg restart, which meant every reconnect after a crash rescanned the output
         // directory with no memory of files already reported and re-reported all of them — confirmed
         // in practice as 5-10x duplicate rows for the same handful of files during a crash-loop.
-        // Case-insensitive: Windows paths (local or UNC) are case-insensitive/preserving, and
-        // knownPaths comes back from the server exactly as originally reported, which could differ
-        // in case from how this run's own Directory.GetFiles happens to return the same path.
-        var reportedPaths = new HashSet<string>(knownPaths ?? [], LarisVMS.Core.PathComparer.Local);
+        var reportedPaths = new HashSet<string>(LarisVMS.Core.PathComparer.Local);
+        var listedExisting = false;
 
         // Same whole-session scope as reportedPaths, for the same reason: an ffmpeg reconnect mid-way
         // through must not lose track of a still-open file's already-observed first-real-data instant.
@@ -254,10 +280,20 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
         while (!ct.IsCancellationRequested)
         {
             State = StreamRecordingState.Connecting;
+            _dataThisAttempt = false;
             Process? process = null;
 
             try
             {
+                // In here, so storage that's offline when the session starts is retried like any failure.
+                Directory.CreateDirectory(SegmentRoot);
+                EnsureUpcomingHourDirectories();
+                if (!listedExisting)
+                {
+                    // Once the storage answers, and before this session makes a file of its own.
+                    reportedPaths.UnionWith(ListSegmentFiles(reportedPaths));
+                    listedExisting = true;
+                }
                 process = StartFfmpeg();
                 var stderrTask = DrainStderrAsync(process, ct);
                 // A new process means fresh throughput stats too — carrying the previous attempt's
@@ -265,12 +301,7 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
                 // reconnecting.
                 CurrentFps = null;
                 CurrentBitrateKbps = null;
-                // A new process means a new moov — the old one (and anyone still waiting on it) is
-                // no longer valid.
-                LiveInitSegment = null;
-                if (!_initSegmentTcs.Task.IsCompleted) _initSegmentTcs.TrySetCanceled();
-                _initSegmentTcs = NewInitSegmentTcs();
-                var stdoutTask = DrainStdoutAsync(process, ct);
+                var stdoutTask = DrainStdoutAsync(process, Volatile.Read(ref _liveAttempt), ct);
 
                 var stalled = false;
                 LastSegmentAt = DateTime.UtcNow; // grace period before the first segment lands
@@ -289,10 +320,10 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
 
                     PollForCompletedSegments(reportedPaths, firstRealDataObservedUtc);
 
-                    if (State != StreamRecordingState.Recording && reportedPaths.Count > 0)
+                    if (State != StreamRecordingState.Recording && _dataThisAttempt)
                     {
                         State = StreamRecordingState.Recording;
-                        consecutiveFailures = 0; // a real segment landed — this attempt succeeded
+                        consecutiveFailures = 0; // real video landed — this attempt succeeded
                     }
 
                     var staleFor = DateTime.UtcNow - LastSegmentAt!.Value;
@@ -382,6 +413,7 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
             }
             finally
             {
+                EndLiveAttempt();
                 process?.Dispose();
             }
 
@@ -409,12 +441,10 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
         // slower — including this class's own poll every few seconds. ffmpeg's segment muxer has no
         // option to create missing directories on its own (confirmed: no -strftime_mkdir in this
         // build, only -strftime), so EnsureUpcomingHourDirectories() has to stay ahead of it or an
-        // hour boundary would abort the whole recording, not just roll to a new folder. The folder
-        // names land in the *node's local* time zone (whatever -strftime expands them as), not UTC —
-        // deliberately: this path is a human browsing the filesystem, and the timestamps that
-        // actually matter for correctness (Segment.StartUtc/EndUtc) are computed independently, in
-        // C#, from file metadata — see RecordingSegment's doc comment.
-        var outputPattern = $"{options.OutputDirectory.TrimEnd('/', '\\')}/%Y/%m/%d/%H/%Y%m%dT%H%M%SZ.mp4";
+        // hour boundary would abort the whole recording, not just roll to a new folder. The names are
+        // UTC (TZ below). Segment.StartUtc/EndUtc don't come from them, but from file metadata — see
+        // RecordingSegment's doc comment.
+        var outputPattern = $"{options.OutputDirectory.TrimEnd('/', '\\')}/{UtcFolder}/%Y/%m/%d/%H/%Y%m%dT%H%M%SZ.mp4";
 
         var psi = new ProcessStartInfo
         {
@@ -436,6 +466,9 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
             RedirectStandardInput = true,
             CreateNoWindow = true
         };
+        // ffmpeg expands the names above in this process's time zone. "UTC0" is what both Windows' and
+        // Linux's C runtimes read, and needs no time zone files.
+        psi.Environment["TZ"] = "UTC0";
         // -c copy: pure stream copy, no transcode — this whole pipeline, recording and live alike,
         // never touches a codec.
         // -map 0:v -map 0:a?, not -map 0: an ONVIF camera's RTSP session commonly carries a third
@@ -497,7 +530,7 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
 
     /// <summary>internal, not private: unit-tested directly against a real temp directory (see
     /// LarisVMS.Tests) to prove a pre-seeded reportedPaths entry is skipped rather than re-firing
-    /// SegmentCompleted — the actual bug fix in RunAsync's knownPaths parameter, exercised here
+    /// SegmentCompleted — the actual bug fix behind RunAsync's own pre-seeding, exercised here
     /// without needing to spawn a real ffmpeg process.
     ///
     /// firstRealDataObservedUtc is RunAsync's own dictionary, threaded through the same way
@@ -508,12 +541,7 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
         string[] files;
         try
         {
-            // AllDirectories: segments now live under nested Y/m/d/H folders, not flat in
-            // OutputDirectory. Full paths still sort chronologically as strings — the folder
-            // hierarchy is itself zero-padded and chronological (2026/08/09/14/... sorts before
-            // .../15/...), same as the zero-padded filename underneath it.
-            files = Directory.GetFiles(options.OutputDirectory, "*.mp4", SearchOption.AllDirectories);
-            Array.Sort(files, StringComparer.Ordinal);
+            files = ListSegmentFiles(reportedPaths);
         }
         catch (IOException)
         {
@@ -531,12 +559,17 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
         if (files.Length > 0)
         {
             var openPath = files[^1];
-            if (!firstRealDataObservedUtc.ContainsKey(openPath))
+            // One already reported is an earlier attempt's last file: this attempt hasn't made one yet.
+            if (!reportedPaths.Contains(openPath) && !firstRealDataObservedUtc.ContainsKey(openPath))
             {
                 FileInfo? openInfo;
                 try { openInfo = new FileInfo(openPath); }
                 catch (IOException) { openInfo = null; }
-                if (openInfo is { Length: >= MinRealDataBytes }) firstRealDataObservedUtc[openPath] = DateTime.UtcNow;
+                if (openInfo is { Exists: true, Length: >= MinRealDataBytes })
+                {
+                    firstRealDataObservedUtc[openPath] = DateTime.UtcNow;
+                    _dataThisAttempt = true;
+                }
             }
         }
 
@@ -569,10 +602,50 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
             var start = ResolveSegmentBoundary(path, firstRealDataObservedUtc);
             var end = ResolveSegmentBoundary(files[i + 1], firstRealDataObservedUtc);
             firstRealDataObservedUtc.Remove(path);
+            _dataThisAttempt = true;
             LastSegmentAt = DateTime.UtcNow;
             if (EstimateBitrateKbps(info.Length, end - start) is { } bitrateKbps) CurrentBitrateKbps = bitrateKbps;
             SegmentCompleted?.Invoke(new RecordingSegment(path, start, end, info.Length));
         }
+    }
+
+    /// <summary>This camera's segment files, oldest first. Full paths sort chronologically as strings:
+    /// the Y/m/d/H folders are zero-padded and chronological, and so are the names in them.
+    ///
+    /// Everything on disk the first time, then only the hour folders that can have changed since. This
+    /// runs every few seconds for every camera, and a month of one-minute segments is over 40,000 files
+    /// per camera (often over SMB). What those folders no longer cover is dropped from
+    /// <paramref name="reportedPaths"/>, since it can't be listed again.</summary>
+    private string[] ListSegmentFiles(HashSet<string> reportedPaths)
+    {
+        var now = DateTime.UtcNow;
+        string[] files;
+        var clockWentBack = _lastScanUtc is { } previous && now < previous.AddHours(-2);
+        if (_lastScanUtc is not { } last || clockWentBack)
+        {
+            files = Directory.GetFiles(SegmentRoot, "*.mp4", SearchOption.AllDirectories);
+            // The clock was set back, so folders dropped above are current again. Nothing already on
+            // disk may be reported a second time; the hourly storage reconcile picks up anything new.
+            if (clockWentBack) reportedPaths.UnionWith(files);
+        }
+        else
+        {
+            var directories = new HashSet<string>(LarisVMS.Core.PathComparer.Local);
+            if (_newestDirectory is not null) directories.Add(_newestDirectory);
+            for (var hour = last.AddHours(-1); hour <= now.AddHours(1); hour = hour.AddHours(1))
+                directories.Add(HourDirectory(hour));
+
+            var found = new List<string>();
+            foreach (var directory in directories)
+                if (Directory.Exists(directory)) found.AddRange(Directory.GetFiles(directory, "*.mp4"));
+            files = [.. found];
+            reportedPaths.RemoveWhere(p => Path.GetDirectoryName(p) is not { } directory || !directories.Contains(directory));
+        }
+
+        Array.Sort(files, StringComparer.Ordinal);
+        _lastScanUtc = now;
+        if (files.Length > 0) _newestDirectory = Path.GetDirectoryName(files[^1]);
+        return files;
     }
 
     /// <summary>Resolves one segment file's boundary instant — preferring the true first-real-data
@@ -605,20 +678,20 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
     private void FinalizeInProgressSegment(HashSet<string> reportedPaths, Dictionary<string, DateTime> firstRealDataObservedUtc)
     {
         string[] files;
-        try { files = Directory.GetFiles(options.OutputDirectory, "*.mp4", SearchOption.AllDirectories); }
-        catch (IOException) { return; }
+        try { files = ListSegmentFiles(reportedPaths); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }
         if (files.Length == 0) return;
 
-        Array.Sort(files, StringComparer.Ordinal);
         var last = files[^1];
         if (reportedPaths.Contains(last)) return;
 
         FileInfo info;
         try { info = new FileInfo(last); }
         catch (IOException) { return; }
-        if (info.Length == 0) return; // never got any data — not a real segment
+        if (!info.Exists || info.Length == 0) return; // never got any data — not a real segment
+        reportedPaths.Add(last); // or the next attempt's first poll would report it again
 
-        var start = firstRealDataObservedUtc.TryGetValue(last, out var observed) ? observed : info.CreationTimeUtc;
+        var start = firstRealDataObservedUtc.Remove(last, out var observed) ? observed : info.CreationTimeUtc;
         var end = DateTime.UtcNow;
         if (EstimateBitrateKbps(info.Length, end - start) is { } bitrateKbps) CurrentBitrateKbps = bitrateKbps;
         SegmentCompleted?.Invoke(new RecordingSegment(last, start, end, info.Length));
@@ -688,7 +761,7 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
     /// blocks on a subscriber (LiveFragmentReceived handlers are expected to be non-blocking, e.g.
     /// a bounded channel's TryWrite) since this loop is also what keeps ffmpeg's stdout pipe drained;
     /// a slow live viewer must never be able to back-pressure the recording leg of the same tee.</summary>
-    private async Task DrainStdoutAsync(Process process, CancellationToken ct)
+    private async Task DrainStdoutAsync(Process process, int attempt, CancellationToken ct)
     {
         // Generous but bounded: an init segment (ftyp+moov, no sample data — empty_moov) is a few
         // hundred bytes to a few KB in practice. If moov genuinely never arrives within this many
@@ -718,6 +791,7 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
             while (true)
             {
                 var result = await reader.ReadAsync(ct);
+                if (attempt != Volatile.Read(ref _liveAttempt)) break; // abandoned; a newer attempt is live
                 var buffer = result.Buffer;
                 var consumed = buffer.Start;
 
@@ -867,20 +941,19 @@ public sealed partial class RecordingSession(RecordingSessionOptions options, IL
 
     private static string EscapeForTee(string path) => path.Replace('\\', '/').Replace(":", "\\:");
 
-    /// <summary>Pre-creates the current and next hour's output folder. Local time, matching
-    /// whatever -strftime will actually expand to — see StartFfmpeg's comment on why the folder
-    /// names are local rather than UTC. Creating a directory that already exists is a no-op, so
-    /// this is safe (and cheap) to call on every poll tick rather than only at startup.</summary>
+    /// <summary>Pre-creates the current and next hour's output folder (UTC, as -strftime expands them —
+    /// see StartFfmpeg). Creating a directory that already exists is a no-op, so this is safe (and
+    /// cheap) to call on every poll tick rather than only at startup.</summary>
     private void EnsureUpcomingHourDirectories()
     {
-        var now = DateTime.Now;
+        var now = DateTime.UtcNow;
         Directory.CreateDirectory(HourDirectory(now));
         Directory.CreateDirectory(HourDirectory(now.AddHours(1)));
     }
 
     private string HourDirectory(DateTime when)
-        => Path.Combine(options.OutputDirectory,
-            when.ToString("yyyy"), when.ToString("MM"), when.ToString("dd"), when.ToString("HH"));
+        => Path.Combine(SegmentRoot, when.ToString("yyyy", CultureInfo.InvariantCulture), when.ToString("MM", CultureInfo.InvariantCulture),
+            when.ToString("dd", CultureInfo.InvariantCulture), when.ToString("HH", CultureInfo.InvariantCulture));
 
     private void TryKill(Process process)
     {

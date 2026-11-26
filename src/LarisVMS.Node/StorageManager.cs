@@ -1194,7 +1194,7 @@ public partial class StorageManager(NodeApiClient api, string fallbackStorageRoo
     //    selectors above; wiring into SweepAsync is separate. ──────────────────────────────────
 
     /// <summary>Where a segment on the primary volume lands on the archive volume — the same
-    /// cam-{id}/main/YYYY/MM/DD/HH/filename relative subpath, just under the archive root's
+    /// cam-{id}/main/utc/YYYY/MM/DD/HH/filename relative subpath, just under the archive root's
     /// cam-{id}/main. Keeping the layout identical means the node's media-path checks and the
     /// Path.GetRelativePath(mainDir, …) thumbnail/snapshot derivation work against either root with
     /// only a "which root matched" change.</summary>
@@ -1570,7 +1570,7 @@ public partial class StorageManager(NodeApiClient api, string fallbackStorageRoo
 
     internal static void PruneEmptyDirectories(string root)
     {
-        // Nested date/hour folders (cam-<id>/main/yyyy/MM/dd/HH/) leave an empty leaf behind once
+        // Nested date/hour folders (cam-<id>/main/utc/yyyy/MM/dd/HH/) leave an empty leaf behind once
         // all its segments are evicted; ordering by path length longest-first prunes hour folders
         // before their parent day/month/year folders in the same pass, rather than needing several
         // sweeps to unwind a fully-evicted tree one level at a time.

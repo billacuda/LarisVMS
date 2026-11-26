@@ -2,9 +2,9 @@
 
 Nodos grabadores: estado, rutas de streaming, proxies de medios, conmutación por error, mantenimiento y actualizaciones.
 
-**Nodos** en la barra lateral enumera cada nodo con su estado, dirección, versión, cantidad de cámaras y uso de disco. Hacé clic en un nodo para editar su configuración. El menú **⋯** tiene estas acciones:
+**Nodos** en la barra lateral enumera cada nodo con su estado, dirección, versión, cantidad de cámaras y uso de disco. Debajo de cada versión está la plataforma del nodo (Windows o Linux): un servidor puede tener nodos en ambas. **Docker** al lado significa que el nodo corre desde una imagen de Docker. El servidor no le envía compilaciones: cuando se aprueba una más nueva, la página dice qué imagen descargar. Hacé clic en un nodo para editar su configuración. El menú **⋯** tiene estas acciones:
 
-- **Reiniciar servicio**: reinicia el servicio de Windows del nodo, no la máquina. La grabación se pausa unos segundos.
+- **Reiniciar servicio**: reinicia el servicio del nodo (un servicio de Windows, o de systemd en Linux), no la máquina. La grabación se pausa unos segundos.
 - **Restablecer auth**: borra el token de chequeo del nodo, para un nodo atascado con fallas de autenticación después de un heartbeat perdido. No tiene efecto en un nodo sano.
 - **Mantenimiento**: mueve las cámaras del nodo a su nodo de respaldo hasta que desactivás el mantenimiento.
 - **Eliminar**: quita el nodo. Sus cámaras quedan sin asignar. Las grabaciones no se eliminan.
@@ -15,7 +15,9 @@ Un nodo está **en línea** si se reportó en los últimos 2 minutos. Una advert
 
 Por defecto todo el video en vivo y de reproducción se retransmite por el servidor web (**Proxy**). Con **Directo**, los navegadores se conectan directo al endpoint HTTPS propio de cada nodo, lo que le quita carga al servidor. Configurá el modo en **Configuración → Vista en vivo** y anulalo por nodo.
 
-El modo directo necesita un **host de endpoint de cliente** que los navegadores puedan alcanzar, y un certificado (una ruta `.pfx` en la página del nodo). **Permitir autofirmado** es solo para pruebas, porque los espectadores reciben una advertencia del navegador. Una cámara cuyo nodo no tiene un endpoint sano vuelve al proxy automáticamente.
+El modo directo necesita un **host de endpoint de cliente** que los navegadores puedan alcanzar, y un certificado (una ruta `.pfx` en la página del nodo). **Permitir autofirmado** es solo para pruebas, porque los espectadores reciben una advertencia del navegador. Un host configurado en el propio nodo (`CLIENTENDPOINTHOST`, `--client-endpoint-host` o `LARISVMS_CLIENT_ENDPOINT_HOST`) se completa en su página salvo que ahí haya uno configurado. **Estado del endpoint** en la página del nodo dice si los navegadores se conectan directo y, si no, por qué.
+
+Una cámara cuyo nodo no tiene un endpoint sano se retransmite automáticamente. También una cuyo nodo un navegador no puede alcanzar: después de 5 segundos usa la retransmisión, y prueba el nodo de nuevo unos minutos más tarde.
 
 ## Conexiones cifradas desde el servidor
 
@@ -37,7 +39,7 @@ La página del nodo avisa cuando el respaldo tiene hardware de IA distinto, o es
 
 Los nodos y proxies se actualizan solos desde compilaciones aprobadas (ver [Instalación](/Help/installation#updates)). **Nodos → Actualizaciones y registro → Actualización automática** lo activa o desactiva para cada nodo.
 
-La sección **Compilaciones** de la página de Nodos muestra hacia qué compilación va cada tipo de nodo y cualquier compilación esperando aprobación, con **Aprobar** y **Rechazar**. **Historial de compilaciones** enumera cada compilación, incluidas las aprobadas, reemplazadas y rechazadas.
+La sección **Compilaciones** de la página de Nodos muestra hacia qué compilación va cada tipo de nodo y cualquier compilación esperando aprobación, con **Aprobar** y **Rechazar**. Las compilaciones se llevan por plataforma: un nodo Windows solo recibe una compilación de Windows, y un nodo Linux una de Linux. Cada instalación web trae las dos, y **Aprobar las N** aprueba una versión para todas las plataformas a la vez. **Historial de compilaciones** enumera cada compilación, incluidas las aprobadas, reemplazadas y rechazadas. **Quitar compilaciones viejas** elimina cada compilación anterior a la aprobada para su plataforma, con sus archivos.
 
 ## Certificado del servidor
 
@@ -47,9 +49,9 @@ La sección **Compilaciones** de la página de Nodos muestra hacia qué compilac
 - **Solo certificado de confianza**: solo un certificado de una CA de confianza que coincida con el nombre del servidor. Instalá uno antes de elegir esto.
 - **No verificar**: cualquier certificado. No es seguro: cualquiera en el camino de red podría hacerse pasar por el servidor.
 
-Con confianza en el primer uso, un nodo confía en el certificado que ve la primera vez que se conecta. Para que lo verifique desde la primera conexión, pasale al instalador la huella que se muestra en **Verificación del certificado del servidor**: `-ServerCertThumbprint` para `install-node.ps1` e `install-proxy.ps1`, o `SERVERCERTTHUMBPRINT=` para el MSI. Los comandos de instalación de las páginas de Configuración inicial y Proxies de medios ya la incluyen. Detrás de un proxy inverso, usá en cambio la huella del certificado que presenta el proxy inverso.
+Con confianza en el primer uso, un nodo confía en el certificado que ve la primera vez que se conecta. Para que lo verifique desde la primera conexión, pasale al instalador la huella que se muestra en **Verificación del certificado del servidor**: `-ServerCertThumbprint` para `install-node.ps1` e `install-proxy.ps1`, `SERVERCERTTHUMBPRINT=` para el MSI, o `--server-cert-thumbprint` para `larisvms-node setup` y `larisvms-proxy setup` en Linux. Los comandos de instalación de las páginas de Configuración inicial y Proxies de medios ya la incluyen. Detrás de un proxy inverso, usá en cambio la huella del certificado que presenta el proxy inverso.
 
-El certificado autofirmado que el servidor se hace a sí mismo dura 10 años y no se reemplaza solo. **Regenerar certificado autofirmado** lo reemplaza; cada nodo y proxy después tiene que volver a registrarse, y la página de Nodos enumera los que no se reportaron desde entonces. Para registrar un nodo de nuevo, ejecutá el instalador del nodo otra vez, o ejecutá `LarisVMS.Node.exe --reset-server-pin` en él y reiniciá su servicio (los proxies tienen la misma opción).
+El certificado autofirmado que el servidor se hace a sí mismo dura 10 años y no se reemplaza solo. **Regenerar certificado autofirmado** lo reemplaza; cada nodo y proxy después tiene que volver a registrarse, y la página de Nodos enumera los que no se reportaron desde entonces. Para registrar un nodo de nuevo, ejecutá el instalador del nodo otra vez, o ejecutá `LarisVMS.Node.exe --reset-server-pin` en él y reiniciá su servicio (los proxies tienen la misma opción). En Linux, ejecutá `sudo larisvms-node setup --reregister --server-url <url> --registration-key <key>` (o `larisvms-proxy`).
 
 ## Códigos de registro de un solo uso
 

@@ -97,13 +97,13 @@ public class ExportPackageBuilder(ApplicationDbContext db, ISigningKeyService si
             foreach (var item in done.Where(i => i.CameraId == cameraId))
             {
                 // The node's path, which may be a Windows one on a Linux server or the reverse.
-                var name = LarisVMS.Core.ForeignPath.GetFileName(item.OutputFilePath!);
+                var name = LarisVMS.Core.ExportFileName.Friendly(item.OutputFilePath!);
                 var videoPath = $"video/{folder}/{name}";
                 videos.Add(new ExportPackageVideo(videoPath, item.Id, item.NodeId!.Value, item.OutputFilePath!, item.OutputSizeBytes!.Value, item.OutputSha256!));
                 string? h264Path = null;
                 if (item is { ConvertedFilePath: not null, ConvertedSha256: not null, ConvertedSizeBytes: not null })
                 {
-                    h264Path = $"video/{folder}/{LarisVMS.Core.ForeignPath.GetFileName(item.ConvertedFilePath)}";
+                    h264Path = $"video/{folder}/{LarisVMS.Core.ExportFileName.Friendly(item.ConvertedFilePath)}";
                     videos.Add(new ExportPackageVideo(h264Path, item.Id, item.NodeId!.Value, item.ConvertedFilePath, item.ConvertedSizeBytes.Value, item.ConvertedSha256));
                 }
                 string? manifestPath = null;

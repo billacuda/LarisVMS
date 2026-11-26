@@ -32,6 +32,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
 
     private readonly ConcurrentQueue<SegmentReportItem> _pendingSegments = new();
     private readonly ConcurrentQueue<StreamInfoReportItem> _pendingStreamInfo = new();
+    private readonly UpdateBackoff _updateBackoff = new();
+    private readonly long _startedTicks = Environment.TickCount64;
+
+    // Each camera's most recent recording task, so the session replacing it can wait for it to end.
+    private readonly ConcurrentDictionary<Guid, Task> _lastRecordingRun = new();
 
     // M8: only ever written from the reconcile loop, same as _active, though nothing on a request
     // thread reads it in pass 1 (no live motion-state endpoint yet) — kept concurrent anyway so
@@ -172,16 +177,6 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // Secret (5b). Every persisted node.config write goes through this so neither is ever clobbered by
     // a stale copy. Touched only from the single reconcile loop.
     private NodeConfig _registration = registration;
-
-    // Fetched once, before any RecordingSession can start (see ExecuteAsync) — a real, confirmed bug
-    // fix: without this, every node process restart made RecordingSession.RunAsync rescan a camera's
-    // *entire* on-disk history with zero memory of what the server already has rows for, re-firing
-    // SegmentCompleted for all of it. For a Motion-mode camera, a freshly-restarted MotionSession/
-    // CameraEventSession has observed no motion yet at that exact moment, so nearly all of that
-    // re-fired history looked like "no motion" and was wrongly discarded — deleting files that
-    // already had valid, previously-reported Segments rows, on every single restart. Confirmed live:
-    // Segments dropped from ~16,600 to ~235 rows after this session's several version-bump restarts.
-    private HashSet<string>? _knownSegmentPaths;
 
     // M17: probed once at startup (see ExecuteAsync) and reported on every heartbeat thereafter —
     // hardware and the installed ffmpeg build don't change while this process is running, so there's
@@ -444,21 +439,6 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Must happen before ReconcileLoopAsync can start any RecordingSession — see
-        // _knownSegmentPaths' own doc comment for why. Best-effort: if the server can't be reached
-        // yet at process startup, this falls back to an empty set, which is the exact behavior that
-        // existed before this fix (not worse than before, just not yet protected this one time).
-        try
-        {
-            _knownSegmentPaths = new HashSet<string>(await api.GetSegmentFilePathsAsync(stoppingToken), LarisVMS.Core.PathComparer.Local);
-            _logger.LogInformation("Fetched {Count} already-known segment path(s) before starting recording.", _knownSegmentPaths.Count);
-        }
-        catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
-        {
-            _logger.LogWarning(ex, "Could not fetch this node's already-known segment paths at startup — a RecordingSession started this run will treat its own on-disk history as unreported, same as before this safeguard existed.");
-            _knownSegmentPaths = [];
-        }
-
         // M17: best-effort, same reasoning as every other probe on this path — a failed/empty result
         // (FfmpegCapabilityProber never throws) just means this node reports no detected encoders
         // this run rather than blocking startup on it.
@@ -567,7 +547,14 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 (stillPending ??= []).Add(pending);
                 continue;
             }
-            DecideGatedSegment(pending);
+            // One segment's failure must not end this loop: no Motion or Event segment would be kept or
+            // discarded again until the node restarted.
+            try { DecideGatedSegment(pending); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Could not decide whether to keep segment {FilePath} — will try again.", pending.Segment.FilePath);
+                (stillPending ??= []).Add(pending);
+            }
         }
 
         if (stillPending is not null)
@@ -627,7 +614,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     // A Docker image is updated by pulling a new one, so the server offers it no build.
                     InContainer: LarisVMS.Core.RunningInContainer.Value,
                     // The host set on this machine, for the server to send browsers to.
-                    ClientEndpointHost: clientEndpoint.ConfiguredHost), ct);
+                    ClientEndpointHost: clientEndpoint.ConfiguredHost,
+                    UptimeSeconds: (Environment.TickCount64 - _startedTicks) / 1000), ct);
                 }
                 catch
                 {
@@ -649,7 +637,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 // heartbeat handler) — nothing left to decide here except not double-triggering while
                 // one is already in flight (UpdateService.IsApplying). A successful apply calls
                 // IHostApplicationLifetime.StopApplication() itself, which unwinds this loop via ct.
-                if (heartbeat.UpdateAvailable is { } update && !updateService.IsApplying && TrustUpdate(update))
+                if (heartbeat.UpdateAvailable is { } update && !updateService.IsApplying && TrustUpdate(update)
+                    && _updateBackoff.ShouldTry(update.Version, DateTime.UtcNow))
                 {
                     _logger.LogInformation("Recorder node update available: {Version} — downloading and applying.", update.Version);
                     await updateService.TryApplyAsync(TrustBackends(update) ? update : WithoutBackends(update), ct);
@@ -661,7 +650,9 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 TryStartFromCacheIfIdle(ct);
             }
 
-            try { await Task.WhenAny(Task.Delay(TimeSpan.FromSeconds(30), ct), _reconcileNowSignal.WaitAsync(ct)); }
+            // One wait with a timeout. A wait raced against a delay is left behind each time the delay
+            // wins, and those take the later signals before this loop does.
+            try { await _reconcileNowSignal.WaitAsync(TimeSpan.FromSeconds(30), ct); }
             catch (OperationCanceledException) { break; }
         }
     }
@@ -1057,22 +1048,46 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             }
         }
 
-        try
+        // Re-queued on failure (server unreachable) rather than lose the record of what was actually
+        // written to disk — the segment file already exists regardless of whether the control plane
+        // knows about it yet.
+        await SendInChunksAsync(batch, "segment", async (chunk, token) =>
         {
-            await api.ReportSegmentsAsync(batch, ct);
-            _logger.LogInformation("Reported {Count} segment(s).", batch.Count);
+            await api.ReportSegmentsAsync(chunk, token);
             // Encryption at rest comes after the report, so the recorded hash is of the plain file.
             // FootageEncryptionWorker skips cameras that don't encrypt.
-            foreach (var item in batch) footage.EnqueueEncryption(item.CameraId, item.FilePath, item.StartUtc);
-        }
-        catch (Exception ex) when (IsRetryable(ex, ct))
+            foreach (var item in chunk) footage.EnqueueEncryption(item.CameraId, item.FilePath, item.StartUtc);
+        }, _pendingSegments.Enqueue, ct);
+    }
+
+    internal const int ReportChunkSize = 100;
+
+    /// <summary>Sends a batch a part at a time, so the backlog of a long outage can't outgrow what the
+    /// server answers within the request timeout (it would then be sent again, larger, forever). What
+    /// wasn't accepted is handed to <paramref name="requeue"/>. A part the server refuses doesn't hold
+    /// up the others; when the server can't be reached at all, the rest waits for the next cycle.</summary>
+    private async Task SendInChunksAsync<T>(List<T> batch, string what, Func<List<T>, CancellationToken, Task> send,
+        Action<T> requeue, CancellationToken ct)
+    {
+        var sent = 0;
+        for (var start = 0; start < batch.Count; start += ReportChunkSize)
         {
-            // Re-queue on failure (server unreachable) rather than lose the record of what was
-            // actually written to disk — the segment file already exists regardless of whether the
-            // control plane knows about it yet.
-            foreach (var item in batch) _pendingSegments.Enqueue(item);
-            _logger.LogWarning(ex, "Failed to report {Count} segment(s) — will retry next cycle.", batch.Count);
+            var chunk = batch.GetRange(start, Math.Min(ReportChunkSize, batch.Count - start));
+            try
+            {
+                await send(chunk, ct);
+                sent += chunk.Count;
+            }
+            catch (Exception ex) when (IsRetryable(ex, ct))
+            {
+                var refused = ex is HttpRequestException { StatusCode: not null };
+                var unsent = refused ? chunk : batch.GetRange(start, batch.Count - start);
+                foreach (var item in unsent) requeue(item);
+                _logger.LogWarning(ex, "Failed to report {Count} {What}(s) — will retry next cycle.", unsent.Count, what);
+                if (!refused) break;
+            }
         }
+        if (sent > 0) _logger.LogInformation("Reported {Count} {What}(s).", sent, what);
     }
 
     private async Task FlushStreamInfoAsync(CancellationToken ct)
@@ -1080,6 +1095,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var batch = new List<StreamInfoReportItem>();
         while (_pendingStreamInfo.TryDequeue(out var item)) batch.Add(item);
         if (batch.Count == 0) return;
+        // Health is measured every cycle, also while the server is away: one report per camera is enough.
+        batch = StreamInfoReportItem.Merge(batch);
 
         try
         {
@@ -1102,16 +1119,32 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         while (_pendingMotionSpans.TryDequeue(out var item)) batch.Add(item);
         if (batch.Count == 0) return;
 
-        try
+        await SendInChunksAsync(DropSupersededCheckpoints(batch), "motion span", api.ReportMotionSpansAsync, _pendingMotionSpans.Enqueue, ct);
+    }
+
+    /// <summary>An open span is reported again every 15 seconds, so an outage collects many reports of
+    /// the same one. Only the last of those says anything. AI detections are kept as they are: each
+    /// report carries its own objects and best frame.</summary>
+    internal static List<MotionSpanReportItem> DropSupersededCheckpoints(List<MotionSpanReportItem> batch)
+    {
+        static bool IsPlain(MotionSpanReportItem i) => i.DetectedObjectLabel is null && i.Objects is null;
+        static object Identity(MotionSpanReportItem i) => (i.CameraId, i.ZoneId, i.EventTagRuleId, i.DetectionKind, i.StartUtc);
+
+        var newest = new Dictionary<object, MotionSpanReportItem>();
+        foreach (var item in batch.Where(IsPlain))
         {
-            await api.ReportMotionSpansAsync(batch, ct);
-            _logger.LogInformation("Reported {Count} motion span(s).", batch.Count);
+            var id = Identity(item);
+            newest[id] = newest.TryGetValue(id, out var seen)
+                ? item with { EndUtc = seen.EndUtc > item.EndUtc ? seen.EndUtc : item.EndUtc, Score = Math.Max(seen.Score, item.Score) }
+                : item;
         }
-        catch (Exception ex) when (IsRetryable(ex, ct))
+        var result = new List<MotionSpanReportItem>(batch.Count);
+        foreach (var item in batch)
         {
-            foreach (var item in batch) _pendingMotionSpans.Enqueue(item);
-            _logger.LogWarning(ex, "Failed to report {Count} motion span(s) — will retry next cycle.", batch.Count);
+            if (!IsPlain(item)) result.Add(item);
+            else if (newest.Remove(Identity(item), out var merged)) result.Add(merged);
         }
+        return result;
     }
 
     // Scene heatmap motion counts per camera (grid mode only), and this node run's id: each report is
@@ -1159,16 +1192,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         while (_pendingCameraEvents.TryDequeue(out var item)) batch.Add(item);
         if (batch.Count == 0) return;
 
-        try
-        {
-            await api.ReportCameraEventsAsync(batch, ct);
-            _logger.LogInformation("Reported {Count} camera event(s).", batch.Count);
-        }
-        catch (Exception ex) when (IsRetryable(ex, ct))
-        {
-            foreach (var item in batch) _pendingCameraEvents.Enqueue(item);
-            _logger.LogWarning(ex, "Failed to report {Count} camera event(s) — will retry next cycle.", batch.Count);
-        }
+        await SendInChunksAsync(batch, "camera event", api.ReportCameraEventsAsync, _pendingCameraEvents.Enqueue, ct);
     }
 
     private string Reconcile(NodeConfigResponse config, CancellationToken stoppingToken)
@@ -1375,6 +1399,15 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 _active.TryRemove(camera.CameraId, out _);
             }
 
+            // A session only ends when it's cancelled; one that ended by itself would otherwise leave the
+            // camera unrecorded until the node restarted.
+            if (_active.TryGetValue(camera.CameraId, out var running) && running.RunTask.IsCompleted && !stoppingToken.IsCancellationRequested)
+            {
+                _logger.LogError(running.RunTask.Exception, "Recording of camera {CameraId} ({Name}) ended unexpectedly — starting it again.", camera.CameraId, camera.Name);
+                running.Cts.Cancel();
+                _active.TryRemove(camera.CameraId, out _);
+            }
+
             if (!_active.ContainsKey(camera.CameraId))
             {
                 if (mainStream is null)
@@ -1418,29 +1451,9 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                         camera.CameraId, "Main", Width: null, Height: null, Codec: null,
                         AudioCodec: audio.Codec, AudioSampleRateHz: audio.SampleRateHz));
 
-                    // See _knownSegmentPaths' own doc comment — this is the fix for the confirmed
-                    // mass-discard bug. OrdinalIgnoreCase prefix match since outputDir itself is
-                    // built the identical way every time (same storageRoot resolution), but real
-                    // Windows/UNC paths can differ in case from run to run.
-                    //
-                    // Unioned with a live scan of outputDir, not just the process-startup snapshot:
-                    // M18's privacy-mask restart above can replace an already-running session's
-                    // RecordingSession mid-process-lifetime, and whatever files the *old* session had
-                    // already reported (from *its* own in-memory reportedPaths, which this new session
-                    // has no way to see) are sitting on disk right now — without this, the new
-                    // session's fresh, empty reportedPaths would rediscover and re-report every one of
-                    // them as if brand new, the exact duplicate-segment bug knownSegmentPaths already
-                    // exists to prevent, just via a second path into it. Harmless (a no-op superset)
-                    // for a camera's genuine first start in this process's lifetime, where
-                    // _knownSegmentPaths already covers the same files.
-                    IEnumerable<string> onDiskNow;
-                    try { onDiskNow = Directory.GetFiles(outputDir, "*.mp4", SearchOption.AllDirectories); }
-                    catch (IOException) { onDiskNow = []; } // includes DirectoryNotFoundException — a camera's first-ever start has no folder yet
-                    var knownPathsForCamera = (_knownSegmentPaths?
-                        .Where(p => p.StartsWith(outputDir, LarisVMS.Core.PathComparer.LocalComparison)) ?? [])
-                        .Union(onDiskNow, LarisVMS.Core.PathComparer.Local);
-
-                    var runTask = session.RunAsync(cts.Token, knownPathsForCamera);
+                    _lastRecordingRun.TryGetValue(camera.CameraId, out var previousRun);
+                    var runTask = Task.Run(() => RunRecordingAsync(previousRun, session, sessionLogger, cts.Token), CancellationToken.None);
+                    _lastRecordingRun[camera.CameraId] = runTask;
                     _active[camera.CameraId] = new CameraRecorder(cts, runTask, session, rtspUri!, privacySignature, camera.SegmentSeconds, transcodeAudio, streamFormat);
                     _logger.LogInformation("Started recording camera {CameraId} ({Name}) -> {OutputDir}", camera.CameraId, camera.Name, outputDir);
                 }
@@ -1455,6 +1468,24 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
 
         return storageRoot;
     }
+
+    /// <summary>Runs one recording session once the one it replaces has ended. The two write to the same
+    /// folder: while both run, each takes the newest file for its own, and the old one reports (hashes,
+    /// encrypts) a file the new one is still writing.</summary>
+    private static async Task RunRecordingAsync(Task? previous, RecordingSession session, ILogger logger, CancellationToken ct)
+    {
+        if (previous is { IsCompleted: false })
+        {
+            try { await previous.WaitAsync(PreviousRecordingTimeout, ct); }
+            catch (TimeoutException) { logger.LogWarning("The previous recording session is still stopping — starting the new one anyway."); }
+            catch (Exception) { /* it ended by failing, or this one was cancelled meanwhile */ }
+        }
+
+        if (!ct.IsCancellationRequested) await session.RunAsync(ct);
+    }
+
+    private static readonly TimeSpan PreviousRecordingTimeout = TimeSpan.FromSeconds(30);
+
 
     /// <summary>M8 pass 6/8: starts this camera's ONVIF event polling session if it advertises an
     /// Events service — independent of ReconcileMotion above (a camera can have a ServerMotion zone

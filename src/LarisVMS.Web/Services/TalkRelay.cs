@@ -37,22 +37,32 @@ public static class TalkRelay
 
     public static async Task RunAsync(WebSocket browser, WebSocket node, Context context, CancellationToken ct)
     {
-        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        // Not linked to ct: cancelling a receive aborts its socket, and the node's is still needed for
+        // a moment after the browser is gone (a dropped connection cancels ct).
+        using var stopping = new CancellationTokenSource();
+        using var ending = ct.Register(() => stopping.CancelAfter(ReportWait + ReportWait));
         var fromNode = Task.Run(() => NodeToBrowserAsync(node, browser, context, stopping.Token), CancellationToken.None);
         try
         {
-            await BrowserToNodeAsync(browser, node, stopping.Token);
+            try
+            {
+                await BrowserToNodeAsync(browser, node, ct, stopping.Token);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or WebSocketException)
+            {
+                // Either side dropping is the normal end of a relay.
+            }
             // The browser left (or released and closed). Make sure an open press is closed out and
             // recorded before the node socket goes: "stop" is harmless when nothing is open.
             if (node.State == WebSocketState.Open)
             {
-                await SendTextAsync(node, """{"type":"stop"}""", CancellationToken.None);
+                await SendTextAsync(node, """{"type":"stop"}""", stopping.Token);
                 await Task.WhenAny(fromNode, Task.Delay(ReportWait, CancellationToken.None));
             }
         }
         catch (Exception ex) when (ex is OperationCanceledException or WebSocketException)
         {
-            // Either side dropping is the normal end of a relay.
+            // The node dropped too.
         }
         finally
         {
@@ -67,13 +77,13 @@ public static class TalkRelay
     /// few KB. Matches the node's own limit (TalkSessionHandler.MaxMessageBytes).</summary>
     internal const int MaxMessageBytes = 64 * 1024;
 
-    private static async Task BrowserToNodeAsync(WebSocket browser, WebSocket node, CancellationToken ct)
+    private static async Task BrowserToNodeAsync(WebSocket browser, WebSocket node, CancellationToken browserCt, CancellationToken nodeCt)
     {
         var buffer = new byte[16 * 1024];
         var messageBytes = 0;
         while (browser.State == WebSocketState.Open && node.State == WebSocketState.Open)
         {
-            var result = await browser.ReceiveAsync(buffer, ct);
+            var result = await browser.ReceiveAsync(buffer, browserCt);
             if (result.MessageType == WebSocketMessageType.Close) return;
             messageBytes += result.Count;
             if (messageBytes > MaxMessageBytes)
@@ -82,7 +92,7 @@ public static class TalkRelay
                 return;
             }
             if (result.EndOfMessage) messageBytes = 0;
-            await node.SendAsync(buffer.AsMemory(0, result.Count), result.MessageType, result.EndOfMessage, ct);
+            await node.SendAsync(buffer.AsMemory(0, result.Count), result.MessageType, result.EndOfMessage, nodeCt);
         }
     }
 
@@ -109,11 +119,12 @@ public static class TalkRelay
                     await RecordAsync(recorded, context);
                     // Recording a press is the last thing the relay waits for when the browser has gone.
                     if (browser.State != WebSocketState.Open) return;
-                    await SendTextAsync(browser, JsonSerializer.Serialize(new { type = "recorded", recorded.StartUtc, recorded.EndUtc }, Json), ct);
-                    continue;
+                    bytes = JsonSerializer.SerializeToUtf8Bytes(new { type = "recorded", recorded.StartUtc, recorded.EndUtc }, Json);
                 }
-                if (browser.State == WebSocketState.Open)
-                    await browser.SendAsync(bytes, result.MessageType, true, ct);
+                if (browser.State != WebSocketState.Open) continue;
+                // A browser that just dropped must not end this: the press it was making is still to come.
+                try { await browser.SendAsync(bytes, result.MessageType, true, ct); }
+                catch (WebSocketException) { /* BrowserToNodeAsync ends the relay */ }
             }
         }
         catch (Exception ex) when (ex is OperationCanceledException or WebSocketException)

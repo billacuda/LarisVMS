@@ -158,7 +158,7 @@ public sealed class LatestFrameSlot : IDisposable
                     TryRelease(); // pass Dispose's wake-up on to any other taker
                     return null;
                 }
-                if (!_hasFrame) continue; // a concurrent Resize discarded the frame that woke us
+                if (!_hasFrame) continue; // already taken, or discarded by a concurrent Resize
 
                 if (destination.Length < FrameBytes)
                 {
@@ -168,6 +168,7 @@ public sealed class LatestFrameSlot : IDisposable
                 }
 
                 Array.Copy(_front, destination, FrameBytes);
+                _hasFrame = false; // a signal left over from a Publish that raced this must not hand it out again
                 Interlocked.Increment(ref _consumed);
                 return new CapturedFrame(destination, _frontCapturedUtc);
             }

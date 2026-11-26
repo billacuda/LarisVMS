@@ -106,6 +106,14 @@ public sealed class RecordingFailoverService(
         var proxyReports = CollectReports(proxyNodes.Select(p => (p.Id, p.NodeHealthReportsJson)),
             (voter, subject) => enabledProxies.Contains(voter) && proxiesOf.TryGetValue(subject, out var assigned) && assigned.Contains(voter), now);
 
+        // Together, not one after another: each can take 5 seconds, and with several machines down the
+        // verdicts would come minutes late.
+        var probes = nodes
+            .Where(n => failoverEnabled && !n.MaintenanceMode && hasBackup.Contains(n.Id)
+                && !string.IsNullOrWhiteSpace(n.LastIpAddress) && n.LivePort is > 0)
+            .ToDictionary(n => n.Id, n => ProbeCentralAsync(n.LastIpAddress!, n.LivePort!.Value, ct));
+        await Task.WhenAll(probes.Values);
+
         var dirty = false;
 
         // ── Pass 1: each node's own down/up verdict (maintenance or quorum) ──────────────────────
@@ -153,7 +161,7 @@ public sealed class RecordingFailoverService(
                 continue;
             }
 
-            var votes = await GatherVotesAsync(subject, partnerReports, proxyReports, now, ct);
+            var votes = GatherVotes(subject, probes.TryGetValue(subject.Id, out var probe) ? await probe : null, partnerReports, proxyReports, now);
             var verdict = FailoverQuorumPolicy.Evaluate(votes, subject.FailoverState);
 
             // Hysteresis: only act on a verdict that has been the same across the window.
@@ -242,17 +250,17 @@ public sealed class RecordingFailoverService(
     /// <summary>The three voters for one subject node — central's live probe plus the freshest
     /// partner and proxy verdicts. Only voters that actually produced a verdict this cycle are
     /// returned; the policy never acts on fewer than two.</summary>
-    private async Task<List<FailoverQuorumPolicy.Vote>> GatherVotesAsync(
+    private static List<FailoverQuorumPolicy.Vote> GatherVotes(
         Core.Entities.Node subject,
+        FailoverQuorumPolicy.Vote? central,
         IReadOnlyDictionary<Guid, List<(bool running, DateTime at)>> partnerReports,
         IReadOnlyDictionary<Guid, List<(bool running, DateTime at)>> proxyReports,
-        DateTime now, CancellationToken ct)
+        DateTime now)
     {
         var votes = new List<FailoverQuorumPolicy.Vote>();
 
         // 1. Central's own probe (always a live vote when the node has a known address).
-        if (!string.IsNullOrWhiteSpace(subject.LastIpAddress) && subject.LivePort is > 0)
-            votes.Add(await ProbeCentralAsync(subject.LastIpAddress, subject.LivePort.Value, ct));
+        if (central is { } vote) votes.Add(vote);
 
         // 2. The freshest partner-node verdict about this subject.
         if (Freshest(partnerReports, subject.Id, now) is { } partner)

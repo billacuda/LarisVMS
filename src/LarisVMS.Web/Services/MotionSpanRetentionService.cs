@@ -91,8 +91,10 @@ public class MotionSpanRetentionService(IServiceScopeFactory scopeFactory, ILogg
         long lastId = 0;
         while (!ct.IsCancellationRequested)
         {
-            var batch = await db.MotionSpans.Where(m => m.Id > lastId)
-                .OrderBy(m => m.Id).Take(BatchSize).ToListAsync(ct);
+            // Only what the decision needs, and not tracked: this goes through every span there is.
+            var batch = await db.MotionSpans.AsNoTracking().Where(m => m.Id > lastId)
+                .OrderBy(m => m.Id).Take(BatchSize)
+                .Select(m => new { m.Id, m.CameraId, m.StartUtc, m.EndUtc }).ToListAsync(ct);
             if (batch.Count == 0) break;
             lastId = batch[^1].Id;
 
@@ -115,8 +117,16 @@ public class MotionSpanRetentionService(IServiceScopeFactory scopeFactory, ILogg
 
             if (stale.Count > 0)
             {
-                db.MotionSpans.RemoveRange(stale);
-                await db.SaveChangesAsync(ct);
+                var ids = stale.Select(m => m.Id).ToList();
+                if (db.Database.IsRelational())
+                {
+                    await db.MotionSpans.Where(m => ids.Contains(m.Id)).ExecuteDeleteAsync(ct); // their objects go with them (FK cascade)
+                }
+                else
+                {
+                    db.MotionSpans.RemoveRange(await db.MotionSpans.Where(m => ids.Contains(m.Id)).ToListAsync(ct));
+                    await db.SaveChangesAsync(ct);
+                }
             }
 
             if (batch.Count < BatchSize) break;

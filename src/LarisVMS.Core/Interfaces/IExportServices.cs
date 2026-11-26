@@ -26,6 +26,14 @@ public interface IExportService
     /// plus the parent job's own range) in a single round trip.</summary>
     Task<List<ExportDispatchCandidate>> GetQueuedItemsAsync(CancellationToken ct = default);
 
+    /// <summary>Marks failed the items this node was making when its process ended, so they can be
+    /// retried or removed.</summary>
+    Task FailItemsLostToRestartAsync(Guid nodeId, DateTime nodeStartedUtc, CancellationToken ct = default);
+
+    /// <summary>Marks failed the items that have been running for longer than any export takes, for a
+    /// node that never came back.</summary>
+    Task FailAbandonedItemsAsync(DateTime nowUtc, CancellationToken ct = default);
+
     /// <summary>A Queued item whose requested range turned out to span more than one node (a camera
     /// reassignment mid-range) is replaced with one fresh Queued item per distinct node in
     /// nodeIds, each pre-pinned to its own node (ExportJobItem.NodeId set immediately, not left

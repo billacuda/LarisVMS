@@ -18,6 +18,8 @@ public class LiveViewerHandlerTests
     private sealed class FakeLiveSource : ILiveSource
     {
         public event Action<byte[]>? LiveFragmentReceived;
+        public event Action? LiveAttemptEnded;
+        public void EndAttempt() => LiveAttemptEnded?.Invoke();
         public Task<byte[]> WaitForLiveInitSegmentAsync(CancellationToken ct) => Task.FromResult(new byte[] { 0xFF });
         public void Raise(byte[] fragment) => LiveFragmentReceived?.Invoke(fragment);
     }
@@ -53,6 +55,24 @@ public class LiveViewerHandlerTests
         public override WebSocketCloseStatus? CloseStatus => ClosedWith;
         public override string? CloseStatusDescription => ClosedReason;
         public override string? SubProtocol => null;
+    }
+
+    [Fact]
+    public async Task AViewerIsClosedWhenItsFfmpegAttemptEndsAndNeverGetsTheNextOnesFragments()
+    {
+        var source = new FakeLiveSource();
+        var socket = new FakeWebSocket();
+        socket.ReleaseSends();
+
+        var run = LiveViewerHandler.RunAsync(socket, source, NullLogger.Instance, CancellationToken.None);
+        await Task.Delay(50);
+        source.Raise([1]);
+        source.EndAttempt();
+        source.Raise([2]); // the next attempt's
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(WebSocketCloseStatus.NormalClosure, socket.ClosedWith);
+        Assert.Equal([new byte[] { 0xFF }, new byte[] { 1 }], socket.Sent);
     }
 
     [Fact]

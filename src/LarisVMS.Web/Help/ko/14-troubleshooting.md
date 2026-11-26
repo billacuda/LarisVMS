@@ -10,6 +10,7 @@
 - **노드**: 각 노드의 `%ProgramData%\LarisVMS\logs\node-*.log`.
 - **AI 감지**: 각 노드의 `%ProgramData%\LarisVMS\logs\vision-*.log`.
 - **자동 업데이트**: 각 노드 또는 프록시의 `%ProgramData%\LarisVMS\logs\updater-*.log`.
+- **Linux에서는** 같은 파일이 `/var/log/larisvms`에 있습니다. 시작되지 않은 이유를 포함한 각 서비스의 출력은 systemd 저널에 있습니다: `journalctl -u larisvms-node`(또는 `larisvms-web`, `larisvms-proxy`, 계속 보려면 `-f` 추가). `systemctl status larisvms-node`는 실행 중인지 보여 줍니다. 업데이트는 `larisvms-node-update.service`가 설치합니다: `journalctl -u larisvms-node-update`.
 
 ## 카메라가 녹화하지 않음
 
@@ -20,7 +21,7 @@
 
 ## 라이브 보기와 재생이 "연결 중"에서 멈춤
 
-노드가 브라우저로 직접 스트리밍하는 경우([직접 스트리밍](/Help/nodes#direct-streaming) 참조) 브라우저는 노드의 클라이언트 포트(기본값 4200)에 연결합니다. 브라우저 콘솔에 실패한 `wss://<node>:<port>/live/…` 연결이 표시되면 노드의 방화벽이 해당 포트를 허용하는지 확인하십시오. 설치 프로그램은 **LarisVMS Node Client Endpoint**라는 인바운드 규칙을 만듭니다. 0.215.1 이전의 설치 프로그램은 노드를 업그레이드하거나 인수할 때 이 규칙을 잃을 수 있었습니다. 최신 노드 설치 프로그램을 다시 실행하거나 규칙을 직접 추가하십시오.
+노드가 브라우저로 직접 스트리밍하는 경우([직접 스트리밍](/Help/nodes#direct-streaming) 참조) 브라우저는 노드의 클라이언트 포트(기본값 8555)에 연결합니다. 5초 안에 연결하지 못하면 영상이 서버를 통해 중계됩니다. 브라우저 콘솔에 실패한 `wss://<node>:<port>/live/…` 연결이 표시되면 노드의 방화벽이 해당 포트를 허용하는지 확인하십시오. 설치 프로그램은 **LarisVMS Node Client Endpoint**라는 인바운드 규칙을 만듭니다. 0.215.1 이전의 설치 프로그램은 노드를 업그레이드하거나 인수할 때 이 규칙을 잃을 수 있었습니다. 최신 노드 설치 프로그램을 다시 실행하거나 규칙을 직접 추가하십시오. 호스트 네트워크를 사용하는 Docker는 포트를 열지 않으므로 컴퓨터 자체의 방화벽에서 포트를 허용하십시오(`sudo ufw allow 8555/tcp`).
 
 ## Active Directory 로그인 또는 동기화 실패
 
@@ -48,7 +49,7 @@ Chrome은 보이지 않는 창을 제한하므로 두 번째 모니터의 라이
 
 ## AI 감지는 멈추지만 녹화는 계속됨
 
-보통 GPU 드라이버가 초기화되었습니다. Windows 시스템 이벤트 로그에 그 시점의 `nvlddmkm` 이벤트 153 또는 `Display` 이벤트 4101이 표시됩니다. 비전 서비스는 결과 없이 60초가 지나면 스스로 다시 시작합니다. 초기화가 반복되면 GPU, 드라이버, 냉각 또는 전원을 의심하십시오.
+보통 GPU 드라이버가 초기화되었습니다. Windows 시스템 이벤트 로그에 그 시점의 `nvlddmkm` 이벤트 153 또는 `Display` 이벤트 4101이 표시됩니다. Linux에서는 `journalctl -k`에 `NVRM: Xid` 줄이 표시됩니다. 비전 서비스는 결과 없이 60초가 지나면 스스로 다시 시작합니다. 초기화가 반복되면 GPU, 드라이버, 냉각 또는 전원을 의심하십시오.
 
 ## 업데이트 후 노드나 프록시가 돌아오지 않음
 

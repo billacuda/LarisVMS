@@ -10,20 +10,34 @@ Aktivieren Sie sie pro Kamera mit **Diese Kamera auf Objekte überwachen**. Für
 
 Ein Knotenpaket deckt jeden Rechner ab. Beim Start wählt der Vision-Dienst ein Backend für die Hardware, die er findet:
 
-| Hardware | Backend | Benötigt auf dem Knoten |
-|---|---|---|
-| NVIDIA-GPU | CUDA (fällt auf DirectML zurück) | CUDA Toolkit 12.x und cuDNN 9.x |
-| Intel-GPU | OpenVINO (fällt auf DirectML zurück) | Ein aktueller Intel-Grafiktreiber |
-| AMD-GPU | DirectML | Ein aktueller GPU-Treiber |
-| Keine GPU | CPU | Nichts |
+| Hardware | Windows | Linux | Benötigt auf dem Knoten |
+|---|---|---|---|
+| NVIDIA-GPU | CUDA (fällt auf DirectML zurück) | CUDA (fällt auf die CPU zurück) | CUDA 12 und cuDNN 9 (siehe die Anforderungen unten) |
+| Intel-GPU | OpenVINO (fällt auf DirectML zurück) | OpenVINO (fällt auf die CPU zurück) | Ein aktueller Intel-Grafiktreiber; unter Linux die Compute Runtime von Intel (`intel-opencl-icd`) |
+| AMD-GPU | DirectML | CPU | Ein aktueller GPU-Treiber |
+| Keine GPU | CPU | CPU | Nichts |
 
-Die Bearbeitungsseite des Knotens zeigt die erkannten Beschleuniger, und seine Einstellung **Beschleuniger** kann einen erzwingen. Modelle werden nie mitgeliefert. Ein Knoten bezieht die integrierten YOLOX-Modelle vom Server, und andere Modelle gehören in `C:\ProgramData\LarisVMS\models` auf dem Knoten.
+Die Bearbeitungsseite des Knotens zeigt die erkannten Beschleuniger, und seine Einstellung **Beschleuniger** kann einen erzwingen. Modelle werden nie mitgeliefert. Ein Knoten bezieht die integrierten YOLOX-Modelle vom Server, und andere Modelle gehören auf dem Knoten in `C:\ProgramData\LarisVMS\models` (Windows) oder `/var/lib/larisvms/models` (Linux).
+
+Debian 13 hat kein Paket `intel-opencl-icd`. Installieren Sie das aus den Veröffentlichungen von Intel, mit den Schritten auf deren Seite: [26.27.39122.11](https://github.com/intel/compute-runtime/releases/tag/26.27.39122.11) für Core der 11. Generation (Tiger Lake), Arc und neuer oder [24.35.30872.36](https://github.com/intel/compute-runtime/releases/tag/24.35.30872.36) für ältere Grafik. Das Docker-Image des Knotens enthält bereits beide.
+
+NVIDIA-Anforderungen für das CUDA-Backend (ONNX Runtime 1.24, mit CUDA 12.8 gebaut):
+
+| | Linux | Windows |
+|---|---|---|
+| NVIDIA-Treiber | 570.26 oder neuer | 570.65 oder neuer |
+| CUDA | 12.8 oder ein neueres 12.x | 12.8 oder ein neueres 12.x |
+| cuDNN | 9.x | 9.x |
+| GPU | Turing (RTX-20-Serie, GTX-16-Serie) oder neuer; Pascal und Maxwell benötigen cuDNN 9.10.2 oder älter | ebenso |
+| TensorRT (optional) | 10.x | 10.x |
+
+Die Seite **Knoten** warnt, wenn der NVIDIA-Treiber eines Knotens zu alt für CUDA ist. Installieren Sie unter Linux CUDA und cuDNN aus dem apt- oder dnf-Repository von NVIDIA (`cuda-libraries-12-8` und `libcudnn9-cuda-12`); der Knoten findet sie über den Bibliothekspfad des Systems oder `/usr/local/cuda/lib64`. Die GPU-Beschleunigung unter Linux wurde noch nicht auf echter Hardware getestet.
 
 ## Langsames Backend
 
-Kann ein NVIDIA-Knoten CUDA nicht verwenden, fällt die KI-Erkennung auf DirectML zurück, das um ein Vielfaches langsamer läuft. Es werden weniger Bilder analysiert, die GPU läuft heiß, und schnelle Objekte wie vorbeifahrende Autos können unerkannt bleiben. Die Seite **Knoten** zeigt dann neben dem Knoten **⚠️ KI auf DirectML** mit der Ursache an, und Super-Admins erhalten eine Benachrichtigung.
+Kann ein NVIDIA-Knoten CUDA nicht verwenden, fällt die KI-Erkennung auf DirectML (unter Linux auf die CPU) zurück, das um ein Vielfaches langsamer läuft. Es werden weniger Bilder analysiert, die GPU läuft heiß, und schnelle Objekte wie vorbeifahrende Autos können unerkannt bleiben. Die Seite **Knoten** zeigt dann neben dem Knoten **⚠️ KI auf DirectML** mit der Ursache an, und Super-Admins erhalten eine Benachrichtigung.
 
-Die übliche Ursache ist ein fehlendes cuDNN. Installieren Sie auf dem Knoten das CUDA Toolkit 12.x und cuDNN 9.x für CUDA 12, über den cuDNN-Download von NVIDIA oder mit `pip install nvidia-cudnn-cu12`. Der Knoten findet sie innerhalb von 10 Minuten, kopiert sie neben sein KI-Backend und startet die Erkennung auf CUDA neu.
+Die übliche Ursache ist ein fehlendes cuDNN oder ein NVIDIA-Treiber, der älter ist, als CUDA 12.8 ihn benötigt. Installieren Sie unter Windows auf dem Knoten das CUDA Toolkit 12.x und cuDNN 9.x für CUDA 12, über den cuDNN-Download von NVIDIA oder mit `pip install nvidia-cudnn-cu12`. Installieren Sie unter Linux `cuda-libraries-12-8` und `libcudnn9-cuda-12` aus dem Repository von NVIDIA. Der Knoten findet sie innerhalb von 10 Minuten (unter Windows kopiert er sie neben sein KI-Backend) und startet die Erkennung auf CUDA neu.
 
 ## Modellfamilien
 
@@ -41,7 +55,7 @@ Eine Änderung des Modells startet die Erkennung jeder Kamera neu.
 
 ## Eigene Modelle
 
-Legen Sie eine `.onnx`-Datei in `C:\ProgramData\LarisVMS\models` auf dem Knoten ab. Beschreiben die eigenen Metadaten des Modells seinen Decoder, seine Eingabegröße und seine Bezeichnungen, funktioniert es einfach. Andernfalls fügen Sie eine `.json`-Datei mit demselben Namen hinzu, die das Fehlende liefert. **Aktualisieren** listet jedes von den Knoten gefundene Modell auf und markiert Modelle mit unvollständigen Metadaten. Ein Modell mit Warnung kann ausgewählt werden, läuft aber erst, wenn die Warnung behoben ist.
+Legen Sie eine `.onnx`-Datei auf dem Knoten in `C:\ProgramData\LarisVMS\models` (Windows) oder `/var/lib/larisvms/models` (Linux) ab; unter Linux muss das Konto larisvms sie lesen können. Beschreiben die eigenen Metadaten des Modells seinen Decoder, seine Eingabegröße und seine Bezeichnungen, funktioniert es einfach. Andernfalls fügen Sie eine `.json`-Datei mit demselben Namen hinzu, die das Fehlende liefert. **Aktualisieren** listet jedes von den Knoten gefundene Modell auf und markiert Modelle mit unvollständigen Metadaten. Ein Modell mit Warnung kann ausgewählt werden, läuft aber erst, wenn die Warnung behoben ist.
 
 ## Seitenverhältnis-Anpassung
 

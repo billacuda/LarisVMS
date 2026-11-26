@@ -86,7 +86,7 @@ public static class Mp4BoxScanner
                 headerSize = 8;
             }
 
-            if (boxSize < headerSize || offset + boxSize > buffer.Length) return null;
+            if (boxSize < headerSize || boxSize > buffer.Length - offset) return null; // not offset + boxSize: that can overflow
 
             offset += (int)boxSize;
             if (type == Moof) seenMoof = true;

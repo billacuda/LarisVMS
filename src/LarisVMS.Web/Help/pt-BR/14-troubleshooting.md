@@ -10,6 +10,7 @@ Problemas comuns e onde olhar.
 - **Nós**: `%ProgramData%\LarisVMS\logs\node-*.log` em cada nó.
 - **Detecção de IA**: `%ProgramData%\LarisVMS\logs\vision-*.log` em cada nó.
 - **Atualização automática**: `%ProgramData%\LarisVMS\logs\updater-*.log` em cada nó ou proxy.
+- **No Linux**, os mesmos arquivos ficam em `/var/log/larisvms`. A saída de cada serviço, inclusive por que não iniciou, fica no journal do systemd: `journalctl -u larisvms-node` (ou `larisvms-web`, `larisvms-proxy`; acrescente `-f` para acompanhar), e `systemctl status larisvms-node` mostra se está em execução. Uma atualização é instalada pelo `larisvms-node-update.service`: `journalctl -u larisvms-node-update`.
 
 ## Uma câmera não está gravando
 
@@ -20,7 +21,7 @@ Problemas comuns e onde olhar.
 
 ## A visualização ao vivo e a reprodução ficam em "conectando"
 
-Quando um nó transmite direto para os navegadores (veja [Streaming direto](/Help/nodes#direct-streaming)), o navegador se conecta à porta de cliente do nó, 4200 por padrão. Se o console do navegador mostrar uma conexão `wss://<nó>:<porta>/live/…` com falha, verifique se o firewall do nó permite essa porta: o instalador cria uma regra de entrada chamada **LarisVMS Node Client Endpoint**. Os instaladores anteriores à 0.215.1 podiam perder essa regra ao atualizar ou assumir um nó; execute o instalador de nó atual de novo, ou adicione a regra manualmente.
+Quando um nó transmite direto para os navegadores (veja [Streaming direto](/Help/nodes#direct-streaming)), o navegador se conecta à porta de cliente do nó, 8555 por padrão. Se não conseguir em 5 segundos, o vídeo é retransmitido pelo servidor. Se o console do navegador mostrar uma conexão `wss://<nó>:<porta>/live/…` com falha, verifique se o firewall do nó permite essa porta: o instalador cria uma regra de entrada chamada **LarisVMS Node Client Endpoint**. Os instaladores anteriores à 0.215.1 podiam perder essa regra ao atualizar ou assumir um nó; execute o instalador de nó atual de novo, ou adicione a regra manualmente. O Docker com a rede do host não abre portas: permita a porta no firewall da própria máquina (`sudo ufw allow 8555/tcp`).
 
 ## O login ou a sincronização do Active Directory falha
 
@@ -48,7 +49,7 @@ O nó travou, não o navegador nem a rede. Procure no log do nó por `Node proce
 
 ## A detecção de IA para, mas a gravação continua
 
-Geralmente o driver da GPU foi reiniciado. O log de eventos do sistema do Windows mostra o evento 153 de `nvlddmkm` ou o evento 4101 de `Display` naquele momento. O serviço de visão reinicia sozinho após 60 segundos sem resultado. Reinicializações repetidas apontam para a GPU, o driver, a refrigeração ou a energia.
+Geralmente o driver da GPU foi reiniciado. O log de eventos do sistema do Windows mostra o evento 153 de `nvlddmkm` ou o evento 4101 de `Display` naquele momento; no Linux, `journalctl -k` mostra uma linha `NVRM: Xid`. O serviço de visão reinicia sozinho após 60 segundos sem resultado. Reinicializações repetidas apontam para a GPU, o driver, a refrigeração ou a energia.
 
 ## Um nó ou proxy não voltou depois de uma atualização
 

@@ -13,9 +13,9 @@ namespace LarisVMS.Infrastructure;
 /// </summary>
 public static class AppRelease
 {
-    public const string Version = "0.223.1";
+    public const string Version = "0.223.2";
 
-    public const string Notes = "Fixed: cameras with AAC audio play again on nodes with ffmpeg 7.1 (the Docker node and Debian 13), a client endpoint host set on a node reaches the server, and browsers that cannot reach a node use the relay. Added: the node page says why a node is relayed.";
+    public const string Notes = "Fixed: footage is no longer lost when clocks go back, exports no longer overwrite each other or stay on running, saved changes reach nodes right away, nodes catch up after a long outage, and cameras that come and go recover. Changed: Help and the interface are complete in all nine languages, and nodes and the server do less work. Security: camera access is checked every minute for two-way audio, detection boxes, and motion zones, and the media proxy limits connections.";
 
     /// <summary>Adds this release's AppVersions row unless it's already there. Idempotent.</summary>
     public static async Task EnsureRecordedAsync(ApplicationDbContext db, CancellationToken ct = default)

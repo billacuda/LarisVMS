@@ -73,6 +73,7 @@ Un rol es un conjunto de permisos con nombre, gestionado en **Configuración →
 - **Dominio:** solo el nombre del dominio, como `corp.example.com`.
 - **Cifrado:** LDAPS en el puerto 636 es el predeterminado y necesita un certificado en tus controladores de dominio en el que este servidor confíe. LDAP simple en el puerto 389 funciona sin uno, pero es inseguro y no se recomienda.
 - **Cuenta de búsqueda:** la seguridad integrada (el predeterminado) usa la cuenta propia del servicio LarisVMS Web. Cuando el servicio corre como LocalSystem en un servidor unido al dominio, esa es la cuenta de la computadora. O ingresá una cuenta de servicio como `DOMAIN\username` con su contraseña.
+- **En un servidor Linux**, Active Directory necesita LDAPS y una cuenta de servicio: el servidor no tiene una cuenta de dominio propia, y ahí el LDAP simple no se puede firmar ni sellar.
 - **Inicio de sesión:** un nombre con `@` es una cuenta local. Cualquier otra cosa es un nombre de usuario AD, escrito sin el dominio.
 
 **Vínculos grupo → rol:** empezá a escribir un nombre de grupo y elegí de la lista (Tab toma la primera coincidencia). Los miembros del grupo reciben el rol, incluidos los miembros de grupos anidados. Las cuentas se crean la primera vez que se necesitan, en cuanto se vincula un grupo o cuando el usuario inicia sesión por primera vez. Los grupos y usuarios se rastrean por SID, así que renombrar cualquiera en AD se traslada en la próxima sincronización. Los roles de las cuentas AD vienen solo de los vínculos de grupo y no se pueden editar en la página de Usuarios.

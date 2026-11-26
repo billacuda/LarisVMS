@@ -10,6 +10,7 @@ Problemi comuni e dove guardare.
 - **Nodi**: `%ProgramData%\LarisVMS\logs\node-*.log` su ogni nodo.
 - **Rilevamento IA**: `%ProgramData%\LarisVMS\logs\vision-*.log` su ogni nodo.
 - **Aggiornamento automatico**: `%ProgramData%\LarisVMS\logs\updater-*.log` su ogni nodo o proxy.
+- **Su Linux**, gli stessi file sono in `/var/log/larisvms`. L’output di ogni servizio, compreso il motivo per cui non si è avviato, è nel journal di systemd: `journalctl -u larisvms-node` (o `larisvms-web`, `larisvms-proxy`; aggiunga `-f` per seguirlo), e `systemctl status larisvms-node` mostra se è in esecuzione. Un aggiornamento viene installato da `larisvms-node-update.service`: `journalctl -u larisvms-node-update`.
 
 ## Una telecamera non registra
 
@@ -20,7 +21,7 @@ Problemi comuni e dove guardare.
 
 ## Dal vivo e riproduzione restano su «connessione»
 
-Quando un nodo trasmette direttamente ai browser (vedere [Streaming diretto](/Help/nodes#direct-streaming)), il browser si connette alla porta client del nodo, 4200 per impostazione predefinita. Se la console del browser mostra una connessione `wss://<nodo>:<porta>/live/…` non riuscita, verifichi che il firewall del nodo consenta quella porta: il programma di installazione crea una regola in ingresso chiamata **LarisVMS Node Client Endpoint**. I programmi di installazione precedenti alla 0.215.1 potevano perdere quella regola durante un aggiornamento o la presa in carico di un nodo; esegua di nuovo il programma di installazione del nodo attuale, oppure aggiunga la regola a mano.
+Quando un nodo trasmette direttamente ai browser (vedere [Streaming diretto](/Help/nodes#direct-streaming)), il browser si connette alla porta client del nodo, 8555 per impostazione predefinita. Se non riesce entro 5 secondi, il video viene inoltrato tramite il server. Se la console del browser mostra una connessione `wss://<nodo>:<porta>/live/…` non riuscita, verifichi che il firewall del nodo consenta quella porta: il programma di installazione crea una regola in ingresso chiamata **LarisVMS Node Client Endpoint**. I programmi di installazione precedenti alla 0.215.1 potevano perdere quella regola durante un aggiornamento o la presa in carico di un nodo; esegua di nuovo il programma di installazione del nodo attuale, oppure aggiunga la regola a mano. Docker con la rete dell’host non apre porte: consenta la porta nel firewall della macchina stessa (`sudo ufw allow 8555/tcp`).
 
 ## L’accesso o la sincronizzazione Active Directory non riesce
 
@@ -48,7 +49,7 @@ Si è bloccato il nodo, non il browser o la rete. Cerchi nel registro del nodo `
 
 ## Il rilevamento IA si ferma ma la registrazione continua
 
-Di solito il driver della GPU è stato reimpostato. Il registro eventi di sistema di Windows mostra in quel momento l’evento 153 di `nvlddmkm` o l’evento 4101 di `Display`. Il servizio di visione si riavvia da solo dopo 60 secondi senza risultati. Reimpostazioni ripetute indicano la GPU, il suo driver, il raffreddamento o l’alimentazione.
+Di solito il driver della GPU è stato reimpostato. Il registro eventi di sistema di Windows mostra in quel momento l’evento 153 di `nvlddmkm` o l’evento 4101 di `Display`; su Linux, `journalctl -k` mostra una riga `NVRM: Xid`. Il servizio di visione si riavvia da solo dopo 60 secondi senza risultati. Reimpostazioni ripetute indicano la GPU, il suo driver, il raffreddamento o l’alimentazione.
 
 ## Un nodo o proxy non è tornato dopo un aggiornamento
 

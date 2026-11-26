@@ -68,8 +68,23 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
 
     public event Action<byte[]>? LiveFragmentReceived;
 
-    private TaskCompletionSource<byte[]> _initSegmentTcs = NewInitSegmentTcs();
+    private volatile TaskCompletionSource<byte[]> _initSegmentTcs = NewInitSegmentTcs();
     private static TaskCompletionSource<byte[]> NewInitSegmentTcs() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _liveAttempt;
+
+    /// <inheritdoc/>
+    public event Action? LiveAttemptEnded;
+
+    // See RecordingSession.EndLiveAttempt.
+    private void EndLiveAttempt()
+    {
+        Interlocked.Increment(ref _liveAttempt);
+        LiveInitSegment = null;
+        var ended = _initSegmentTcs;
+        _initSegmentTcs = NewInitSegmentTcs();
+        ended.TrySetCanceled();
+        LiveAttemptEnded?.Invoke();
+    }
 
     public Task<byte[]> WaitForLiveInitSegmentAsync(CancellationToken ct) => _initSegmentTcs.Task.WaitAsync(ct);
 
@@ -82,31 +97,39 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
         {
             State = StreamRecordingState.Connecting;
             Process? process = null;
+            using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
             try
             {
                 process = StartFfmpeg();
                 var stderrTask = DrainStderrAsync(process, ct);
 
-                LiveInitSegment = null;
-                if (!_initSegmentTcs.Task.IsCompleted) _initSegmentTcs.TrySetCanceled(ct);
-                _initSegmentTcs = NewInitSegmentTcs();
                 lastFragmentAt = DateTime.UtcNow; // grace period before the first fragment lands
 
-                var stdoutTask = DrainStdoutAsync(process, () => lastFragmentAt = DateTime.UtcNow, ct);
-                var watchdogTask = WatchdogAsync(process, () => lastFragmentAt, ct);
+                var stdoutTask = DrainStdoutAsync(process, Volatile.Read(ref _liveAttempt), () =>
+                {
+                    lastFragmentAt = DateTime.UtcNow;
+                    State = StreamRecordingState.Recording;
+                }, ct);
+                var watchdogTask = WatchdogAsync(process, () => lastFragmentAt, attemptCts.Token);
 
                 await Task.WhenAny(stdoutTask, watchdogTask);
+                await attemptCts.CancelAsync(); // the watchdog must not outlive the process it watches
                 if (!process.HasExited) TryKill(process);
 
-                await process.WaitForExitAsync(CancellationToken.None);
-                await stderrTask;
-                try { await stdoutTask; } catch (OperationCanceledException) { }
+                var exited = await ProcessExit.WaitAsync(process, Task.WhenAll(stderrTask, stdoutTask), logger);
+                if (exited)
+                {
+                    await stderrTask;
+                    try { await stdoutTask; } catch (OperationCanceledException) { }
+                }
 
                 if (ct.IsCancellationRequested) break;
 
+                // Video arrived, so the camera works: the next retry starts from a short wait again.
+                if (State == StreamRecordingState.Recording) consecutiveFailures = 0;
                 consecutiveFailures++;
-                LastError = $"ffmpeg exited with code {process.ExitCode}.";
+                LastError = exited ? $"ffmpeg exited with code {process.ExitCode}." : ProcessExit.AbandonedMessage;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -117,6 +140,7 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
             }
             finally
             {
+                EndLiveAttempt();
                 process?.Dispose();
             }
 
@@ -226,7 +250,7 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
     /// recording concerns — this is the whole output, not one leg of it. See that method's own
     /// comment for why PipeReader/AdvanceTo(consumed, examined) is used instead of a hand-rolled
     /// buffer.</summary>
-    private async Task DrainStdoutAsync(Process process, Action onFragment, CancellationToken ct)
+    private async Task DrainStdoutAsync(Process process, int attempt, Action onFragment, CancellationToken ct)
     {
         const int MaxInitSegmentBytes = 4 * 1024 * 1024;
         const int MaxFragmentBytes = 32 * 1024 * 1024;
@@ -240,6 +264,7 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
             while (true)
             {
                 var result = await reader.ReadAsync(ct);
+                if (attempt != Volatile.Read(ref _liveAttempt)) break; // abandoned; a newer attempt is live
                 var buffer = result.Buffer;
                 var consumed = buffer.Start;
 

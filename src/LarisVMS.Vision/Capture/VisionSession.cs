@@ -77,6 +77,7 @@ public sealed partial class VisionSession(VisionSessionOptions options, LatestFr
         {
             State = StreamRecordingState.Connecting;
             Process? process = null;
+            using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
             try
             {
@@ -85,20 +86,27 @@ public sealed partial class VisionSession(VisionSessionOptions options, LatestFr
                 var stderrTask = DrainStderrAsync(process, stamps, ct);
 
                 LastFrameAt = DateTime.UtcNow; // grace period before the first frame lands
-                var readTask = ReadFramesAsync(process, stamps, ct);
-                var watchdogTask = WatchdogAsync(process, ct);
+                var readTask = ReadFramesAsync(process, stamps, attemptCts.Token);
+                var watchdogTask = WatchdogAsync(process, attemptCts.Token);
 
                 await Task.WhenAny(readTask, watchdogTask);
+                // Ends the watchdog, and the reader if it's an abandoned process's.
+                await attemptCts.CancelAsync();
                 if (!process.HasExited) TryKill(process);
 
-                await process.WaitForExitAsync(CancellationToken.None);
-                await stderrTask;
-                try { await readTask; } catch (OperationCanceledException) { }
+                var exited = await ProcessExit.WaitAsync(process, Task.WhenAll(stderrTask, readTask), logger);
+                if (exited)
+                {
+                    await stderrTask;
+                    try { await readTask; } catch (OperationCanceledException) { }
+                }
 
                 if (ct.IsCancellationRequested) break;
 
+                // Frames arrived, so the camera works: the next retry starts from a short wait again.
+                if (State == StreamRecordingState.Recording) consecutiveFailures = 0;
                 consecutiveFailures++;
-                LastError = $"ffmpeg exited with code {process.ExitCode}.";
+                LastError = exited ? $"ffmpeg exited with code {process.ExitCode}." : ProcessExit.AbandonedMessage;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

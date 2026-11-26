@@ -10,20 +10,34 @@
 
 一個節點套件適用於所有電腦。啟動時，視覺服務會根據發現的硬體選擇後端：
 
-| 硬體 | 後端 | 節點上需要 |
-|---|---|---|
-| NVIDIA GPU | CUDA（回復為 DirectML） | CUDA Toolkit 12.x 和 cuDNN 9.x |
-| Intel GPU | OpenVINO（回復為 DirectML） | 最新的 Intel 顯示卡驅動程式 |
-| AMD GPU | DirectML | 最新的 GPU 驅動程式 |
-| 無 GPU | CPU | 無 |
+| 硬體 | Windows | Linux | 節點上需要 |
+|---|---|---|---|
+| NVIDIA GPU | CUDA（回復為 DirectML） | CUDA（回復為 CPU） | CUDA 12 和 cuDNN 9（請參閱下面的需求） |
+| Intel GPU | OpenVINO（回復為 DirectML） | OpenVINO（回復為 CPU） | 最新的 Intel 顯示卡驅動程式；在 Linux 上為 Intel 的 compute runtime（`intel-opencl-icd`） |
+| AMD GPU | DirectML | CPU | 最新的 GPU 驅動程式 |
+| 無 GPU | CPU | CPU | 無 |
 
-節點的編輯頁面會顯示偵測到的加速器，其**加速器**設定可以強制指定一個。模型從不隨附。節點會從伺服器取得內建的 YOLOX 模型，其他模型放入節點上的 `C:\ProgramData\LarisVMS\models`。
+節點的編輯頁面會顯示偵測到的加速器，其**加速器**設定可以強制指定一個。模型從不隨附。節點會從伺服器取得內建的 YOLOX 模型，其他模型放入節點上的 `C:\ProgramData\LarisVMS\models`（Windows）或 `/var/lib/larisvms/models`（Linux）。
+
+Debian 13 沒有 `intel-opencl-icd` 套件。請按照 Intel 發行頁面上的步驟安裝其中的套件：第 11 代 Core（Tiger Lake）、Arc 及更新的顯示卡使用 [26.27.39122.11](https://github.com/intel/compute-runtime/releases/tag/26.27.39122.11)，更舊的顯示卡使用 [24.35.30872.36](https://github.com/intel/compute-runtime/releases/tag/24.35.30872.36)。節點的 Docker 映像已包含這兩者。
+
+CUDA 後端的 NVIDIA 需求（使用 CUDA 12.8 建置的 ONNX Runtime 1.24）：
+
+| | Linux | Windows |
+|---|---|---|
+| NVIDIA 驅動程式 | 570.26 或更新版本 | 570.65 或更新版本 |
+| CUDA | 12.8 或更新的 12.x | 12.8 或更新的 12.x |
+| cuDNN | 9.x | 9.x |
+| GPU | Turing（RTX 20 系列、GTX 16 系列）或更新；Pascal 和 Maxwell 需要 cuDNN 9.10.2 或更早版本 | 相同 |
+| TensorRT（選用） | 10.x | 10.x |
+
+當節點的 NVIDIA 驅動程式對 CUDA 來說太舊時，**節點**頁面會發出警告。在 Linux 上，請從 NVIDIA 的 apt 或 dnf 存放庫安裝 CUDA 和 cuDNN（`cuda-libraries-12-8` 和 `libcudnn9-cuda-12`）；節點會透過系統的程式庫路徑或在 `/usr/local/cuda/lib64` 中找到它們。Linux 上的 GPU 加速尚未在真實硬體上測試。
 
 ## 慢速後端
 
-如果 NVIDIA 節點無法使用 CUDA，AI 偵測會回復為 DirectML，其執行速度要慢好幾倍。分析的畫面會變少，GPU 會發熱，經過的汽車等快速移動的物件可能偵測不到。此時**節點**頁面會在該節點旁顯示**⚠️ AI 執行於 DirectML**及原因，並通知超級管理員。
+如果 NVIDIA 節點無法使用 CUDA，AI 偵測會回復為 DirectML（在 Linux 上為 CPU），其執行速度要慢好幾倍。分析的畫面會變少，GPU 會發熱，經過的汽車等快速移動的物件可能偵測不到。此時**節點**頁面會在該節點旁顯示 **⚠️ AI 執行於 DirectML**及原因，並通知超級管理員。
 
-通常的原因是缺少 cuDNN。請在節點上安裝 CUDA Toolkit 12.x 和適用於 CUDA 12 的 cuDNN 9.x，可從 NVIDIA 的 cuDNN 下載頁面取得，或使用 `pip install nvidia-cudnn-cu12`。節點會在 10 分鐘內發現它們，將其複製到其 AI 後端旁，並在 CUDA 上重新啟動偵測。
+通常的原因是缺少 cuDNN，或 NVIDIA 驅動程式比 CUDA 12.8 所需的更舊。在 Windows 上，請在節點上安裝 CUDA Toolkit 12.x 和適用於 CUDA 12 的 cuDNN 9.x，可從 NVIDIA 的 cuDNN 下載頁面取得，或使用 `pip install nvidia-cudnn-cu12`。在 Linux 上，請從 NVIDIA 的存放庫安裝 `cuda-libraries-12-8` 和 `libcudnn9-cuda-12`。節點會在 10 分鐘內發現它們（在 Windows 上會將其複製到其 AI 後端旁），並在 CUDA 上重新啟動偵測。
 
 ## 模型系列
 
@@ -41,7 +55,7 @@
 
 ## 自訂模型
 
-將 `.onnx` 檔案放入節點上的 `C:\ProgramData\LarisVMS\models`。如果模型自身的中繼資料描述了其解碼器、輸入大小和標籤，它就能直接使用。否則，請新增一個同名的 `.json` 檔案，補充缺少的內容。**重新整理**會列出節點發現的所有模型，並標出中繼資料不完整的模型。帶有警告的模型可以選擇，但在警告被修復之前不會執行。
+將 `.onnx` 檔案放入節點上的 `C:\ProgramData\LarisVMS\models`（Windows）或 `/var/lib/larisvms/models`（Linux）；在 Linux 上，請確保 larisvms 帳戶可以讀取它。如果模型自身的中繼資料描述了其解碼器、輸入大小和標籤，它就能直接使用。否則，請新增一個同名的 `.json` 檔案，補充缺少的內容。**重新整理**會列出節點發現的所有模型，並標出中繼資料不完整的模型。帶有警告的模型可以選擇，但在警告被修復之前不會執行。
 
 ## 長寬比調整
 

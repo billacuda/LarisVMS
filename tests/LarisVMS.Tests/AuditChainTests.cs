@@ -263,6 +263,14 @@ public class AuditChainTests
     }
 
     [Fact]
+    public void AnEntryTooLongWithoutItsDetailsIsStillFormatted()
+    {
+        var entry = new AuditLog { Id = 1, Action = new string('a', 500), Details = new string('é', 500), OccurredAt = DateTime.UtcNow };
+
+        Assert.Contains("\"action\":\"aaaa", AuditSyslogForwarder.Format(entry, "SERVER1", 100));
+    }
+
+    [Fact]
     public void TcpFramingPrefixesTheLengthInBytes()
     {
         var framed = AuditSyslogForwarder.Frame("<109>1 é");

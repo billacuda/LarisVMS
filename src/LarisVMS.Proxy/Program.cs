@@ -151,7 +151,9 @@ builder.Services.AddSingleton<IHostedService>(sp => new CertWatcherService(
 var app = builder.Build();
 // Tidy up after the last auto-update, and say so in this log if it never got applied.
 app.Services.GetRequiredService<ProxyUpdateService>().CheckLastUpdate();
-app.UseWebSockets();
+// A connection whose other end stopped answering is closed instead of waiting for TCP to notice. Longer
+// than a live viewer may lag (LiveViewerHandler), so a slow one isn't cut off by this.
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30), KeepAliveTimeout = TimeSpan.FromSeconds(90) });
 
 var relayLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Relay");
 
@@ -164,11 +166,19 @@ app.MapGet("/", () => Results.Content(
 
 // Live view — a dumb WebSocket pass-through: browser <-> proxy <-> node. The central-minted ?token=
 // is forwarded verbatim (it is bound to the node's own signing key; the proxy never validates it).
+// Well above what one office behind one address watches.
+var connectionLimiter = new ConnectionLimiter(500);
 app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ProxyWorker worker) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest)
     {
         ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+    using var slot = connectionLimiter.TryEnter(ctx.Connection.RemoteIpAddress);
+    if (slot is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status429TooManyRequests;
         return;
     }
     if (worker.Resolve(cameraId) is not { } target)
@@ -192,9 +202,11 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Proxy
         nodeSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
     try
     {
-        await nodeSocket.ConnectAsync(nodeUri, ctx.RequestAborted);
+        using var connecting = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+        connecting.CancelAfter(TimeSpan.FromSeconds(10));
+        await nodeSocket.ConnectAsync(nodeUri, connecting.Token);
     }
-    catch (Exception ex) when (ex is not OperationCanceledException)
+    catch (Exception ex) when (!ctx.RequestAborted.IsCancellationRequested)
     {
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
         // The node's address stays in the log, not the response.
@@ -234,6 +246,12 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
     if (worker.Resolve(cameraId) is not { } target)
     {
         ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+    using var slot = connectionLimiter.TryEnter(ctx.Connection.RemoteIpAddress);
+    if (slot is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status429TooManyRequests;
         return;
     }
 

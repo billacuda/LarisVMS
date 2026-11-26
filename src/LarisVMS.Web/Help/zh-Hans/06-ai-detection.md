@@ -10,20 +10,34 @@
 
 一个节点包适用于所有计算机。启动时，视觉服务会根据发现的硬件选择后端：
 
-| 硬件 | 后端 | 节点上需要 |
-|---|---|---|
-| NVIDIA GPU | CUDA（回退到 DirectML） | CUDA Toolkit 12.x 和 cuDNN 9.x |
-| Intel GPU | OpenVINO（回退到 DirectML） | 最新的 Intel 显卡驱动程序 |
-| AMD GPU | DirectML | 最新的 GPU 驱动程序 |
-| 无 GPU | CPU | 无 |
+| 硬件 | Windows | Linux | 节点上需要 |
+|---|---|---|---|
+| NVIDIA GPU | CUDA（回退到 DirectML） | CUDA（回退到 CPU） | CUDA 12 和 cuDNN 9（参见下面的要求） |
+| Intel GPU | OpenVINO（回退到 DirectML） | OpenVINO（回退到 CPU） | 最新的 Intel 显卡驱动程序；在 Linux 上为 Intel 的 compute runtime（`intel-opencl-icd`） |
+| AMD GPU | DirectML | CPU | 最新的 GPU 驱动程序 |
+| 无 GPU | CPU | CPU | 无 |
 
-节点的编辑页面会显示检测到的加速器，其**加速器**设置可以强制指定一个。模型从不随附。节点会从服务器获取内置的 YOLOX 模型，其他模型放入节点上的 `C:\ProgramData\LarisVMS\models`。
+节点的编辑页面会显示检测到的加速器，其**加速器**设置可以强制指定一个。模型从不随附。节点会从服务器获取内置的 YOLOX 模型，其他模型放入节点上的 `C:\ProgramData\LarisVMS\models`（Windows）或 `/var/lib/larisvms/models`（Linux）。
+
+Debian 13 没有 `intel-opencl-icd` 软件包。请按照 Intel 发布页面上的步骤安装其中的软件包：第 11 代 Core（Tiger Lake）、Arc 及更新的显卡使用 [26.27.39122.11](https://github.com/intel/compute-runtime/releases/tag/26.27.39122.11)，更旧的显卡使用 [24.35.30872.36](https://github.com/intel/compute-runtime/releases/tag/24.35.30872.36)。节点的 Docker 镜像已包含这两者。
+
+CUDA 后端的 NVIDIA 要求（使用 CUDA 12.8 构建的 ONNX Runtime 1.24）：
+
+| | Linux | Windows |
+|---|---|---|
+| NVIDIA 驱动程序 | 570.26 或更高版本 | 570.65 或更高版本 |
+| CUDA | 12.8 或更高的 12.x | 12.8 或更高的 12.x |
+| cuDNN | 9.x | 9.x |
+| GPU | Turing（RTX 20 系列、GTX 16 系列）或更新；Pascal 和 Maxwell 需要 cuDNN 9.10.2 或更早版本 | 相同 |
+| TensorRT（可选） | 10.x | 10.x |
+
+当节点的 NVIDIA 驱动程序对 CUDA 来说太旧时，**节点**页面会发出警告。在 Linux 上，请从 NVIDIA 的 apt 或 dnf 仓库安装 CUDA 和 cuDNN（`cuda-libraries-12-8` 和 `libcudnn9-cuda-12`）；节点会通过系统的库路径或在 `/usr/local/cuda/lib64` 中找到它们。Linux 上的 GPU 加速尚未在真实硬件上测试。
 
 ## 慢速后端
 
-如果 NVIDIA 节点无法使用 CUDA，AI 检测会回退到 DirectML，其运行速度要慢好几倍。分析的帧会变少，GPU 会发热，经过的汽车等快速移动的对象可能检测不到。此时**节点**页面会在该节点旁显示**⚠️ AI 运行于 DirectML**及原因，并通知超级管理员。
+如果 NVIDIA 节点无法使用 CUDA，AI 检测会回退到 DirectML（在 Linux 上为 CPU），其运行速度要慢好几倍。分析的帧会变少，GPU 会发热，经过的汽车等快速移动的对象可能检测不到。此时**节点**页面会在该节点旁显示 **⚠️ AI 运行于 DirectML**及原因，并通知超级管理员。
 
-通常的原因是缺少 cuDNN。请在节点上安装 CUDA Toolkit 12.x 和适用于 CUDA 12 的 cuDNN 9.x，可从 NVIDIA 的 cuDNN 下载页面获取，或使用 `pip install nvidia-cudnn-cu12`。节点会在 10 分钟内发现它们，将其复制到其 AI 后端旁，并在 CUDA 上重启检测。
+通常的原因是缺少 cuDNN，或 NVIDIA 驱动程序比 CUDA 12.8 所需的更旧。在 Windows 上，请在节点上安装 CUDA Toolkit 12.x 和适用于 CUDA 12 的 cuDNN 9.x，可从 NVIDIA 的 cuDNN 下载页面获取，或使用 `pip install nvidia-cudnn-cu12`。在 Linux 上，请从 NVIDIA 的仓库安装 `cuda-libraries-12-8` 和 `libcudnn9-cuda-12`。节点会在 10 分钟内发现它们（在 Windows 上会将其复制到其 AI 后端旁），并在 CUDA 上重启检测。
 
 ## 模型系列
 
@@ -41,7 +55,7 @@
 
 ## 自定义模型
 
-将 `.onnx` 文件放入节点上的 `C:\ProgramData\LarisVMS\models`。如果模型自身的元数据描述了其解码器、输入尺寸和标签，它就能直接使用。否则，请添加一个同名的 `.json` 文件，补充缺少的内容。**刷新**会列出节点发现的所有模型，并标出元数据不完整的模型。带有警告的模型可以选择，但在警告被修复之前不会运行。
+将 `.onnx` 文件放入节点上的 `C:\ProgramData\LarisVMS\models`（Windows）或 `/var/lib/larisvms/models`（Linux）；在 Linux 上，请确保 larisvms 账户可以读取它。如果模型自身的元数据描述了其解码器、输入尺寸和标签，它就能直接使用。否则，请添加一个同名的 `.json` 文件，补充缺少的内容。**刷新**会列出节点发现的所有模型，并标出元数据不完整的模型。带有警告的模型可以选择，但在警告被修复之前不会运行。
 
 ## 宽高比适配
 

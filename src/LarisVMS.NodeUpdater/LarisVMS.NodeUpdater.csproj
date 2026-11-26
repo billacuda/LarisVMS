@@ -10,7 +10,7 @@
     <OutputType>Exe</OutputType>
     <!-- No culture-aware text: runs on Linux without libicu, like the node and proxy. -->
     <InvariantGlobalization>true</InvariantGlobalization>
-    <Version>0.223.1</Version>
+    <Version>0.223.2</Version>
   </PropertyGroup>
 
   <ItemGroup>

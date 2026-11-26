@@ -70,6 +70,22 @@ public class ExportService(ApplicationDbContext db, ExportManifestBuilder? manif
                 job.FromUtc, job.ToUtc, item.RedactionJson, job.IncludePlayer && job.ConvertH265)
         ).ToListAsync(ct);
 
+    private static readonly TimeSpan LongestExport = TimeSpan.FromHours(24);
+
+    public Task FailItemsLostToRestartAsync(Guid nodeId, DateTime nodeStartedUtc, CancellationToken ct = default) =>
+        // A little earlier than the node started: StartedUtc is stamped before the node is asked.
+        FailRunningAsync(i => i.NodeId == nodeId && i.StartedUtc < nodeStartedUtc.AddSeconds(-5), "server.export.nodeRestarted", ct);
+
+    public Task FailAbandonedItemsAsync(DateTime nowUtc, CancellationToken ct = default) =>
+        FailRunningAsync(i => i.StartedUtc < nowUtc - LongestExport, "server.export.abandoned", ct);
+
+    private async Task FailRunningAsync(System.Linq.Expressions.Expression<Func<ExportJobItem, bool>> lost, string messageKey, CancellationToken ct)
+    {
+        var ids = await db.ExportJobItems.AsNoTracking().Where(i => i.Status == ExportItemStatus.Running).Where(lost)
+            .Select(i => i.Id).ToListAsync(ct);
+        foreach (var id in ids) await MarkItemFailedAsync(id, Loc.T(messageKey), ct);
+    }
+
     public async Task SplitItemAcrossNodesAsync(Guid itemId, IReadOnlyList<Guid> nodeIds, CancellationToken ct = default)
     {
         var item = await db.ExportJobItems.FirstOrDefaultAsync(i => i.Id == itemId, ct);
@@ -246,6 +262,19 @@ public class ExportService(ApplicationDbContext db, ExportManifestBuilder? manif
     /// <summary>See ExportJobStatus's doc comment for the exact rollup rule this implements.</summary>
     private async Task RecomputeJobStatusAsync(Guid jobId, CancellationToken ct)
     {
+        if (db.Database.IsRelational())
+        {
+            // Worked out and written in one statement. Read first and written after, two items finishing
+            // together could each see the other unfinished and leave the job running.
+            await db.ExportJobs.Where(j => j.Id == jobId && j.Items.Any())
+                .ExecuteUpdateAsync(u => u.SetProperty(j => j.Status, j =>
+                    j.Items.Any(i => i.Status == ExportItemStatus.Queued) ? ExportJobStatus.Queued
+                    : j.Items.Any(i => i.Status == ExportItemStatus.Running) ? ExportJobStatus.Running
+                    : j.Items.Any(i => i.Status == ExportItemStatus.Done) ? ExportJobStatus.Done
+                    : ExportJobStatus.Failed), ct);
+            return;
+        }
+
         var job = await db.ExportJobs.FirstOrDefaultAsync(j => j.Id == jobId, ct);
         if (job is null) return;
 

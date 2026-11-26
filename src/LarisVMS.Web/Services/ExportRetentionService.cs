@@ -25,6 +25,8 @@ public class ExportRetentionService(IServiceScopeFactory scopeFactory, ILogger<E
             {
                 using var scope = scopeFactory.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+                await scope.ServiceProvider.GetRequiredService<LarisVMS.Core.Interfaces.IExportService>()
+                    .FailAbandonedItemsAsync(DateTime.UtcNow, stoppingToken);
                 var removed = await SweepAsync(db, DateTime.UtcNow, stoppingToken);
                 if (removed > 0) logger.LogInformation("Removed {Count} expired export(s) whose files the nodes have deleted.", removed);
             }

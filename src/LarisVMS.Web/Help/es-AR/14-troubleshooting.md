@@ -10,6 +10,7 @@ Problemas comunes, y dónde buscar.
 - **Nodos**: `%ProgramData%\LarisVMS\logs\node-*.log` en cada nodo.
 - **Detección de IA**: `%ProgramData%\LarisVMS\logs\vision-*.log` en cada nodo.
 - **Actualización automática**: `%ProgramData%\LarisVMS\logs\updater-*.log` en cada nodo o proxy.
+- **En Linux**, los mismos archivos están en `/var/log/larisvms`. La salida de cada servicio, incluido por qué no arrancó, está en el journal de systemd: `journalctl -u larisvms-node` (o `larisvms-web`, `larisvms-proxy`; agregá `-f` para seguirlo), y `systemctl status larisvms-node` muestra si está en marcha. Las actualizaciones las instala `larisvms-node-update.service`: `journalctl -u larisvms-node-update`.
 
 ## Una cámara no está grabando
 
@@ -20,7 +21,7 @@ Problemas comunes, y dónde buscar.
 
 ## La vista en vivo y la reproducción quedan en «conectando»
 
-Cuando un nodo transmite directo a los navegadores (ver [Streaming directo](/Help/nodes#direct-streaming)), el navegador se conecta al puerto de cliente del nodo, 4200 por defecto. Si la consola del navegador muestra una conexión fallida `wss://<node>:<port>/live/…`, verificá que el firewall del nodo permita ese puerto: el instalador crea una regla de entrada llamada **LarisVMS Node Client Endpoint**. Los instaladores anteriores a 0.215.1 podían perder esa regla al actualizar o tomar un nodo; ejecutá el instalador de Nodo actual de nuevo, o agregá la regla a mano.
+Cuando un nodo transmite directo a los navegadores (ver [Streaming directo](/Help/nodes#direct-streaming)), el navegador se conecta al puerto de cliente del nodo, 8555 por defecto. Si no lo logra en 5 segundos, el video se retransmite a través del servidor. Si la consola del navegador muestra una conexión fallida `wss://<node>:<port>/live/…`, verificá que el firewall del nodo permita ese puerto: el instalador crea una regla de entrada llamada **LarisVMS Node Client Endpoint**. Los instaladores anteriores a 0.215.1 podían perder esa regla al actualizar o tomar un nodo; ejecutá el instalador de Nodo actual de nuevo, o agregá la regla a mano. Docker con la red del host no abre puertos: permití el puerto en el firewall de la propia máquina (`sudo ufw allow 8555/tcp`).
 
 ## Falla el inicio de sesión o la sincronización de Active Directory
 
@@ -48,7 +49,7 @@ El nodo se trabó, no el navegador ni la red. Buscá en el registro del nodo `No
 
 ## La detección de IA se detiene pero la grabación sigue
 
-Normalmente el driver de GPU se restableció. El registro de eventos del Sistema de Windows muestra el evento 153 de `nvlddmkm` o el 4101 de `Display` en ese momento. El servicio de visión se reinicia solo después de 60 segundos sin un resultado. Los restablecimientos repetidos apuntan a la GPU, su driver, la refrigeración o la alimentación.
+Normalmente el driver de GPU se restableció. El registro de eventos del Sistema de Windows muestra el evento 153 de `nvlddmkm` o el 4101 de `Display` en ese momento; en Linux, `journalctl -k` muestra una línea `NVRM: Xid`. El servicio de visión se reinicia solo después de 60 segundos sin un resultado. Los restablecimientos repetidos apuntan a la GPU, su driver, la refrigeración o la alimentación.
 
 ## Un nodo o proxy no volvió después de una actualización
 

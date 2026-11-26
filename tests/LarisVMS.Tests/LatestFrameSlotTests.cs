@@ -48,6 +48,17 @@ public class LatestFrameSlotTests
     }
 
     [Fact]
+    public async Task AFrameIsOnlyTakenOnce()
+    {
+        using var slot = new LatestFrameSlot(1);
+        slot.Publish(T0, b => b[0] = 1);
+        Assert.NotNull(await slot.TakeAsync(CancellationToken.None));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        Assert.Null(await slot.TakeAsync(cts.Token));
+    }
+
+    [Fact]
     public async Task TakeReturnsNullAfterDispose()
     {
         var slot = new LatestFrameSlot(4);

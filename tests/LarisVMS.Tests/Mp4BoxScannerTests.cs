@@ -10,6 +10,15 @@ namespace LarisVMS.Tests;
 /// </summary>
 public class Mp4BoxScannerTests
 {
+    [Fact]
+    public void ABoxSizeThatWouldOverflowIsNotFollowed()
+    {
+        // A normal 8-byte box, then one claiming the largest 64-bit size there is.
+        byte[] data = [0, 0, 0, 8, (byte)'f', (byte)'r', (byte)'e', (byte)'e',
+            0, 0, 0, 1, (byte)'m', (byte)'d', (byte)'a', (byte)'t', 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+        Assert.Null(Mp4BoxScanner.TryFindFragmentEnd(data.AsSpan()));
+    }
+
     private static byte[] Box(string type, int payloadSize)
     {
         var size = 8 + payloadSize;

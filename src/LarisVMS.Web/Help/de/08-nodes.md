@@ -2,9 +2,9 @@
 
 Aufzeichnungsknoten: Status, Streaming-Pfade, Medien-Proxys, Failover, Wartung und Aktualisierungen.
 
-**Knoten** in der Seitenleiste listet jeden Knoten mit Status, Adresse, Version, Kameraanzahl und Speicherbelegung auf. Klicken Sie auf einen Knoten, um seine Einstellungen zu bearbeiten. Das Menü **⋯** enthält diese Aktionen:
+**Knoten** in der Seitenleiste listet jeden Knoten mit Status, Adresse, Version, Kameraanzahl und Speicherbelegung auf. Unter jeder Version steht die Plattform des Knotens (Windows oder Linux): Ein Server kann Knoten auf beiden betreiben. Steht dahinter **Docker**, läuft der Knoten aus einem Docker-Image. Der Server schickt ihm keine Builds: Ist ein neuerer Build freigegeben, nennt die Seite das Image, das zu laden ist. Klicken Sie auf einen Knoten, um seine Einstellungen zu bearbeiten. Das Menü **⋯** enthält diese Aktionen:
 
-- **Dienst neu starten**: startet den Windows-Dienst des Knotens neu, nicht den Rechner. Die Aufzeichnung pausiert für einige Sekunden.
+- **Dienst neu starten**: startet den Dienst des Knotens neu (einen Windows-Dienst oder unter Linux einen systemd-Dienst), nicht den Rechner. Die Aufzeichnung pausiert für einige Sekunden.
 - **Authentifizierung zurücksetzen**: löscht das Check-in-Token des Knotens, für einen Knoten, der nach einem verpassten Heartbeat dauerhaft an der Authentifizierung scheitert. Auf einen funktionierenden Knoten hat es keine Wirkung.
 - **Wartung**: verschiebt die Kameras des Knotens auf seinen Ersatzknoten, bis Sie die Wartung beenden.
 - **Löschen**: entfernt den Knoten. Seine Kameras werden nicht mehr zugewiesen. Aufnahmen werden nicht gelöscht.
@@ -15,7 +15,9 @@ Ein Knoten ist **online**, wenn er sich in den letzten 2 Minuten gemeldet hat. E
 
 Standardmäßig wird alles Live- und Wiedergabevideo über den Webserver geleitet (**Proxy**). Bei **Direkt** verbinden sich Browser direkt mit dem eigenen HTTPS-Endpunkt jedes Knotens, was den Server entlastet. Legen Sie den Modus unter **Einstellungen → Live-Ansicht** fest und überschreiben Sie ihn pro Knoten.
 
-Der Modus „Direkt“ benötigt einen **Client-Endpunkt-Host**, den Browser erreichen können, und ein Zertifikat (ein `.pfx`-Pfad auf der Seite des Knotens). **Selbstsigniert zulassen** dient nur zum Testen, da Betrachter eine Browserwarnung erhalten. Eine Kamera, deren Knoten keinen funktionierenden Endpunkt hat, fällt automatisch auf den Proxy zurück.
+Der Modus „Direkt“ benötigt einen **Client-Endpunkt-Host**, den Browser erreichen können, und ein Zertifikat (ein `.pfx`-Pfad auf der Seite des Knotens). **Selbstsigniert zulassen** dient nur zum Testen, da Betrachter eine Browserwarnung erhalten. Ein auf dem Knoten selbst festgelegter Host (`CLIENTENDPOINTHOST`, `--client-endpoint-host` oder `LARISVMS_CLIENT_ENDPOINT_HOST`) wird auf seiner Seite eingetragen, sofern dort keiner festgelegt ist. **Endpunktstatus** auf der Seite des Knotens sagt, ob sich Browser direkt verbinden, und wenn nicht, warum.
+
+Eine Kamera, deren Knoten keinen funktionierenden Endpunkt hat, wird automatisch weitergeleitet. Ebenso eine, deren Knoten ein Browser nicht erreichen kann: Nach 5 Sekunden verwendet er die Weiterleitung und versucht es beim Knoten einige Minuten später erneut.
 
 ## Verschlüsselte Verbindungen vom Server
 
@@ -37,7 +39,7 @@ Die Knotenseite warnt, wenn der Ersatzknoten andere KI-Hardware hat oder nur auf
 
 Knoten und Proxys aktualisieren sich selbst aus freigegebenen Builds (siehe [Installation](/Help/installation#updates)). **Knoten → Aktualisierungen und Registrierung → Automatische Aktualisierung** schaltet dies für alle Knoten ein oder aus.
 
-Der Abschnitt **Builds** auf der Seite „Knoten“ zeigt den Build, auf den jede Art von Knoten zusteuert, und jeden Build, der auf Freigabe wartet, mit **Freigeben** und **Ablehnen**. **Build-Verlauf** listet jeden Build auf, auch freigegebene, ersetzte und abgelehnte.
+Der Abschnitt **Builds** auf der Seite „Knoten“ zeigt den Build, auf den jede Art von Knoten zusteuert, und jeden Build, der auf Freigabe wartet, mit **Freigeben** und **Ablehnen**. Builds werden je Plattform geführt: Ein Windows-Knoten erhält immer nur einen Windows-Build, ein Linux-Knoten einen für Linux. Jede Webinstallation bringt beide mit, und **Alle freigeben** gibt eine Version für alle Plattformen auf einmal frei. **Build-Verlauf** listet jeden Build auf, auch freigegebene, ersetzte und abgelehnte. **Alte Builds entfernen** löscht jeden Build, der älter als der für seine Plattform freigegebene ist, samt seinen Dateien.
 
 ## Serverzertifikat
 
@@ -47,9 +49,9 @@ Der Abschnitt **Builds** auf der Seite „Knoten“ zeigt den Build, auf den jed
 - **Nur vertrauenswürdiges Zertifikat**: nur ein Zertifikat einer vertrauenswürdigen Zertifizierungsstelle, das zum Namen des Servers passt. Installieren Sie eines, bevor Sie dies wählen.
 - **Nicht prüfen**: jedes Zertifikat. Nicht sicher: Jeder im Netzwerkpfad könnte sich als Server ausgeben.
 
-Bei „Beim ersten Kontakt vertrauen“ vertraut ein Knoten dem Zertifikat, das er bei der ersten Verbindung sieht. Damit er schon ab der allerersten Verbindung prüft, übergeben Sie dem Installationsprogramm den unter **Prüfung des Serverzertifikats** angezeigten Fingerabdruck: `-ServerCertThumbprint` für `install-node.ps1` und `install-proxy.ps1` oder `SERVERCERTTHUMBPRINT=` für das MSI. Die Installationsbefehle auf den Seiten „Einrichtung“ und „Medien-Proxys“ enthalten ihn bereits. Hinter einem Reverse-Proxy verwenden Sie stattdessen den Fingerabdruck des Zertifikats, das der Reverse-Proxy vorlegt.
+Bei „Beim ersten Kontakt vertrauen“ vertraut ein Knoten dem Zertifikat, das er bei der ersten Verbindung sieht. Damit er schon ab der allerersten Verbindung prüft, übergeben Sie dem Installationsprogramm den unter **Prüfung des Serverzertifikats** angezeigten Fingerabdruck: `-ServerCertThumbprint` für `install-node.ps1` und `install-proxy.ps1`, `SERVERCERTTHUMBPRINT=` für das MSI oder `--server-cert-thumbprint` für `larisvms-node setup` und `larisvms-proxy setup` unter Linux. Die Installationsbefehle auf den Seiten „Einrichtung“ und „Medien-Proxys“ enthalten ihn bereits. Hinter einem Reverse-Proxy verwenden Sie stattdessen den Fingerabdruck des Zertifikats, das der Reverse-Proxy vorlegt.
 
-Das selbstsignierte Zertifikat, das der Server für sich erstellt, ist 10 Jahre gültig und wird nicht von selbst ersetzt. **Selbstsigniertes Zertifikat neu erstellen** ersetzt es; jeder Knoten und Proxy muss dann neu registriert werden, und die Seite „Knoten“ listet diejenigen auf, die sich seitdem nicht gemeldet haben. Um einen Knoten neu zu registrieren, führen Sie das Installationsprogramm für Knoten erneut aus oder führen Sie `LarisVMS.Node.exe --reset-server-pin` darauf aus und starten Sie seinen Dienst neu (Proxys haben dieselbe Option).
+Das selbstsignierte Zertifikat, das der Server für sich erstellt, ist 10 Jahre gültig und wird nicht von selbst ersetzt. **Selbstsigniertes Zertifikat neu erstellen** ersetzt es; jeder Knoten und Proxy muss dann neu registriert werden, und die Seite „Knoten“ listet diejenigen auf, die sich seitdem nicht gemeldet haben. Um einen Knoten neu zu registrieren, führen Sie das Installationsprogramm für Knoten erneut aus oder führen Sie `LarisVMS.Node.exe --reset-server-pin` darauf aus und starten Sie seinen Dienst neu (Proxys haben dieselbe Option). Führen Sie unter Linux `sudo larisvms-node setup --reregister --server-url <url> --registration-key <key>` aus (oder `larisvms-proxy`).
 
 ## Einmal-Registrierungscodes
 

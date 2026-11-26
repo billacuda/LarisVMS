@@ -10,6 +10,7 @@ namespace LarisVMS.Infrastructure.Services;
 public class ApiKeyService(ApplicationDbContext db) : IApiKeyService
 {
     private const string Prefix = "lvk_";
+    private static readonly TimeSpan LastUsedInterval = TimeSpan.FromMinutes(1);
 
     public async Task<List<ApiKey>> ListAsync(CancellationToken ct = default)
         => await db.ApiKeys.AsNoTracking().OrderBy(k => k.Name).ToListAsync(ct);
@@ -69,8 +70,12 @@ public class ApiKeyService(ApplicationDbContext db) : IApiKeyService
         var roleName = await db.Roles.Where(r => r.Id == key.RoleId).Select(r => r.Name).FirstOrDefaultAsync(ct);
         if (roleName is null) return null; // the role was deleted out from under this key
 
-        key.LastUsedAtUtc = DateTime.UtcNow;
-        await db.SaveChangesAsync(ct);
+        // Not a write on every call: an integration may poll every second.
+        if (key.LastUsedAtUtc is not { } lastUsed || now - lastUsed >= LastUsedInterval)
+        {
+            key.LastUsedAtUtc = now;
+            await db.SaveChangesAsync(ct);
+        }
 
         return new ApiKeyAuthentication(key.Id, roleName, key.Name, await LoadLimitsAsync(key, ct));
     }

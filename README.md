@@ -8,7 +8,7 @@ of both. Live view, playback, and administration all run in the browser, on desk
   <a href="https://www.buymeacoffee.com/billacuda"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=billacuda&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" alt="Buy me a coffee" height="50" /></a>
 </p>
 
-**Current version: [0.223.1](CHANGELOG.md)**
+**Current version: [0.223.2](CHANGELOG.md)**
 
 📖 **[Documentation](https://www.larisvms.com/docs/)**: how to install, set up, and use LarisVMS. Worth a
 read before you install.
@@ -111,7 +111,7 @@ proxy the one for its own OS.
   - 64-bit (x86_64) Linux with systemd: Ubuntu 22.04, 24.04, or 26.04, Debian 12 or 13, or Rocky Linux 9 or 10. Other RHEL 9 or 10 rebuilds should work the same way as Rocky.
 - **Server:** SQL Server (Express works) using SQL or Integrated authentication. A Linux server must use a SQL login. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs and Linux packages don't need any .NET runtime.
 - **MariaDB:** MariaDB 10.11 or later can be used instead of SQL Server, with a MariaDB user and password. Built-in backups need the MariaDB client tools (`mariadb-dump`) on the LarisVMS server.
-- **.NET version:** developed with the .NET SDK 10.0.404. The 0.223.1 installers were built with it and include the .NET 10.0.15 runtime (ASP.NET Core 10.0.15).
+- **.NET version:** developed with the .NET SDK 10.0.404. The 0.223.2 installers were built with it and include the .NET 10.0.15 runtime (ASP.NET Core 10.0.15).
 - **Each recorder node:** [FFmpeg](https://ffmpeg.org/). On Windows, `winget install ffmpeg --scope machine`. On Linux, the node package installs it from your distro (on Rocky, from RPM Fusion; see [Installing on Linux](#-installing-on-linux)). ffmpeg 7.1 (Debian 13, and the Docker node image) loses AAC audio when copying it from a camera, so nodes with it re-encode the audio.
 - **LarisVision (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA 12.8 or newer 12.x and cuDNN 9.x if you want CUDA or TensorRT acceleration. Otherwise DirectML (Windows) and OpenVINO (Intel) work out of the box. See [GPU requirements](#gpu-requirements).
 - **Cameras:** ONVIF Profile S or T.
@@ -168,9 +168,9 @@ Double-click an installer to be prompted for its settings, or pass them on the c
 ### 🌐 1. Install the web server
 
 ```powershell
-msiexec /i LarisVMS-Web-0.223.1-x64.msi
+msiexec /i LarisVMS-Web-0.223.2-x64.msi
 # silent, with a certificate:
-msiexec /i LarisVMS-Web-0.223.1-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
+msiexec /i LarisVMS-Web-0.223.2-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
 ```
 
 | Property | Default | Purpose |
@@ -193,7 +193,7 @@ Pointing the wizard at an existing LarisVMS database, for example when reinstall
 Install [FFmpeg](https://ffmpeg.org/) on each recording machine first (`winget install ffmpeg --scope machine`), then:
 
 ```powershell
-msiexec /i LarisVMS-Node-0.223.1-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
+msiexec /i LarisVMS-Node-0.223.2-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
 ```
 
 | Property | Default | Purpose |
@@ -213,7 +213,7 @@ The node registers itself and appears under **Nodes**.
 ### 🔀 4. Install media proxies (optional)
 
 ```powershell
-msiexec /i LarisVMS-Proxy-0.223.1-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
+msiexec /i LarisVMS-Proxy-0.223.2-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
 ```
 
 Properties: `SERVERURL`, `REGISTRATIONKEY`, `CLIENTPORT` (default 4443), `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`, `CLIENTALLOWINSECURE`, `INSECURETLS`, `SERVICEACCOUNT`, `SERVICEPASSWORD`, `INSTALLFOLDER`, with the same meanings as for the node.
@@ -245,8 +245,8 @@ sudo dnf install -y "https://mirrors.rpmfusion.org/free/el/rpmfusion-free-releas
 ### 🌐 1. Install the web server
 
 ```bash
-sudo apt install ./larisvms-web_0.223.1.*-1_amd64.deb      # Ubuntu, Debian
-sudo dnf install ./larisvms-web-0.223.1.*-1.x86_64.rpm     # Rocky
+sudo apt install ./larisvms-web_0.223.2.*-1_amd64.deb      # Ubuntu, Debian
+sudo dnf install ./larisvms-web-0.223.2.*-1.x86_64.rpm     # Rocky
 ```
 
 The service starts straight away. Open `https://<server>:8444/` and run the
@@ -270,7 +270,7 @@ Then run `sudo systemctl restart larisvms-web`. `appsettings.Production.json` an
 ### 📹 2. Install recorder nodes
 
 ```bash
-sudo apt install ./larisvms-node_0.223.1.*-1_amd64.deb     # or: sudo dnf install ./larisvms-node-0.223.1.*-1.x86_64.rpm
+sudo apt install ./larisvms-node_0.223.2.*-1_amd64.deb     # or: sudo dnf install ./larisvms-node-0.223.2.*-1.x86_64.rpm
 sudo larisvms-node setup --server-url https://<server>:8444 --registration-key <key>
 ```
 
@@ -294,7 +294,7 @@ AI detection models go in `/var/lib/larisvms/models`.
 ### 🔀 3. Install media proxies (optional)
 
 ```bash
-sudo apt install ./larisvms-proxy_0.223.1.*-1_amd64.deb    # or: sudo dnf install ./larisvms-proxy-0.223.1.*-1.x86_64.rpm
+sudo apt install ./larisvms-proxy_0.223.2.*-1_amd64.deb    # or: sudo dnf install ./larisvms-proxy-0.223.2.*-1.x86_64.rpm
 sudo larisvms-proxy setup --server-url https://<server>:8444 --registration-key <key> --client-port 4443
 ```
 
@@ -324,7 +324,7 @@ release's Linux packages:
 | `ghcr.io/billacuda/larisvms-node` `:<version>-tensorrt` | The same as `-cuda`, plus TensorRT 10 (larger again). |
 | `ghcr.io/billacuda/larisvms-proxy` | A media proxy. |
 
-Each is tagged with its version (`0.223.1`), its minor version (`0.223`), and `latest`; the node's GPU
+Each is tagged with its version (`0.223.2`), its minor version (`0.223`), and `latest`; the node's GPU
 images also have `cuda` and `tensorrt` for the newest release. `edge`, `edge-cuda`, and `edge-tensorrt`,
 where present, are test builds made between releases.
 
@@ -578,7 +578,9 @@ motion, camera events, and vendor integrations. The node package includes the CP
   driver (`intel-media-va-driver` or `mesa-va-drivers` on Ubuntu and Debian; `intel-media-driver` or
   `mesa-va-drivers` on Rocky).
 - **Models are never bundled.** The built-in YOLOX models are downloaded from the server on first
-  use. For D-FINE, export one with [`tools/export-models`](tools/export-models/). For a custom model,
+  use and checked against a pinned SHA-256. To fetch one from your own HTTPS mirror, set
+  `DetectionModels:yolox:<size>` in the web server's `appsettings.json`, and
+  `DetectionModels:yolox:<size>-sha256` to have the mirrored file checked too. For D-FINE, export one with [`tools/export-models`](tools/export-models/). For a custom model,
   place any `.onnx` file in `C:\ProgramData\LarisVMS\models` (Windows) or `/var/lib/larisvms/models`
   (Linux) on the node, with an optional same-named `.json` file describing its decoder and labels.
 

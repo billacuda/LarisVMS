@@ -33,13 +33,15 @@ public class ExportRunner(NodeApiClient api, string ffmpegPath, ILogger<ExportRu
         IReadOnlyList<string?>? expectedSha256 = null, bool convertToH264 = false, string? h264Encoder = null)
     {
         var exportsDir = Path.Combine(storageRoot, "exports");
-        Directory.CreateDirectory(exportsDir);
-
         var listFilePath = Path.Combine(exportsDir, $"{exportItemId:N}.concat.txt");
         var outputPath = Path.Combine(exportsDir, outputFileName);
 
+        try { await Slots.WaitAsync(ct); }
+        catch (OperationCanceledException) { return; } // the service is stopping: see below
+
         try
         {
+            Directory.CreateDirectory(exportsDir);
             // Tamper evidence: every source file re-hashed and compared with the hash recorded when it
             // was written, for the export manifest. A mismatch doesn't stop the export — the manifest
             // says which segments changed, which is the point.
@@ -85,14 +87,10 @@ public class ExportRunner(NodeApiClient api, string ffmpegPath, ILogger<ExportRu
             logger.LogInformation("Starting export ffmpeg for item {ExportItemId} ({SegmentCount} segment(s), {TalkCount} talk clip(s)) -> {OutputPath}",
                 exportItemId, segmentFilePaths.Count, talkClips?.Count ?? 0, outputPath);
 
-            using var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
-            var stderrTask = DrainStderrAsync(process, ct);
-            await process.WaitForExitAsync(ct);
-            await stderrTask;
-
-            if (process.ExitCode != 0 || !File.Exists(outputPath))
+            var exitCode = await RunFfmpegAsync(psi, ct);
+            if (exitCode != 0 || !File.Exists(outputPath))
             {
-                throw new InvalidOperationException($"ffmpeg exited with code {process.ExitCode}.");
+                throw new InvalidOperationException($"ffmpeg exited with code {exitCode}.");
             }
 
             var size = new FileInfo(outputPath).Length;
@@ -101,7 +99,12 @@ public class ExportRunner(NodeApiClient api, string ffmpegPath, ILogger<ExportRu
             await api.ReportExportCompleteAsync([new ExportCompleteReportItem(exportItemId, true, outputPath, size, null, outputSha256, checks,
                 converted?.Path, converted?.Size, converted?.Sha256)], ct);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The server marks it failed when this node reports a new uptime.
+            logger.LogWarning("Export item {ExportItemId} was cut off by the service stopping.", exportItemId);
+        }
+        catch (Exception ex)
         {
             logger.LogError(ex, "Export item {ExportItemId} failed.", exportItemId);
             try
@@ -115,6 +118,7 @@ public class ExportRunner(NodeApiClient api, string ffmpegPath, ILogger<ExportRu
         }
         finally
         {
+            Slots.Release();
             try { File.Delete(listFilePath); } catch (IOException) { /* best-effort cleanup */ }
         }
     }
@@ -138,12 +142,9 @@ public class ExportRunner(NodeApiClient api, string ffmpegPath, ILogger<ExportRu
             };
             foreach (var a in BuildConvertArgs(outputPath, convertedPath, encoder)) psi.ArgumentList.Add(a);
             logger.LogInformation("Converting export item {ExportItemId} to H.264 for the standalone player -> {Path}", exportItemId, convertedPath);
-            using var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
-            var stderrTask = DrainStderrAsync(process, ct);
-            await process.WaitForExitAsync(ct);
-            await stderrTask;
-            if (process.ExitCode != 0 || !File.Exists(convertedPath))
-                throw new InvalidOperationException($"ffmpeg exited with code {process.ExitCode}.");
+            var exitCode = await RunFfmpegAsync(psi, ct);
+            if (exitCode != 0 || !File.Exists(convertedPath))
+                throw new InvalidOperationException($"ffmpeg exited with code {exitCode}.");
             return (convertedPath, new FileInfo(convertedPath).Length, await SegmentChain.HashFileAsync(convertedPath, ct));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -271,6 +272,29 @@ public class ExportRunner(NodeApiClient api, string ffmpegPath, ILogger<ExportRu
             sb.Append("file '").Append(path.Replace("'", "'\\''")).Append("'\n");
         }
         return sb.ToString();
+    }
+
+    // Reading, hashing, and perhaps re-encoding hours of footage, on the machine that's recording.
+    private static readonly SemaphoreSlim Slots = new(2, 2);
+
+    /// <summary>Runs ffmpeg to its end; kills it when the service stops, which would otherwise leave it
+    /// running (and writing) without it.</summary>
+    private async Task<int> RunFfmpegAsync(ProcessStartInfo psi, CancellationToken ct)
+    {
+        using var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
+        var stderrTask = DrainStderrAsync(process, ct);
+        try
+        {
+            await process.WaitForExitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            try { process.Kill(entireProcessTree: true); }
+            catch (Exception ex) { logger.LogDebug(ex, "Could not stop the export's ffmpeg (it may have just exited)."); }
+            throw;
+        }
+        await stderrTask;
+        return process.ExitCode;
     }
 
     private async Task DrainStderrAsync(Process process, CancellationToken ct)

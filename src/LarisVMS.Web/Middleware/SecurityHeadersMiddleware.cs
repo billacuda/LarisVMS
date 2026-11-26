@@ -28,6 +28,12 @@ public class SecurityHeadersMiddleware(RequestDelegate next)
         // browser may be sent to — not any HTTPS host.
         var imgSrc = $"'self' data: blob: {cspCache.ImageSources} {cspCache.Sources}".Trim();
 
+        // Forms only go to this site. Browsers also apply this to where a form's answer redirects, so the
+        // pages whose forms lead to an identity provider (sign-in, the Gmail connection) are left out:
+        // an organization's own sign-in server can be at any address.
+        var path = context.Request.Path;
+        var formAction = path.StartsWithSegments("/Identity") || path.StartsWithSegments("/Admin/Settings/Email") ? "" : " form-action 'self';";
+
         context.Response.OnStarting(() =>
         {
             var headers = context.Response.Headers;
@@ -49,7 +55,7 @@ public class SecurityHeadersMiddleware(RequestDelegate next)
                 $"connect-src {connectSrc}; " +
                 "frame-ancestors 'self'; " +
                 "base-uri 'self'; " +
-                "object-src 'none';";
+                "object-src 'none';" + formAction;
 
             // Scripts: only this site's files and inline scripts carrying this request's nonce — so a
             // script injected into a page doesn't run. Until an admin turns it on (Settings →

@@ -13,7 +13,7 @@ namespace LarisVMS.Media;
 /// features that will actually pick an encoder from this list are later milestones (M18+); building
 /// the probe now means they can consume a real answer instead of also having to invent one.
 /// </summary>
-public static class FfmpegCapabilityProber
+public static partial class FfmpegCapabilityProber
 {
     /// <summary>The only encoder names this app ever looks for or offers — deliberately a closed
     /// list (not "whatever ffmpeg -encoders happens to print") so a future feature picking an
@@ -160,8 +160,10 @@ public static class FfmpegCapabilityProber
 
     /// <summary>Reads the libavformat line of `ffmpeg -version` ("libavformat    61.  7.103 / 61.  7.103"):
     /// 61.7 is exactly the 7.1 releases, whatever the distro calls its build.</summary>
-    internal static bool IsFfmpegThatDropsAac(string versionOutput) =>
-        System.Text.RegularExpressions.Regex.IsMatch(versionOutput, @"\blibavformat\s+61\.\s*7\.");
+    internal static bool IsFfmpegThatDropsAac(string versionOutput) => Libavformat61Dot7.IsMatch(versionOutput);
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"\blibavformat\s+61\.\s*7\.")]
+    private static partial System.Text.RegularExpressions.Regex Libavformat61Dot7 { get; }
 
     /// <summary>True when a real `ffmpeg -encoders` line names <paramref name="encoderName"/> as its
     /// second whitespace-delimited token — the same exact-equality match <see cref="ParseEncodersOutput"/>

@@ -11,11 +11,11 @@ IP 允许列表、独立的实时/回放端口、严格脚本策略、证书、�
 
 ## 独立端口
 
-**设置 → 实时查看 → 自定义端口**会将实时和回放流量移到它自己的 HTTPS 端口，使用同一个证书。这样您可以为它单独设置防火墙，或只将它暴露到局域网之外。它在 `Restart-Service LarisVMSWeb` 之后生效。此后，视频只在新端口上响应，其他所有内容只在主端口上响应。清空该字段即可恢复为单一端口。
+**设置 → 实时查看 → 自定义端口**会将实时和回放流量移到它自己的 HTTPS 端口，使用同一个证书。这样您可以为它单独设置防火墙，或只将它暴露到局域网之外。它在 `Restart-Service LarisVMSWeb`（Linux 上为 `sudo systemctl restart larisvms-web`）之后生效。此后，视频只在新端口上响应，其他所有内容只在主端口上响应。清空该字段即可恢复为单一端口。
 
 ## HTTP/3
 
-服务器使用 HTTP/2，并在 Windows 11、Windows Server 2022 或更高版本上增加 HTTP/3。浏览器从 HTTP/2 开始，在能够连接时会自行切换到 HTTP/3。HTTP/3 在 HTTPS 端口（以及已设置的自定义端口）上使用 UDP。安装程序会同时开放 TCP 和 UDP；对于较旧的安装，请为该端口添加一条 UDP 规则，或再次运行当前的安装程序。在此之前，一切仍通过 HTTP/2 正常工作。要关闭 HTTP/3，请取消勾选**设置 → 安全 → HTTP/3**，然后运行 `Restart-Service LarisVMSWeb`。
+服务器使用 HTTP/2，并在 Windows 11、Windows Server 2022 或更高版本上，以及安装了 Microsoft 的 `libmsquic` 软件包的 Linux 上增加 HTTP/3。浏览器从 HTTP/2 开始，在能够连接时会自行切换到 HTTP/3。HTTP/3 在 HTTPS 端口（以及已设置的自定义端口）上使用 UDP。安装程序（和 Linux 软件包）会同时开放 TCP 和 UDP；对于较旧的安装，请为该端口添加一条 UDP 规则，或再次运行当前的安装程序。在此之前，一切仍通过 HTTP/2 正常工作。要关闭 HTTP/3，请取消勾选**设置 → 安全 → HTTP/3**，然后运行 `Restart-Service LarisVMSWeb`（或 `sudo systemctl restart larisvms-web`）。
 
 ## 严格脚本策略
 
@@ -48,7 +48,7 @@ IP 允许列表、独立的实时/回放端口、严格脚本策略、证书、�
 
 ## 加密的密钥
 
-摄像头凭据、SMB 凭据、节点密钥、电子邮件密钥、Entra 和 Google 客户端密钥，以及 Active Directory 服务账户的密码，使用 `%ProgramData%\LarisVMS\keys` 中的数据保护密钥加密后存放在数据库中。只有 SYSTEM、Administrators 和 LarisVMS 服务的账户才能打开 `%ProgramData%\LarisVMS`：在那里发现的任何其他访问权限，例如本地用户在安装 LarisVMS 之前创建的文件夹，会在服务启动时被移除。请备份该文件夹，并且在部署期间绝不要删除它。
+摄像头凭据、SMB 凭据、节点密钥、电子邮件密钥、Entra 和 Google 客户端密钥，以及 Active Directory 服务账户的密码，使用 `%ProgramData%\LarisVMS\keys` 中的数据保护密钥加密后存放在数据库中。只有 SYSTEM、Administrators 和 LarisVMS 服务的账户才能打开 `%ProgramData%\LarisVMS`：在那里发现的任何其他访问权限，例如本地用户在安装 LarisVMS 之前创建的文件夹，会在服务启动时被移除。请备份该文件夹，并且在部署期间绝不要删除它。在 Linux 上，密钥位于 `/var/lib/larisvms/keys`，`/var/lib/larisvms` 归 larisvms 账户所有，其他任何人都无法访问。
 
 ## 面向企业的额外保护
 
@@ -66,4 +66,4 @@ IP 允许列表、独立的实时/回放端口、严格脚本策略、证书、�
 - **从服务器到节点的加密连接**：在每个节点的页面上（参见[来自服务器的加密连接](/Help/nodes#encrypted-connections-from-the-server)）。
 - **将审计日志转发到 syslog**：设置 → 日志（参见[审计日志](/Help/users#audit-log)）。
 - **由发布者签名的更新**，适用于您自己构建的版本（参见[更新](#updates)）。
-- **权限更低的服务账户。** LarisVMS 服务以 LocalSystem 运行。您可以使用其他账户来运行它们（`services.msc` 或 `sc.exe config`），但此后需要您自己为该账户提供服务所需的内容：安装文件夹、每个存储和归档文件夹或共享，以及证书文件。`%ProgramData%\LarisVMS` 由系统为您处理：每个 LarisVMS 服务在启动时都会将其限制为 SYSTEM、Administrators，以及 LarisVMS 服务运行所用的账户，并移除那里的任何其他访问权限。更改之后请检查服务的日志。
+- **权限更低的服务账户。** LarisVMS 服务以 LocalSystem 运行。您可以使用其他账户来运行它们（`services.msc` 或 `sc.exe config`），但此后需要您自己为该账户提供服务所需的内容：安装文件夹、每个存储和归档文件夹或共享，以及证书文件。`%ProgramData%\LarisVMS` 由系统为您处理：每个 LarisVMS 服务在启动时都会将其限制为 SYSTEM、Administrators，以及 LarisVMS 服务运行所用的账户，并移除那里的任何其他访问权限。更改之后请检查服务的日志。在 Linux 上，服务已经以无特权的专用账户 `larisvms` 运行；只有安装已批准的节点和代理更新的小型辅助程序以 root 运行。

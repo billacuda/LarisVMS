@@ -10,6 +10,7 @@
 - **节点**：每个节点上的 `%ProgramData%\LarisVMS\logs\node-*.log`。
 - **AI 检测**：每个节点上的 `%ProgramData%\LarisVMS\logs\vision-*.log`。
 - **自动更新**：每个节点或代理上的 `%ProgramData%\LarisVMS\logs\updater-*.log`。
+- **在 Linux 上**，相同的文件位于 `/var/log/larisvms`。每个服务的输出（包括未能启动的原因）都在 systemd 日志中：`journalctl -u larisvms-node`（或 `larisvms-web`、`larisvms-proxy`；加上 `-f` 可持续跟踪），`systemctl status larisvms-node` 会显示它是否在运行。更新由 `larisvms-node-update.service` 安装：`journalctl -u larisvms-node-update`。
 
 ## 摄像头没有在录制
 
@@ -20,7 +21,7 @@
 
 ## 实时查看和回放一直停在“正在连接”
 
-当节点直接向浏览器传输流媒体时（参见[直连流媒体](/Help/nodes#direct-streaming)），浏览器会连接到节点的客户端端口，默认为 4200。如果浏览器控制台显示 `wss://<node>:<port>/live/…` 连接失败，请检查节点的防火墙是否允许该端口：安装程序会创建一条名为 **LarisVMS Node Client Endpoint** 的入站规则。0.215.1 之前的安装程序在升级或接管节点时可能会丢失该规则；请再次运行当前的节点安装程序，或手动添加该规则。
+当节点直接向浏览器传输流媒体时（参见[直连流媒体](/Help/nodes#direct-streaming)），浏览器会连接到节点的客户端端口，默认为 8555。如果 5 秒内无法连接，视频会通过服务器中继。如果浏览器控制台显示 `wss://<node>:<port>/live/…` 连接失败，请检查节点的防火墙是否允许该端口：安装程序会创建一条名为 **LarisVMS Node Client Endpoint** 的入站规则。0.215.1 之前的安装程序在升级或接管节点时可能会丢失该规则；请再次运行当前的节点安装程序，或手动添加该规则。使用主机网络的 Docker 不会开放端口：请在计算机自身的防火墙中允许该端口（`sudo ufw allow 8555/tcp`）。
 
 ## Active Directory 登录或同步失败
 
@@ -48,7 +49,7 @@ Chrome 会限制不可见的窗口，因此第二个显示器上的实时墙可�
 
 ## AI 检测停止，但录制继续
 
-通常是 GPU 驱动程序被重置了。Windows 系统事件日志会在那一刻显示 `nvlddmkm` 事件 153 或 `Display` 事件 4101。视觉服务在 60 秒没有结果后会自行重启。反复重置说明问题出在 GPU、其驱动程序、散热或电源上。
+通常是 GPU 驱动程序被重置了。Windows 系统事件日志会在那一刻显示 `nvlddmkm` 事件 153 或 `Display` 事件 4101；在 Linux 上，`journalctl -k` 会显示一行 `NVRM: Xid`。视觉服务在 60 秒没有结果后会自行重启。反复重置说明问题出在 GPU、其驱动程序、散热或电源上。
 
 ## 更新后节点或代理没有恢复
 

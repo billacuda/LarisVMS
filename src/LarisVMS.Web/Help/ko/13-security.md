@@ -11,11 +11,11 @@ IP 허용 목록, 별도의 라이브/재생 포트, 엄격한 스크립트 정�
 
 ## 별도 포트
 
-**설정 → 라이브 보기 → 사용자 지정 포트**는 라이브 및 재생 트래픽을 같은 인증서를 사용하는 전용 HTTPS 포트로 옮깁니다. 이렇게 하면 방화벽을 따로 설정하거나 LAN 밖으로는 이 포트만 노출할 수 있습니다. `Restart-Service LarisVMSWeb` 후에 적용됩니다. 그 후에는 영상은 새 포트에서만, 그 외 모든 것은 기본 포트에서만 응답합니다. 필드를 비우면 포트 하나로 돌아갑니다.
+**설정 → 라이브 보기 → 사용자 지정 포트**는 라이브 및 재생 트래픽을 같은 인증서를 사용하는 전용 HTTPS 포트로 옮깁니다. 이렇게 하면 방화벽을 따로 설정하거나 LAN 밖으로는 이 포트만 노출할 수 있습니다. `Restart-Service LarisVMSWeb`(Linux에서는 `sudo systemctl restart larisvms-web`) 후에 적용됩니다. 그 후에는 영상은 새 포트에서만, 그 외 모든 것은 기본 포트에서만 응답합니다. 필드를 비우면 포트 하나로 돌아갑니다.
 
 ## HTTP/3
 
-서버는 HTTP/2를 사용하며 Windows 11, Windows Server 2022 이상에서는 HTTP/3를 추가합니다. 브라우저는 HTTP/2로 시작하여 도달할 수 있으면 스스로 HTTP/3로 전환합니다. HTTP/3는 HTTPS 포트(설정한 경우 사용자 지정 포트도)에서 UDP를 사용합니다. 설치 프로그램은 TCP와 UDP를 모두 엽니다. 이전 설치에서는 해당 포트에 UDP 규칙을 추가하거나 최신 설치 프로그램을 다시 실행하십시오. 그때까지는 모든 것이 HTTP/2로 계속 작동합니다. HTTP/3를 끄려면 **설정 → 보안 → HTTP/3**을 해제한 다음 `Restart-Service LarisVMSWeb`을 실행하십시오.
+서버는 HTTP/2를 사용하며 Windows 11, Windows Server 2022 이상, 그리고 Microsoft의 `libmsquic` 패키지가 설치된 Linux에서는 HTTP/3를 추가합니다. 브라우저는 HTTP/2로 시작하여 도달할 수 있으면 스스로 HTTP/3로 전환합니다. HTTP/3는 HTTPS 포트(설정한 경우 사용자 지정 포트도)에서 UDP를 사용합니다. 설치 프로그램(과 Linux 패키지)은 TCP와 UDP를 모두 엽니다. 이전 설치에서는 해당 포트에 UDP 규칙을 추가하거나 최신 설치 프로그램을 다시 실행하십시오. 그때까지는 모든 것이 HTTP/2로 계속 작동합니다. HTTP/3를 끄려면 **설정 → 보안 → HTTP/3**을 해제한 다음 `Restart-Service LarisVMSWeb`(또는 `sudo systemctl restart larisvms-web`)을 실행하십시오.
 
 ## 엄격한 스크립트 정책
 
@@ -48,7 +48,7 @@ HTTPS로 접속하는 카메라에는 무엇과도 대조할 수 없는 자체 �
 
 ## 암호화된 비밀
 
-카메라 자격 증명, SMB 자격 증명, 노드 키, 이메일 비밀, Entra 및 Google 클라이언트 비밀, Active Directory 서비스 계정 비밀번호는 `%ProgramData%\LarisVMS\keys`의 데이터 보호 키를 사용하여 데이터베이스에서 암호화됩니다. `%ProgramData%\LarisVMS`를 열 수 있는 것은 SYSTEM, Administrators, LarisVMS 서비스 계정뿐입니다. LarisVMS를 설치하기 전에 로컬 사용자가 만든 폴더처럼 그곳에서 발견된 다른 접근은 서비스가 시작될 때 제거됩니다. 그 폴더를 백업하고 배포 중에는 절대 삭제하지 마십시오.
+카메라 자격 증명, SMB 자격 증명, 노드 키, 이메일 비밀, Entra 및 Google 클라이언트 비밀, Active Directory 서비스 계정 비밀번호는 `%ProgramData%\LarisVMS\keys`의 데이터 보호 키를 사용하여 데이터베이스에서 암호화됩니다. `%ProgramData%\LarisVMS`를 열 수 있는 것은 SYSTEM, Administrators, LarisVMS 서비스 계정뿐입니다. LarisVMS를 설치하기 전에 로컬 사용자가 만든 폴더처럼 그곳에서 발견된 다른 접근은 서비스가 시작될 때 제거됩니다. 그 폴더를 백업하고 배포 중에는 절대 삭제하지 마십시오. Linux에서는 키가 `/var/lib/larisvms/keys`에 있으며, `/var/lib/larisvms`는 larisvms 계정이 소유하고 다른 누구도 접근할 수 없습니다.
 
 ## 기업을 위한 추가 보호
 
@@ -66,4 +66,4 @@ HTTPS로 접속하는 카메라에는 무엇과도 대조할 수 없는 자체 �
 - **서버에서 노드로의 암호화된 연결**: 각 노드의 페이지([서버에서의 암호화된 연결](/Help/nodes#encrypted-connections-from-the-server) 참조).
 - **감사 로그를 syslog로 전달**: 설정 → 로그([감사 로그](/Help/users#audit-log) 참조).
 - **게시자가 서명한 업데이트**: 직접 빌드하는 경우([업데이트](#updates) 참조).
-- **권한이 더 낮은 서비스 계정.** LarisVMS 서비스는 LocalSystem으로 실행됩니다. 다른 계정(`services.msc` 또는 `sc.exe config`)으로 실행할 수도 있지만, 그 경우 서비스에 필요한 것, 즉 설치 폴더, 모든 저장소 및 보관 폴더나 공유, 인증서 파일을 그 계정에 부여하는 것은 사용자의 몫입니다. `%ProgramData%\LarisVMS`는 알아서 처리됩니다. 각 LarisVMS 서비스는 시작할 때 이를 SYSTEM, Administrators, LarisVMS 서비스가 실행되는 계정으로 제한하고 그곳의 다른 접근을 제거합니다. 변경 후 서비스의 로그를 확인하십시오.
+- **권한이 더 낮은 서비스 계정.** LarisVMS 서비스는 LocalSystem으로 실행됩니다. 다른 계정(`services.msc` 또는 `sc.exe config`)으로 실행할 수도 있지만, 그 경우 서비스에 필요한 것, 즉 설치 폴더, 모든 저장소 및 보관 폴더나 공유, 인증서 파일을 그 계정에 부여하는 것은 사용자의 몫입니다. `%ProgramData%\LarisVMS`는 알아서 처리됩니다. 각 LarisVMS 서비스는 시작할 때 이를 SYSTEM, Administrators, LarisVMS 서비스가 실행되는 계정으로 제한하고 그곳의 다른 접근을 제거합니다. 변경 후 서비스의 로그를 확인하십시오. Linux에서는 서비스가 이미 권한 없는 전용 계정 `larisvms`로 실행되며, 승인된 노드 및 프록시 업데이트를 설치하는 작은 도우미만 root로 실행됩니다.

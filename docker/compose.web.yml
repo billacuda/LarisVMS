@@ -4,7 +4,7 @@
 # To update: pull the new image and redeploy (Portainer: "Re-pull image and redeploy").
 services:
   larisvms-web:
-    image: ghcr.io/billacuda/larisvms-web:latest   # or a version, such as 0.223.1
+    image: ghcr.io/billacuda/larisvms-web:latest   # or a version, such as 0.223.2
     container_name: larisvms-web
     # Host networking: camera discovery (ONVIF WS-Discovery multicast) only works on the host's network.
     network_mode: host

@@ -794,7 +794,7 @@ var certHolder = new CertHolder(
 certHolder.Load(); // logs the outcome (and LastError) to the file log itself
 // And on the console, which is all `docker logs` and the systemd journal show.
 if (certHolder.LastError is { } certLoadError)
-    Console.Error.WriteLine(certHolder.IsSelfSigned ? $"{certLoadError} Using a self-signed certificate instead." : certLoadError);
+    await Console.Error.WriteLineAsync(certHolder.IsSelfSigned ? $"{certLoadError} Using a self-signed certificate instead." : certLoadError);
 
 var httpsPort = builder.Configuration.GetValue<int?>("Kestrel:HttpsPort") ?? 8444;
 #pragma warning disable CA1416 // IsSupported is itself the platform check
@@ -919,7 +919,9 @@ app.Use(async (ctx, next) =>
 });
 // Needed before UseAuthorization so the /live WS upgrade request survives the pipeline as a
 // WebSocket rather than being treated as a normal HTTP request that happens to ask for an upgrade.
-app.UseWebSockets();
+// A connection whose other end stopped answering is closed instead of waiting for TCP to notice. Longer
+// than a live viewer may lag (LiveViewerHandler), so a slow one isn't cut off by this.
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30), KeepAliveTimeout = TimeSpan.FromSeconds(90) });
 app.UseAuthentication();
 // Cross-site WebSockets and API calls riding the sign-in cookie are refused (OriginCheckMiddleware).
 app.UseMiddleware<OriginCheckMiddleware>();
@@ -1036,7 +1038,7 @@ nodesApi.MapPost("/register", async (HttpContext ctx, NodeRegisterRequest reques
 
 nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest request, INodeService nodeService,
     INodeBuildService nodeBuildService, ISettingsResolver settings, IAuditService auditService, ISigningKeyService signing,
-    INotificationService notifications, CancellationToken ct) =>
+    INotificationService notifications, IExportService exportService, CancellationToken ct) =>
 {
     // LastSeenAt/Status/LastIpAddress are already updated by NodeAuthMiddleware's AuthenticateAsync
     // call for every authenticated request. Version/LivePort can only be updated here, not in the
@@ -1066,6 +1068,9 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
         request.ClientEndpointCertIsSelfSigned, request.ClientEndpointLastError, request.PartnerHealthReports,
         request.HostStats, request.StorageBlockedByEvidenceLocks, request.ClientEndpointCertSha256, ct);
     await nodeService.RecordInContainerAsync(node.Id, request.InContainer, ct);
+    // Exports run inside the node's process, so a restart ends them without a word.
+    if (request.UptimeSeconds is { } uptime and >= 0)
+        await exportService.FailItemsLostToRestartAsync(node.Id, DateTime.UtcNow.AddSeconds(-uptime), ct);
     if (await nodeService.FillClientEndpointHostAsync(node.Id, request.ClientEndpointHost, ct))
         await auditService.LogAsync("Node.ClientEndpointHostReported", null, node.Name, ctx.Connection.RemoteIpAddress?.ToString(),
             $"{node.Name} ({node.Id}) had no client endpoint host; now using the one set on the node: {request.ClientEndpointHost!.Trim()}.", ct);
@@ -1523,7 +1528,7 @@ app.MapMethods("/live/{cameraId:guid}", WebSocketMethods, async (HttpContext ctx
         using var lease = connections.Register(ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, ct);
         // And re-checked every minute, so a change to camera access or roles ends it too.
         using var stillAllowed = CancellationTokenSource.CreateLinkedTokenSource(lease.Token);
-        _ = RecheckLiveAccessAsync(ctx.User, cameraId, cameraAccess, stillAllowed);
+        _ = RecheckLiveAccessAsync(ctx, cameraId, CameraAccessActions.View, stillAllowed);
         await ProxyLiveViewAsync(nodeSocket, browserSocket, stillAllowed.Token);
     }
     finally
@@ -1615,10 +1620,12 @@ app.MapMethods("/talk/{cameraId:guid}", WebSocketMethods, async (HttpContext ctx
 
         await auditService.LogAsync("Camera.Talk", userId, userName, ctx.Connection.RemoteIpAddress?.ToString(), camera.Name, ct);
         using var lease = connections.Register(userId, ct);
+        using var stillAllowed = CancellationTokenSource.CreateLinkedTokenSource(lease.Token);
+        _ = RecheckLiveAccessAsync(ctx, cameraId, CameraAccessActions.Talk, stillAllowed);
         await LarisVMS.Web.Services.TalkRelay.RunAsync(browserSocket, nodeSocket,
             new LarisVMS.Web.Services.TalkRelay.Context(cameraId, effNode.Id, userId, userName, recordings,
                 loggerFactory.CreateLogger("Talk")),
-            lease.Token);
+            stillAllowed.Token);
     }
     finally
     {
@@ -1686,7 +1693,9 @@ app.MapMethods("/live/{cameraId:guid}/detections", WebSocketMethods, async (Http
     }
     using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
     using var lease = connections.Register(ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, ct);
-    await ProxyDetectionOverlayAsync(nodeSocket, browserSocket, colorCache, speedUnit, lease.Token);
+    using var stillAllowed = CancellationTokenSource.CreateLinkedTokenSource(lease.Token);
+    _ = RecheckLiveAccessAsync(ctx, cameraId, CameraAccessActions.View, stillAllowed);
+    await ProxyDetectionOverlayAsync(nodeSocket, browserSocket, colorCache, speedUnit, stillAllowed.Token);
 }).RequireAuthorization("Cameras.View");
 
 // Object detection plan pass 3c-1: live per-zone motion score wash — same two-hop shape as the
@@ -1747,7 +1756,9 @@ app.MapMethods("/live/{cameraId:guid}/motion-zones", WebSocketMethods, async (Ht
     }
     using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
     using var lease = connections.Register(ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, ct);
-    await ProxyMotionZoneScoresAsync(nodeSocket, browserSocket, lease.Token);
+    using var stillAllowed = CancellationTokenSource.CreateLinkedTokenSource(lease.Token);
+    _ = RecheckLiveAccessAsync(ctx, cameraId, CameraAccessActions.Configure, stillAllowed);
+    await ProxyMotionZoneScoresAsync(nodeSocket, browserSocket, stillAllowed.Token);
 }).RequireAuthorization("Cameras.Edit");
 
 // Routes offered on the public API answer on both their own path and /api/v1, the only place API keys
@@ -1941,19 +1952,31 @@ static async Task<IResult> DeviceSettingsCall(Func<Task<IResult>> action)
 // Browser-supplied text bound for the log: one line, bounded, so it can't forge entries.
 // Ends a relayed live stream once its viewer may no longer watch that camera: the check every
 // page and ticket makes, against the database (CameraAccessService reads a user's roles fresh).
-static async Task RecheckLiveAccessAsync(System.Security.Claims.ClaimsPrincipal user, Guid cameraId,
-    ICameraAccessService cameraAccess, CancellationTokenSource relay)
+// Each check has its own service scope: the request's database context may be in use by the relay.
+static async Task RecheckLiveAccessAsync(HttpContext ctx, Guid cameraId, CameraAccessActions action, CancellationTokenSource relay)
 {
+    var user = ctx.User;
+    var scopes = ctx.RequestServices.GetRequiredService<IServiceScopeFactory>();
+    var logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("LiveAccess");
     try
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
         while (await timer.WaitForNextTickAsync(relay.Token))
         {
-            var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.View, relay.Token);
-            if (accessible is not null && !accessible.Contains(cameraId))
+            try
             {
-                await relay.CancelAsync();
-                return;
+                using var scope = scopes.CreateScope();
+                var accessible = await scope.ServiceProvider.GetRequiredService<ICameraAccessService>()
+                    .GetAccessibleCameraIdsAsync(user, action, relay.Token);
+                if (accessible is not null && !accessible.Contains(cameraId))
+                {
+                    await relay.CancelAsync();
+                    return;
+                }
+            }
+            catch (Exception ex) when (ex is not (OperationCanceledException or ObjectDisposedException))
+            {
+                logger.LogWarning(ex, "Could not recheck access to camera {CameraId}; trying again in a minute.", cameraId);
             }
         }
     }
@@ -2896,7 +2919,7 @@ app.MapGet("/api/v1/cameras/{cameraId:guid}/stream.mp4", async (HttpContext ctx,
     try
     {
         using var stillAllowed = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _ = RecheckLiveAccessAsync(ctx.User, cameraId, cameraAccess, stillAllowed);
+        _ = RecheckLiveAccessAsync(ctx, cameraId, CameraAccessActions.View, stillAllowed);
         await LarisVMS.Web.Services.LiveHttpRelay.CopyAsync(nodeSocket, ctx.Response.Body, stillAllowed.Token);
     }
     finally
@@ -3619,7 +3642,7 @@ var exportDownload = async (
     await auditService.LogAsync("Export.Download",
         ctx.User.ActorId(),
         ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(),
-        LarisVMS.Core.ForeignPath.GetFileName(info.FilePath), ct);
+        LarisVMS.Core.ExportFileName.Friendly(info.FilePath), ct);
 
     var token = MediaToken.IssueForExportDownload(exportItemId, info.FilePath, info.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
     var nodeUri = $"http://{info.NodeIp}:{info.NodeLivePort}/export-file/{exportItemId}" +
@@ -3651,7 +3674,7 @@ var exportDownload = async (
     }
 
     // The node's path: a Windows one on a Linux server (or the reverse) still yields just the name.
-    var fileName = LarisVMS.Core.ForeignPath.GetFileName(info.FilePath);
+    var fileName = LarisVMS.Core.ExportFileName.Friendly(info.FilePath);
     return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "video/mp4", fileDownloadName: fileName);
 };
 app.MapGet("/export-download/{exportItemId:guid}", exportDownload).RequireAuthorization("Exports.View");
@@ -3662,13 +3685,14 @@ app.MapGet("/api/v1/exports/items/{exportItemId:guid}/download", exportDownload)
 // reload. Deliberately returns every job on every poll rather than a since/delta query: the list is
 // small (exports are an occasional, manually-triggered action, not a high-volume feed) and a full
 // snapshot means the client-side renderer never has to reconcile a partial update.
-apiRoutes.Get("/exports", async (HttpContext ctx, IExportService exportService, ICameraService cameraService, INodeService nodeService,
+apiRoutes.Get("/exports", async (HttpContext ctx, IExportService exportService, ApplicationDbContext db,
     ICameraAccessService cameraAccess, IPermissionService permissions, CancellationToken ct) =>
 {
     var access = await LarisVMS.Web.Services.ExportAccess.ForAsync(ctx.User, cameraAccess, permissions, ct);
     var jobs = (await exportService.ListJobsAsync(ct)).Where(access.CanSee).ToList();
-    var cameraNames = (await cameraService.ListAsync(ct)).ToDictionary(c => c.Id, c => c.Name);
-    var nodeNames = (await nodeService.ListAsync(ct)).ToDictionary(n => n.Id, n => n.Name);
+    // Polled every few seconds while an export runs, so only the names are read.
+    var cameraNames = await db.Cameras.AsNoTracking().Select(c => new { c.Id, c.Name }).ToDictionaryAsync(c => c.Id, c => c.Name, ct);
+    var nodeNames = await db.Nodes.AsNoTracking().Select(n => new { n.Id, n.Name }).ToDictionaryAsync(n => n.Id, n => n.Name, ct);
 
     return Results.Json(jobs.Select(j => new
     {
@@ -4200,7 +4224,9 @@ static async Task CloseRelayAsync(WebSocket node, WebSocket browser)
     foreach (var socket in new[] { browser, node })
     {
         if (socket.State != WebSocketState.Open) continue;
-        try { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); }
+        // CloseAsync waits for the other end to answer, which one that has gone away never does.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, timeout.Token); }
         catch (Exception) { /* already closed or aborted by the other end; nothing left to do */ }
     }
 }

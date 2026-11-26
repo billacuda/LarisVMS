@@ -36,6 +36,11 @@ public class OnvifEventsClient(OnvifSoapClient soap)
         return addressText is not null && Uri.TryCreate(addressText.Trim(), UriKind.Absolute, out var u) ? u : null;
     }
 
+    /// <summary>Ends a subscription, so the camera frees it now instead of when it expires.</summary>
+    public Task UnsubscribeAsync(Uri pullPointUri, OnvifCredentials? credentials, CancellationToken ct = default) =>
+        soap.PostAsync(pullPointUri, "http://docs.oasis-open.org/wsn/bw-2/SubscriptionManager/UnsubscribeRequest",
+            "<Unsubscribe xmlns=\"http://docs.oasis-open.org/wsn/b-2\"/>", credentials, ct);
+
     /// <summary>Long-polls the subscription for up to <paramref name="timeout"/> for new
     /// notifications (up to <paramref name="messageLimit"/> per call) — the device holds the HTTP
     /// response open until either a message arrives or the timeout elapses, so a caller looping this

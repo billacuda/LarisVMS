@@ -2,9 +2,9 @@
 
 Nós de gravação: status, caminhos de streaming, proxies de mídia, failover, manutenção e atualizações.
 
-**Nós** na barra lateral lista todos os nós com seu status, endereço, versão, número de câmeras e uso do disco. Clique em um nó para editar suas configurações. O menu **⋯** tem estas ações:
+**Nós** na barra lateral lista todos os nós com seu status, endereço, versão, número de câmeras e uso do disco. Abaixo de cada versão fica a plataforma do nó (Windows ou Linux): um servidor pode ter nós nas duas. **Docker** ao lado significa que o nó roda a partir de uma imagem Docker. O servidor não envia builds a ele: quando uma build mais nova é aprovada, a página diz qual imagem baixar. Clique em um nó para editar suas configurações. O menu **⋯** tem estas ações:
 
-- **Reiniciar serviço**: reinicia o serviço do Windows do nó, não a máquina. A gravação pausa por alguns segundos.
+- **Reiniciar serviço**: reinicia o serviço do nó (um serviço do Windows, ou do systemd no Linux), não a máquina. A gravação pausa por alguns segundos.
 - **Redefinir autenticação**: limpa o token de check-in do nó, para um nó preso em falhas de autenticação após um heartbeat perdido. Não tem efeito em um nó saudável.
 - **Manutenção**: move as câmeras do nó para o seu nó de reserva até você desativar a manutenção.
 - **Excluir**: remove o nó. Suas câmeras ficam sem atribuição. As gravações não são excluídas.
@@ -15,7 +15,9 @@ Um nó está **online** se fez check-in nos últimos 2 minutos. Um aviso ⚠️ 
 
 Por padrão, todo o vídeo ao vivo e de reprodução é retransmitido pelo servidor web (**Proxy**). Com **Direto**, os navegadores se conectam direto ao endpoint HTTPS de cada nó, o que alivia a carga do servidor. Defina o modo em **Configurações → Visualização ao vivo** e substitua-o por nó.
 
-O modo Direto precisa de um **host do endpoint do cliente** que os navegadores consigam alcançar e de um certificado (um caminho `.pfx` na página do nó). **Permitir autoassinados** serve só para testes, porque os espectadores recebem um aviso do navegador. Uma câmera cujo nó não tem endpoint saudável volta automaticamente para o proxy.
+O modo Direto precisa de um **host do endpoint do cliente** que os navegadores consigam alcançar e de um certificado (um caminho `.pfx` na página do nó). **Permitir autoassinados** serve só para testes, porque os espectadores recebem um aviso do navegador. Um host definido no próprio nó (`CLIENTENDPOINTHOST`, `--client-endpoint-host` ou `LARISVMS_CLIENT_ENDPOINT_HOST`) é preenchido na página dele, a menos que haja um definido lá. **Status do endpoint** na página do nó diz se os navegadores se conectam direto e, se não, por quê.
+
+Uma câmera cujo nó não tem endpoint saudável é retransmitida automaticamente. O mesmo vale para uma cujo nó um navegador não consegue alcançar: depois de 5 segundos ele usa a retransmissão, e tenta o nó de novo alguns minutos depois.
 
 ## Conexões criptografadas do servidor
 
@@ -37,7 +39,7 @@ A página do nó avisa quando o nó de reserva tem hardware de IA diferente ou �
 
 Nós e proxies se atualizam sozinhos a partir de builds aprovadas (veja [Instalação](/Help/installation#updates)). **Nós → Atualizações e registro → Atualização automática** liga ou desliga isso para todos os nós.
 
-A seção **Builds** da página Nós mostra a build para a qual cada tipo de nó caminha e qualquer build aguardando aprovação, com **Aprovar** e **Rejeitar**. **Histórico de builds** lista todas as builds, incluindo as aprovadas, as substituídas e as rejeitadas.
+A seção **Builds** da página Nós mostra a build para a qual cada tipo de nó caminha e qualquer build aguardando aprovação, com **Aprovar** e **Rejeitar**. As builds são mantidas por plataforma: um nó Windows só recebe uma build do Windows, e um nó Linux uma do Linux. Toda instalação web traz as duas, e **Aprovar todas** aprova uma versão para todas as plataformas de uma vez. **Histórico de builds** lista todas as builds, incluindo as aprovadas, as substituídas e as rejeitadas. **Remover builds antigas** exclui todas as builds mais antigas que a aprovada para a plataforma delas, com seus arquivos.
 
 ## Certificado do servidor
 
@@ -47,9 +49,9 @@ A seção **Builds** da página Nós mostra a build para a qual cada tipo de nó
 - **Somente certificado confiável**: apenas um certificado de uma CA confiável que corresponda ao nome do servidor. Instale um antes de escolher isto.
 - **Não verificar**: qualquer certificado. Inseguro: qualquer pessoa no caminho da rede poderia se passar pelo servidor.
 
-Com a confiança no primeiro uso, um nó confia em qualquer certificado que vê na primeira vez que se conecta. Para que ele verifique desde a primeiríssima conexão, passe ao instalador a impressão digital mostrada em **Verificação do certificado do servidor**: `-ServerCertThumbprint` para `install-node.ps1` e `install-proxy.ps1`, ou `SERVERCERTTHUMBPRINT=` para o MSI. Os comandos de instalação das páginas Configuração e Proxies de mídia já a incluem. Atrás de um proxy reverso, use a impressão digital do certificado que o proxy reverso apresenta.
+Com a confiança no primeiro uso, um nó confia em qualquer certificado que vê na primeira vez que se conecta. Para que ele verifique desde a primeiríssima conexão, passe ao instalador a impressão digital mostrada em **Verificação do certificado do servidor**: `-ServerCertThumbprint` para `install-node.ps1` e `install-proxy.ps1`, `SERVERCERTTHUMBPRINT=` para o MSI, ou `--server-cert-thumbprint` para `larisvms-node setup` e `larisvms-proxy setup` no Linux. Os comandos de instalação das páginas Configuração e Proxies de mídia já a incluem. Atrás de um proxy reverso, use a impressão digital do certificado que o proxy reverso apresenta.
 
-O certificado autoassinado que o servidor cria para si dura 10 anos e não é substituído sozinho. **Regenerar certificado autoassinado** o substitui; todo nó e proxy precisa então ser registrado de novo, e a página Nós lista os que não fizeram check-in desde então. Para registrar um nó de novo, execute o instalador do nó outra vez, ou execute `LarisVMS.Node.exe --reset-server-pin` nele e reinicie o serviço (os proxies têm a mesma opção).
+O certificado autoassinado que o servidor cria para si dura 10 anos e não é substituído sozinho. **Regenerar certificado autoassinado** o substitui; todo nó e proxy precisa então ser registrado de novo, e a página Nós lista os que não fizeram check-in desde então. Para registrar um nó de novo, execute o instalador do nó outra vez, ou execute `LarisVMS.Node.exe --reset-server-pin` nele e reinicie o serviço (os proxies têm a mesma opção). No Linux, execute `sudo larisvms-node setup --reregister --server-url <url> --registration-key <key>` (ou `larisvms-proxy`).
 
 ## Códigos de registro de uso único
 

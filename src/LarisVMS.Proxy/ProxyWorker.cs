@@ -75,7 +75,8 @@ public sealed class ProxyWorker(ProxyApiClient api, ProxyConfig registration, Pr
                 // double-triggering while one is already in flight. A successful apply calls
                 // IHostApplicationLifetime.StopApplication() itself, which unwinds this loop via the
                 // stopping token. Mirrors NodeWorker.ReconcileLoopAsync.
-                if (heartbeat.UpdateAvailable is { } update && !updateService.IsApplying && TrustUpdate(update))
+                if (heartbeat.UpdateAvailable is { } update && !updateService.IsApplying && TrustUpdate(update)
+                    && _updateBackoff.ShouldTry(update.Version, DateTime.UtcNow))
                 {
                     logger.LogInformation("Proxy update available: {Version} — downloading and applying.", update.Version);
                     await updateService.TryApplyAsync(update, stoppingToken);
@@ -170,6 +171,8 @@ public sealed class ProxyWorker(ProxyApiClient api, ProxyConfig registration, Pr
         }
         return true;
     }
+
+    private readonly LarisVMS.Core.UpdateBackoff _updateBackoff = new();
 
     private void TrySave()
     {

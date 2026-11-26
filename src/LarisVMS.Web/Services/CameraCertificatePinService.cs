@@ -42,7 +42,8 @@ public sealed class CameraCertificatePinService(IServiceScopeFactory scopeFactor
     /// <summary>Settings → Security calls this after saving, so a change applies at once.</summary>
     public static void RequestReload()
     {
-        if (ReloadNow.CurrentCount == 0) ReloadNow.Release();
+        try { ReloadNow.Release(); }
+        catch (SemaphoreFullException) { /* a reload is already pending */ }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

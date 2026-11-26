@@ -59,7 +59,35 @@ public sealed class CameraPipelineManager : IAsyncDisposable
         _logger.LogInformation("Resolved ffmpeg path: {FfmpegPath}", _ffmpegPath);
     }
 
+    // Starts and stops of one camera happen one at a time, and only the newest counts. A start can take
+    // minutes (disposing the pipeline it replaces, downloading a model), and the node gives up waiting
+    // after 15 seconds and sends another: both used to finish, and the pipeline overwritten by the
+    // second was never disposed. A stop that arrived meanwhile was undone by the start finishing.
+    private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _cameraGates = new();
+    private readonly ConcurrentDictionary<Guid, long> _newestCall = new();
+
+    private long NewCall(Guid cameraId) => _newestCall.AddOrUpdate(cameraId, 1, (_, n) => n + 1);
+
+    private bool IsNewest(Guid cameraId, long call) => _newestCall.TryGetValue(cameraId, out var newest) && newest == call;
+
+    private SemaphoreSlim GateOf(Guid cameraId) => _cameraGates.GetOrAdd(cameraId, _ => new SemaphoreSlim(1, 1));
+
     public async Task StartOrReplaceAsync(VisionStartCameraRequest request)
+    {
+        var call = NewCall(request.CameraId);
+        var gate = GateOf(request.CameraId);
+        await gate.WaitAsync();
+        try
+        {
+            if (IsNewest(request.CameraId, call)) await StartOrReplaceCoreAsync(request, call);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task StartOrReplaceCoreAsync(VisionStartCameraRequest request, long call)
     {
         if (_pipelines.TryRemove(request.CameraId, out var existing))
         {
@@ -126,6 +154,8 @@ public sealed class CameraPipelineManager : IAsyncDisposable
         // Only resolved for the backend that actually needs it — see ExternalInferenceHttpClientName's
         // own doc comment for why this is a separate client from the Node-callback one above.
         var externalHttp = external ? _httpClientFactory.CreateClient(ExternalInferenceHttpClientName) : null;
+
+        if (!IsNewest(request.CameraId, call)) return; // stopped, or started again, meanwhile
 
         var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, yoloXSize, aspectMode, dfineTensorRtMode, http, _loggerFactory, externalHttp, customModel);
         _pipelines[request.CameraId] = pipeline;
@@ -338,12 +368,22 @@ public sealed class CameraPipelineManager : IAsyncDisposable
 
     public async Task<bool> StopAsync(Guid cameraId)
     {
-        if (!_pipelines.TryRemove(cameraId, out var pipeline)) return false;
+        NewCall(cameraId);
+        var gate = GateOf(cameraId);
+        await gate.WaitAsync();
+        try
+        {
+            if (!_pipelines.TryRemove(cameraId, out var pipeline)) return false;
 
-        var name = pipeline.DisplayName;
-        await pipeline.DisposeAsync();
-        _logger.LogInformation("Stopped watching camera {Camera}.", name);
-        return true;
+            var name = pipeline.DisplayName;
+            await pipeline.DisposeAsync();
+            _logger.LogInformation("Stopped watching camera {Camera}.", name);
+            return true;
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     /// <summary>The cameras this process is actually watching, for NodeWorker's reconcile to compare

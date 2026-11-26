@@ -7,7 +7,7 @@ services:
     # The base image runs AI detection on an Intel GPU or the CPU. For NVIDIA GPUs, use the -cuda tag
     # (CUDA and cuDNN) or the -tensorrt tag (adds TensorRT), with the NVIDIA Container Toolkit
     # installed on this machine and the GPU block below.
-    image: ghcr.io/billacuda/larisvms-node:latest   # or 0.223.1, 0.223.1-cuda, 0.223.1-tensorrt, cuda, tensorrt
+    image: ghcr.io/billacuda/larisvms-node:latest   # or 0.223.2, 0.223.2-cuda, 0.223.2-tensorrt, cuda, tensorrt
     container_name: larisvms-node
     hostname: larisvms-node-1   # the name this node shows under Nodes
     network_mode: host

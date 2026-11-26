@@ -31,6 +31,7 @@ public sealed class VisionNativeDistributor(IHttpClientFactory httpFactory, ICon
     // SHA-256 is expensive on a ~300 MB file; cache it keyed on the file's path + last-write time so a
     // reseed invalidates it.
     private readonly Lock _gate = new();
+    private readonly Lock _hashing = new();
     private readonly Dictionary<string, (DateTime WriteUtc, string Sha256, long Size)> _hashes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Task> _fetches = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTime> _lastFailure = new(StringComparer.Ordinal);
@@ -82,12 +83,20 @@ public sealed class VisionNativeDistributor(IHttpClientFactory httpFactory, ICon
 
         string sha;
         long size;
-        using (var stream = File.OpenRead(path))
+        // Hashed once, however many nodes ask for it at the same moment.
+        lock (_hashing)
         {
-            sha = Convert.ToHexStringLower(SHA256.HashData(stream));
-            size = stream.Length;
+            lock (_gate)
+            {
+                if (_hashes.TryGetValue(path, out var done) && done.WriteUtc == writeUtc) return (done.Sha256, done.Size);
+            }
+            using (var stream = File.OpenRead(path))
+            {
+                sha = Convert.ToHexStringLower(SHA256.HashData(stream));
+                size = stream.Length;
+            }
+            lock (_gate) _hashes[path] = (writeUtc, sha, size);
         }
-        lock (_gate) _hashes[path] = (writeUtc, sha, size);
         logger.LogInformation("CUDA provider for {Path} available: {Bytes} bytes, sha256 {Sha}.", path, size, sha);
         return (sha, size);
     }
@@ -158,9 +167,10 @@ public sealed class VisionNativeDistributor(IHttpClientFactory httpFactory, ICon
             if (!string.Equals(actual, entry.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"{url} isn't the file this server's package expects (sha256 {actual}, expected {entry.Sha256}).");
 
-            File.Move(tmp, dest, overwrite: true);
+            // The signature first: a node is offered the file as soon as it's there.
             if (!string.IsNullOrWhiteSpace(entry.PublisherSignature))
                 await File.WriteAllTextAsync(CudaProviderFiles.SignaturePath(dest), entry.PublisherSignature);
+            File.Move(tmp, dest, overwrite: true);
             logger.LogInformation("Cached the {Platform} CUDA provider at {Path}; NVIDIA nodes on that platform pick it up on their next check.",
                 platform, dest);
         }

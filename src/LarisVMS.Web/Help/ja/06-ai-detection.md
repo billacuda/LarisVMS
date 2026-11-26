@@ -10,20 +10,34 @@
 
 1 つのノードパッケージで、すべてのマシンに対応します。起動時に、ビジョンサービスが、見つかったハードウェアに合わせてバックエンドを選択します。
 
-| ハードウェア | バックエンド | ノードで必要なもの |
-|---|---|---|
-| NVIDIA GPU | CUDA（DirectML にフォールバック） | CUDA Toolkit 12.x と cuDNN 9.x |
-| Intel GPU | OpenVINO（DirectML にフォールバック） | 最新の Intel グラフィックス ドライバー |
-| AMD GPU | DirectML | 最新の GPU ドライバー |
-| GPU なし | CPU | なし |
+| ハードウェア | Windows | Linux | ノードで必要なもの |
+|---|---|---|---|
+| NVIDIA GPU | CUDA（DirectML にフォールバック） | CUDA（CPU にフォールバック） | CUDA 12 と cuDNN 9（下の要件をご覧ください） |
+| Intel GPU | OpenVINO（DirectML にフォールバック） | OpenVINO（CPU にフォールバック） | 最新の Intel グラフィックス ドライバー。Linux では Intel の compute runtime（`intel-opencl-icd`） |
+| AMD GPU | DirectML | CPU | 最新の GPU ドライバー |
+| GPU なし | CPU | CPU | なし |
 
-ノードの編集ページには検出されたアクセラレーターが表示され、**アクセラレーター**の設定で 1 つを強制できます。モデルは同梱されていません。ノードは組み込みの YOLOX モデルをサーバーから取得し、それ以外のモデルは、ノードの `C:\ProgramData\LarisVMS\models` に置きます。
+ノードの編集ページには検出されたアクセラレーターが表示され、**アクセラレーター**の設定で 1 つを強制できます。モデルは同梱されていません。ノードは組み込みの YOLOX モデルをサーバーから取得し、それ以外のモデルは、ノードの `C:\ProgramData\LarisVMS\models`（Windows）または `/var/lib/larisvms/models`（Linux）に置きます。
+
+Debian 13 には `intel-opencl-icd` パッケージがありません。Intel のリリースから、そのページの手順に従ってインストールしてください。第 11 世代 Core（Tiger Lake）、Arc 以降には [26.27.39122.11](https://github.com/intel/compute-runtime/releases/tag/26.27.39122.11)、それより古いグラフィックスには [24.35.30872.36](https://github.com/intel/compute-runtime/releases/tag/24.35.30872.36) です。ノードの Docker イメージには、すでに両方が入っています。
+
+CUDA バックエンドの NVIDIA 要件（CUDA 12.8 でビルドされた ONNX Runtime 1.24）:
+
+| | Linux | Windows |
+|---|---|---|
+| NVIDIA ドライバー | 570.26 以降 | 570.65 以降 |
+| CUDA | 12.8 またはそれ以降の 12.x | 12.8 またはそれ以降の 12.x |
+| cuDNN | 9.x | 9.x |
+| GPU | Turing（RTX 20 シリーズ、GTX 16 シリーズ）以降。Pascal と Maxwell には cuDNN 9.10.2 以前が必要 | 同じ |
+| TensorRT（任意） | 10.x | 10.x |
+
+**ノード**ページは、ノードの NVIDIA ドライバーが CUDA には古すぎる場合に警告します。Linux では、NVIDIA の apt または dnf リポジトリから CUDA と cuDNN をインストールしてください（`cuda-libraries-12-8` と `libcudnn9-cuda-12`）。ノードは、システムのライブラリパス、または `/usr/local/cuda/lib64` でそれらを見つけます。Linux での GPU アクセラレーションは、まだ実機でテストされていません。
 
 ## 低速なバックエンド
 
-NVIDIA のノードが CUDA を使用できない場合、AI 検出は DirectML にフォールバックしますが、数倍遅くなります。分析されるフレームが減り、GPU が高温になり、通過する車のような速いオブジェクトが検出されないことがあります。その場合、**ノード**ページのノードの横に、理由とともに**⚠️ DirectML 上の AI**と表示され、Super Admin に通知が届きます。
+NVIDIA のノードが CUDA を使用できない場合、AI 検出は DirectML（Linux では CPU）にフォールバックしますが、数倍遅くなります。分析されるフレームが減り、GPU が高温になり、通過する車のような速いオブジェクトが検出されないことがあります。その場合、**ノード**ページのノードの横に、理由とともに **⚠️ DirectML 上の AI**と表示され、Super Admin に通知が届きます。
 
-通常の原因は、cuDNN がないことです。ノードに CUDA Toolkit 12.x と、CUDA 12 用の cuDNN 9.x を、NVIDIA の cuDNN ダウンロードから、または `pip install nvidia-cudnn-cu12` でインストールしてください。ノードは 10 分以内にそれらを見つけ、AI バックエンドの隣にコピーし、CUDA で検出を再起動します。
+通常の原因は、cuDNN がないこと、または NVIDIA ドライバーが CUDA 12.8 に必要なものより古いことです。Windows では、ノードに CUDA Toolkit 12.x と、CUDA 12 用の cuDNN 9.x を、NVIDIA の cuDNN ダウンロードから、または `pip install nvidia-cudnn-cu12` でインストールしてください。Linux では、NVIDIA のリポジトリから `cuda-libraries-12-8` と `libcudnn9-cuda-12` をインストールしてください。ノードは 10 分以内にそれらを見つけ（Windows では AI バックエンドの隣にコピーし）、CUDA で検出を再起動します。
 
 ## モデルファミリー
 
@@ -41,7 +55,7 @@ NVIDIA のノードが CUDA を使用できない場合、AI 検出は DirectML 
 
 ## カスタムモデル
 
-`.onnx` ファイルを、ノードの `C:\ProgramData\LarisVMS\models` に置きます。モデル自身のメタデータにデコーダー、入力サイズ、ラベルが記述されていれば、そのまま動作します。そうでない場合は、不足している情報を補う、同じ名前の `.json` ファイルを追加してください。**更新**には、ノードが見つけたすべてのモデルが一覧表示され、メタデータが不完全なものにはフラグが付きます。警告のあるモデルは選択できますが、警告が解消されるまで実行されません。
+`.onnx` ファイルを、ノードの `C:\ProgramData\LarisVMS\models`（Windows）または `/var/lib/larisvms/models`（Linux）に置きます。Linux では、larisvms アカウントがそれを読み取れることを確認してください。モデル自身のメタデータにデコーダー、入力サイズ、ラベルが記述されていれば、そのまま動作します。そうでない場合は、不足している情報を補う、同じ名前の `.json` ファイルを追加してください。**更新**には、ノードが見つけたすべてのモデルが一覧表示され、メタデータが不完全なものにはフラグが付きます。警告のあるモデルは選択できますが、警告が解消されるまで実行されません。
 
 ## アスペクト比の調整
 

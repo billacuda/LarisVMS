@@ -170,6 +170,16 @@ public sealed class FootageStore(NodeApiClient api, int livePort, ILogger<Footag
     /// encrypted afterwards; false to try again later (no key yet, or the file is busy).</summary>
     public async Task<bool> EncryptFileAsync(string path, Guid cameraId, DateTime recordedUtc, CancellationToken ct)
     {
+        // The queue and the retry list can hold the same file, and both would write the same temp file.
+        if (!_encrypting.TryAdd(path, 0)) return false;
+        try { return await EncryptOnceAsync(path, cameraId, recordedUtc, ct); }
+        finally { _encrypting.TryRemove(path, out _); }
+    }
+
+    private readonly ConcurrentDictionary<string, byte> _encrypting = new(PathComparer.Local);
+
+    private async Task<bool> EncryptOnceAsync(string path, Guid cameraId, DateTime recordedUtc, CancellationToken ct)
+    {
         if (!File.Exists(path)) return true; // deleted by retention meanwhile: nothing to do
         if (FootageCrypto.IsEncrypted(path)) return true;
 

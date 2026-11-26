@@ -24,10 +24,15 @@ public class SettingsResolver(ApplicationDbContext db) : ISettingsResolver
 {
     private static readonly ConcurrentDictionary<string, (string? Value, SettingScope? Source)> Cache = new();
 
+    // Changes with every invalidation. A value read from the database before one and stored after it
+    // would stay in the cache, out of date, until the next setting is saved.
+    private static long _generation;
+
     private async Task<(string? Value, SettingScope? Source)> ResolveAsync(string key, Guid? cameraId, Guid? nodeId, CancellationToken ct)
     {
         var cacheKey = $"{cameraId}|{nodeId}|{key}";
         if (Cache.TryGetValue(cacheKey, out var cached)) return cached;
+        var generation = Interlocked.Read(ref _generation);
 
         string? value = null;
         SettingScope? source = null;
@@ -63,7 +68,12 @@ public class SettingsResolver(ApplicationDbContext db) : ISettingsResolver
         }
 
         var result = (value, source);
-        Cache[cacheKey] = result;
+        if (Interlocked.Read(ref _generation) == generation)
+        {
+            Cache[cacheKey] = result;
+            // Invalidated between that check and the store: it may have been cleared before this landed.
+            if (Interlocked.Read(ref _generation) != generation) Cache.TryRemove(cacheKey, out _);
+        }
         return result;
     }
 
@@ -161,6 +171,7 @@ public class SettingsResolver(ApplicationDbContext db) : ISettingsResolver
 
     public Task InvalidateAsync()
     {
+        Interlocked.Increment(ref _generation);
         Cache.Clear();
         return Task.CompletedTask;
     }

@@ -4,7 +4,7 @@
 # To update: pull the new image and redeploy.
 services:
   larisvms-proxy:
-    image: ghcr.io/billacuda/larisvms-proxy:latest   # or a version, such as 0.223.1
+    image: ghcr.io/billacuda/larisvms-proxy:latest   # or a version, such as 0.223.2
     container_name: larisvms-proxy
     hostname: larisvms-proxy-1
     network_mode: host

@@ -10,6 +10,7 @@ Problèmes courants, et où chercher.
 - **Nœuds** : `%ProgramData%\LarisVMS\logs\node-*.log` sur chaque nœud.
 - **Détection IA** : `%ProgramData%\LarisVMS\logs\vision-*.log` sur chaque nœud.
 - **Mise à jour automatique** : `%ProgramData%\LarisVMS\logs\updater-*.log` sur chaque nœud ou proxy.
+- **Sous Linux**, les mêmes fichiers sont dans `/var/log/larisvms`. La sortie de chaque service, y compris la raison pour laquelle il n’a pas démarré, est dans le journal systemd : `journalctl -u larisvms-node` (ou `larisvms-web`, `larisvms-proxy` ; ajoutez `-f` pour le suivre), et `systemctl status larisvms-node` indique s’il fonctionne. Une mise à jour est installée par `larisvms-node-update.service` : `journalctl -u larisvms-node-update`.
 
 ## Une caméra n’enregistre pas
 
@@ -20,7 +21,7 @@ Problèmes courants, et où chercher.
 
 ## La vue en direct et la lecture restent sur « connexion »
 
-Lorsqu’un nœud diffuse directement vers les navigateurs (voir [Diffusion directe](/Help/nodes#direct-streaming)), le navigateur se connecte au port client du nœud, 4200 par défaut. Si la console du navigateur affiche une connexion `wss://<nœud>:<port>/live/…` en échec, vérifiez que le pare-feu du nœud autorise ce port : le programme d’installation crée une règle entrante nommée **LarisVMS Node Client Endpoint**. Les programmes d’installation antérieurs à 0.215.1 pouvaient perdre cette règle lors d’une mise à niveau ou de la reprise d’un nœud ; exécutez de nouveau le programme d’installation de nœud actuel, ou ajoutez la règle à la main.
+Lorsqu’un nœud diffuse directement vers les navigateurs (voir [Diffusion directe](/Help/nodes#direct-streaming)), le navigateur se connecte au port client du nœud, 8555 par défaut. S’il n’y parvient pas en 5 secondes, la vidéo est relayée par le serveur. Si la console du navigateur affiche une connexion `wss://<nœud>:<port>/live/…` en échec, vérifiez que le pare-feu du nœud autorise ce port : le programme d’installation crée une règle entrante nommée **LarisVMS Node Client Endpoint**. Les programmes d’installation antérieurs à 0.215.1 pouvaient perdre cette règle lors d’une mise à niveau ou de la reprise d’un nœud ; exécutez de nouveau le programme d’installation de nœud actuel, ou ajoutez la règle à la main. Docker avec le réseau de l’hôte n’ouvre aucun port : autorisez le port dans le pare-feu de la machine elle-même (`sudo ufw allow 8555/tcp`).
 
 ## La connexion ou la synchronisation Active Directory échoue
 
@@ -48,7 +49,7 @@ Le nœud a calé, pas le navigateur ni le réseau. Cherchez dans le journal du n
 
 ## La détection IA s’arrête mais l’enregistrement continue
 
-Généralement, le pilote du GPU a été réinitialisé. Le journal d’événements système de Windows montre l’événement 153 de `nvlddmkm` ou l’événement 4101 de `Display` à ce moment. Le service de vision redémarre de lui-même après 60 secondes sans résultat. Des réinitialisations répétées pointent vers le GPU, son pilote, le refroidissement ou l’alimentation.
+Généralement, le pilote du GPU a été réinitialisé. Le journal d’événements système de Windows montre l’événement 153 de `nvlddmkm` ou l’événement 4101 de `Display` à ce moment ; sous Linux, `journalctl -k` affiche une ligne `NVRM: Xid`. Le service de vision redémarre de lui-même après 60 secondes sans résultat. Des réinitialisations répétées pointent vers le GPU, son pilote, le refroidissement ou l’alimentation.
 
 ## Un nœud ou un proxy n’est pas revenu après une mise à jour
 

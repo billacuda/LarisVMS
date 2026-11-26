@@ -50,6 +50,7 @@ public sealed class HomeAssistantBridge(IServiceScopeFactory scopeFactory, IHttp
         new BoundedChannelOptions(2000) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true });
 
     private volatile bool _active;
+    private bool _sessionConnected;
     private CancellationTokenSource _reload = new();
     private readonly object _reloadLock = new();
 
@@ -118,6 +119,7 @@ public sealed class HomeAssistantBridge(IServiceScopeFactory scopeFactory, IHttp
             try
             {
                 _active = true;
+                _sessionConnected = false;
                 await RunSessionAsync(settings, session.Token);
                 failures = 0;
             }
@@ -127,7 +129,8 @@ public sealed class HomeAssistantBridge(IServiceScopeFactory scopeFactory, IHttp
             }
             catch (Exception ex)
             {
-                failures++;
+                // It had connected, so the broker works: the next retry starts from a short wait again.
+                failures = _sessionConnected ? 1 : failures + 1;
                 Status = new HomeAssistantStatus(HomeAssistantBridgeState.Error, ex.Message, DateTime.UtcNow, 0);
                 logger.LogWarning(ex, "Home Assistant: the MQTT connection to {Host}:{Port} failed; retrying.", settings.BrokerHost, settings.BrokerPort);
             }
@@ -235,17 +238,22 @@ public sealed class HomeAssistantBridge(IServiceScopeFactory scopeFactory, IHttp
             await RefreshInventoryAsync(client, state, ct);
             await RefreshStatesAsync(client, state, ct);
             Status = new HomeAssistantStatus(HomeAssistantBridgeState.Connected, null, DateTime.UtcNow, state.Cameras.Count);
+            _sessionConnected = true;
 
             using var ticker = new PeriodicTimer(StateInterval);
             _ = TickAsync(ticker, ct);
             var lastInventory = DateTime.UtcNow;
-            var readTask = _inbox.Reader.ReadAsync(ct).AsTask();
+            // Cancelled when this session ends. A read left waiting would take the next session's first
+            // message (a command, perhaps) and drop it.
+            using var reading = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            using var stopReading = new CancelOnDispose(reading);
+            var readTask = _inbox.Reader.ReadAsync(reading.Token).AsTask();
             while (true)
             {
                 var done = await Task.WhenAny(readTask, disconnected.Task);
                 if (done == disconnected.Task) throw new InvalidOperationException(Loc.T("settings.homeAssistant.connectionLost"));
                 var item = await readTask;
-                readTask = _inbox.Reader.ReadAsync(ct).AsTask();
+                readTask = _inbox.Reader.ReadAsync(reading.Token).AsTask();
                 try
                 {
                     switch (item)
@@ -298,6 +306,11 @@ public sealed class HomeAssistantBridge(IServiceScopeFactory scopeFactory, IHttp
                 ? new HomeAssistantStatus(HomeAssistantBridgeState.Off, null, null, 0)
                 : Status;
         }
+    }
+
+    private sealed class CancelOnDispose(CancellationTokenSource source) : IDisposable
+    {
+        public void Dispose() => source.Cancel();
     }
 
     private async Task TickAsync(PeriodicTimer ticker, CancellationToken ct)

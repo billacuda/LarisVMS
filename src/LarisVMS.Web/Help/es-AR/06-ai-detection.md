@@ -10,20 +10,34 @@ Activala por cámara con **Vigilar esta cámara por objetos**. Solo hacen falta 
 
 Un paquete de nodo cubre cada máquina. Al arrancar, el servicio de visión elige un backend para el hardware que encuentra:
 
-| Hardware | Backend | Necesita en el nodo |
-|---|---|---|
-| GPU NVIDIA | CUDA (vuelve a DirectML) | CUDA Toolkit 12.x y cuDNN 9.x |
-| GPU Intel | OpenVINO (vuelve a DirectML) | Un driver de gráficos Intel actual |
-| GPU AMD | DirectML | Un driver de GPU actual |
-| Sin GPU | CPU | Nada |
+| Hardware | Windows | Linux | Necesita en el nodo |
+|---|---|---|---|
+| GPU NVIDIA | CUDA (vuelve a DirectML) | CUDA (vuelve a la CPU) | CUDA 12 y cuDNN 9 (ver los requisitos abajo) |
+| GPU Intel | OpenVINO (vuelve a DirectML) | OpenVINO (vuelve a la CPU) | Un driver de gráficos Intel actual; en Linux, el compute runtime de Intel (`intel-opencl-icd`) |
+| GPU AMD | DirectML | CPU | Un driver de GPU actual |
+| Sin GPU | CPU | CPU | Nada |
 
-La página de edición del nodo muestra los aceleradores detectados, y su configuración **Acelerador** puede forzar uno. Los modelos nunca vienen incluidos. Un nodo trae los modelos YOLOX integrados desde el servidor, y los otros modelos van en `C:\ProgramData\LarisVMS\models` en el nodo.
+La página de edición del nodo muestra los aceleradores detectados, y su configuración **Acelerador** puede forzar uno. Los modelos nunca vienen incluidos. Un nodo trae los modelos YOLOX integrados desde el servidor, y los otros modelos van en `C:\ProgramData\LarisVMS\models` (Windows) o `/var/lib/larisvms/models` (Linux) en el nodo.
+
+Debian 13 no tiene el paquete `intel-opencl-icd`. Instalá el de las versiones publicadas por Intel, con los pasos de su página: [26.27.39122.11](https://github.com/intel/compute-runtime/releases/tag/26.27.39122.11) para Core de 11.ª generación (Tiger Lake), Arc y posteriores, o [24.35.30872.36](https://github.com/intel/compute-runtime/releases/tag/24.35.30872.36) para gráficos anteriores. La imagen de Docker del nodo ya trae los dos.
+
+Requisitos de NVIDIA para el backend CUDA (ONNX Runtime 1.24, compilado con CUDA 12.8):
+
+| | Linux | Windows |
+|---|---|---|
+| Driver NVIDIA | 570.26 o posterior | 570.65 o posterior |
+| CUDA | 12.8 o un 12.x posterior | 12.8 o un 12.x posterior |
+| cuDNN | 9.x | 9.x |
+| GPU | Turing (serie RTX 20, serie GTX 16) o posterior; Pascal y Maxwell necesitan cuDNN 9.10.2 o anterior | igual |
+| TensorRT (opcional) | 10.x | 10.x |
+
+La página **Nodos** avisa cuando el driver NVIDIA de un nodo es demasiado viejo para CUDA. En Linux, instalá CUDA y cuDNN desde el repositorio apt o dnf de NVIDIA (`cuda-libraries-12-8` y `libcudnn9-cuda-12`); el nodo los encuentra por la ruta de bibliotecas del sistema o en `/usr/local/cuda/lib64`. La aceleración por GPU en Linux todavía no se probó en hardware real.
 
 ## Backend lento
 
-Si un nodo NVIDIA no puede usar CUDA, la detección de IA vuelve a DirectML, que corre varias veces más lento. Se analizan menos cuadros, la GPU se calienta, y objetos rápidos como autos que pasan pueden no detectarse. La página **Nodos** después muestra **⚠️ IA en DirectML** junto al nodo, con el motivo, y los Super Administradores reciben una notificación.
+Si un nodo NVIDIA no puede usar CUDA, la detección de IA vuelve a DirectML (a la CPU en Linux), que corre varias veces más lento. Se analizan menos cuadros, la GPU se calienta, y objetos rápidos como autos que pasan pueden no detectarse. La página **Nodos** después muestra **⚠️ IA en DirectML** junto al nodo, con el motivo, y los Super Administradores reciben una notificación.
 
-La causa habitual es un cuDNN faltante. Instalá el CUDA Toolkit 12.x y cuDNN 9.x para CUDA 12 en el nodo, desde la descarga de cuDNN de NVIDIA o con `pip install nvidia-cudnn-cu12`. El nodo los encuentra en 10 minutos, los copia junto a su backend de IA y reinicia la detección en CUDA.
+La causa habitual es un cuDNN faltante, o un driver NVIDIA más viejo de lo que necesita CUDA 12.8. En Windows, instalá el CUDA Toolkit 12.x y cuDNN 9.x para CUDA 12 en el nodo, desde la descarga de cuDNN de NVIDIA o con `pip install nvidia-cudnn-cu12`. En Linux, instalá `cuda-libraries-12-8` y `libcudnn9-cuda-12` desde el repositorio de NVIDIA. El nodo los encuentra en 10 minutos (en Windows los copia junto a su backend de IA) y reinicia la detección en CUDA.
 
 ## Familias de modelos
 
@@ -41,7 +55,7 @@ Cambiar el modelo reinicia la detección de cada cámara.
 
 ## Modelos personalizados
 
-Poné un archivo `.onnx` en `C:\ProgramData\LarisVMS\models` en el nodo. Si los metadatos propios del modelo describen su decodificador, su tamaño de entrada y sus etiquetas, funciona tal cual. Si no, agregá un archivo `.json` con el mismo nombre que provee lo que falta. **Actualizar** enumera cada modelo que encontraron los nodos, y marca los que tienen metadatos incompletos. Un modelo con una advertencia se puede seleccionar, pero no corre hasta que se corrige la advertencia.
+Poné un archivo `.onnx` en `C:\ProgramData\LarisVMS\models` (Windows) o `/var/lib/larisvms/models` (Linux) en el nodo; en Linux, asegurate de que la cuenta larisvms pueda leerlo. Si los metadatos propios del modelo describen su decodificador, su tamaño de entrada y sus etiquetas, funciona tal cual. Si no, agregá un archivo `.json` con el mismo nombre que provee lo que falta. **Actualizar** enumera cada modelo que encontraron los nodos, y marca los que tienen metadatos incompletos. Un modelo con una advertencia se puede seleccionar, pero no corre hasta que se corrige la advertencia.
 
 ## Ajuste de aspecto
 
